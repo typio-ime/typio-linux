@@ -523,7 +523,7 @@ void panel_config_load(PanelConfig *cfg, TypioInstance *instance) {
     }
     if (display_cfg) {
     TypioConfig *global_cfg = display_cfg;
-    theme  = typio_config_get_string(global_cfg, "display.popup_theme",      nullptr);
+    theme  = typio_config_get_string(global_cfg, "display.panel_theme",      nullptr);
     layout = typio_config_get_string(global_cfg, "display.candidate_layout", nullptr);
     font_size = typio_config_get_int(global_cfg, "display.font_size",
                                       PANEL_DEFAULT_FONT_SIZE);
@@ -541,7 +541,7 @@ void panel_config_load(PanelConfig *cfg, TypioInstance *instance) {
     if (font_size > 72) font_size = 72;
     cfg->font_size = font_size;
 
-    cfg->mode_indicator = typio_config_get_bool(global_cfg, "display.popup_mode_indicator", false);
+    cfg->mode_indicator = typio_config_get_bool(global_cfg, "display.panel_mode_indicator", false);
 
     font_family = typio_config_get_string(global_cfg, "display.font_family", nullptr);
     if (font_family && font_family[0]) {

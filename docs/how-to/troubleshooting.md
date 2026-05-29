@@ -80,7 +80,7 @@ If the popup theme does not match your desktop, set one explicitly in `~/.config
 
 ```toml
 [display]
-popup_theme = "dark"
+panel_theme = "dark"
 candidate_layout = "horizontal"
 ```
 

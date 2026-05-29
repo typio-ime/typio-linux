@@ -9,7 +9,7 @@
 
 [display]
 # Theme: "auto" (follow desktop), "light", or "dark"  (default: "auto")
-popup_theme = "auto"
+panel_theme = "auto"
 
 # Candidate layout: "horizontal" or "vertical"  (default: "vertical")
 candidate_layout = "vertical"
@@ -21,12 +21,12 @@ font_size = 11
 # font_family = "Noto Sans CJK SC"
 
 # Show engine mode label (e.g. "中" / "A") in popup  (default: false)
-# popup_mode_indicator = false
+# panel_mode_indicator = false
 
 # ── Custom color schemas ─────────────────────────────────────────────
 # Define per-channel overrides for the light and/or dark variants.
 # Custom values take priority over the built-in palette for that variant.
-# The active variant is chosen by popup_theme (or desktop detection for "auto").
+# The active variant is chosen by panel_theme (or desktop detection for "auto").
 # Use 6-digit hex (#rrggbb) or 8-digit hex (#rrggbbaa) with alpha.
 # Omit any key to keep the built-in default for that channel.
 

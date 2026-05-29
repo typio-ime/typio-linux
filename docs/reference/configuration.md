@@ -12,11 +12,11 @@ and other framework-level settings live in `core.toml`; see libtypio's
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `popup_theme` | string | `"auto"` | `"auto"`, `"light"`, or `"dark"` |
+| `panel_theme` | string | `"auto"` | `"auto"`, `"light"`, or `"dark"` |
 | `candidate_layout` | string | `"vertical"` | `"horizontal"` or `"vertical"` |
 | `font_size` | int | `11` | Popup text size (6–72) |
 | `font_family` | string | `"Sans"` | Font family name |
-| `popup_mode_indicator` | bool | `false` | Show engine mode label in popup |
+| `panel_mode_indicator` | bool | `false` | Show engine mode label in popup |
 
 ## `[display.colors.light]` and `[display.colors.dark]`
 
