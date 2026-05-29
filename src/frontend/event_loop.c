@@ -25,13 +25,13 @@ typedef struct TypioWlLoopAuxFds {
     /* Legacy per-subsystem fds are now queried on-demand from aux_handlers */
 } TypioWlLoopAuxFds;
 
-static void event_loop_flush_pending_popup(TypioWlFrontend *frontend) {
+static void event_loop_flush_pending_panel(TypioWlFrontend *frontend) {
     if (!frontend || !frontend->session) {
         return;
     }
 
-    if (!typio_wl_text_ui_should_flush_popup_update(
-            frontend->popup_update_pending,
+    if (!typio_wl_text_ui_should_flush_panel_update(
+            frontend->panel_update_pending,
             true,
             frontend->session->ctx != nullptr,
             frontend->session->ctx &&
@@ -39,8 +39,8 @@ static void event_loop_flush_pending_popup(TypioWlFrontend *frontend) {
         return;
     }
 
-    typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_POPUP_UPDATE);
-    /* Note: popup_update_pending is cleared inside update_wayland_text_ui -> typio_wl_session_flush_ui_update */
+    typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_PANEL_UPDATE);
+    /* Note: panel_update_pending is cleared inside update_wayland_text_ui -> typio_wl_session_flush_ui_update */
     typio_wl_session_flush_ui_update(frontend->session);
     typio_wl_frontend_watchdog_heartbeat(frontend);
     typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_IDLE);
@@ -250,7 +250,7 @@ int typio_wl_frontend_run(TypioWlFrontend *frontend) {
          * dropped our grab without a deactivate, leaving us wedged. */
         typio_wl_reconcile_tick(frontend);
 
-        event_loop_flush_pending_popup(frontend);
+        event_loop_flush_pending_panel(frontend);
 
         if (event_loop_prepare_and_flush(frontend) < 0) {
             if (event_loop_recover(frontend, &aux))

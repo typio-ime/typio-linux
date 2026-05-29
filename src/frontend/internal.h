@@ -60,7 +60,7 @@ typedef struct TypioWlOutput TypioWlOutput;
 
 typedef enum TypioWlLoopStage {
     TYPIO_WL_LOOP_STAGE_IDLE = 0,
-    TYPIO_WL_LOOP_STAGE_POPUP_UPDATE,
+    TYPIO_WL_LOOP_STAGE_PANEL_UPDATE,
     TYPIO_WL_LOOP_STAGE_PREPARE_READ,
     TYPIO_WL_LOOP_STAGE_FLUSH,
     TYPIO_WL_LOOP_STAGE_POLL,
@@ -212,7 +212,7 @@ struct TypioWlFrontend {
 
     /* Optional HiDPI helpers. Both may be nullptr on compositors that
      * predate the staging fractional-scale protocol or viewporter; the
-     * popup falls back to integer wl_surface buffer_scale + wl_output
+     * panel falls back to integer wl_surface buffer_scale + wl_output
      * scale tracking when either is missing. */
     struct wp_fractional_scale_manager_v1 *fractional_scale_manager;
     struct wp_viewporter *viewporter;
@@ -296,7 +296,7 @@ struct TypioWlFrontend {
      * forces a recovery once a divergence outlives its threshold. */
     uint64_t reconcile_divergence_since_ms;
 
-    bool popup_update_pending;
+    bool panel_update_pending;
     int config_watch_fd;
     int config_dir_watch;
     int config_engines_watch;

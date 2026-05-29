@@ -296,9 +296,9 @@ void typio_wl_session_reset(TypioWlSession *session) {
         return;
     }
 
-    /* Reset preedit change tracking and cancel any deferred popup work from
+    /* Reset preedit change tracking and cancel any deferred panel work from
      * the previous activation so stale candidates cannot be redrawn later. */
-    typio_wl_text_ui_reset_tracking(session->frontend ? &session->frontend->popup_update_pending
+    typio_wl_text_ui_reset_tracking(session->frontend ? &session->frontend->panel_update_pending
                                                       : nullptr,
                                     &session->last_preedit_text,
                                     &session->last_preedit_cursor);
@@ -538,7 +538,7 @@ static void handle_reactivation(TypioWlFrontend *frontend) {
 
 static void transition_to_inactive(TypioWlFrontend *frontend, const char *reason) {
     typio_log_info("Input context unfocused");
-    typio_wl_text_ui_reset_tracking(&frontend->popup_update_pending,
+    typio_wl_text_ui_reset_tracking(&frontend->panel_update_pending,
                                     &frontend->session->last_preedit_text,
                                     &frontend->session->last_preedit_cursor);
     typio_input_context_focus_out(frontend->session->ctx);
@@ -690,7 +690,7 @@ static void on_commit_callback([[maybe_unused]] TypioInputContext *ctx, const ch
     /* Apply changes */
     typio_wl_commit(session->frontend);
 
-    typio_wl_text_ui_reset_tracking(&session->frontend->popup_update_pending,
+    typio_wl_text_ui_reset_tracking(&session->frontend->panel_update_pending,
                                     &session->last_preedit_text,
                                     &session->last_preedit_cursor);
 
@@ -720,7 +720,7 @@ static void on_composition_callback([[maybe_unused]] TypioInputContext *ctx,
 
     /* Defer the heavy rendering and protocol commit to the event loop flush.
      * This prevents rapid key repeats from blocking the Wayland message loop. */
-    session->frontend->popup_update_pending = true;
+    session->frontend->panel_update_pending = true;
 }
 
 void typio_wl_session_flush_ui_update(TypioWlSession *session) {
@@ -736,9 +736,9 @@ static void update_wayland_text_ui(TypioWlSession *session, TypioInputContext *c
     int cursor_pos = -1;
     TypioWlTextUiPlan update_plan;
     uint64_t start_ms;
-    uint64_t popup_done_ms;
+    uint64_t panel_done_ms;
     uint64_t end_ms;
-    uint64_t popup_ms;
+    uint64_t panel_ms;
     uint64_t total_ms;
 
     if (!session || !ctx) {
@@ -760,21 +760,21 @@ static void update_wayland_text_ui(TypioWlSession *session, TypioInputContext *c
                                                new_text,
                                                cursor_pos);
 
-    /* Keep the popup synchronous so candidate navigation updates the visible
+    /* Keep the panel synchronous so candidate navigation updates the visible
      * highlight immediately. When the preedit is unchanged, skip the protocol
-     * round-trip to the focused application and only refresh the popup. */
+     * round-trip to the focused application and only refresh the panel. */
     typio_panel_update(session->frontend->panel, ctx);
-    popup_done_ms = typio_wl_monotonic_ms();
+    panel_done_ms = typio_wl_monotonic_ms();
 
-    session->frontend->popup_update_pending = false;
-    /* If the popup could not present because the compositor is not yet
+    session->frontend->panel_update_pending = false;
+    /* If the panel could not present because the compositor is not yet
      * releasing swapchain buffers (display asleep / occluded after a
      * lock or suspend), re-arm the flush so the event loop keeps retrying
      * until the visible highlight catches up with the committed selection. */
     if (typio_panel_present_retry_pending(session->frontend->panel)) {
-        session->frontend->popup_update_pending = true;
+        session->frontend->panel_update_pending = true;
     }
-    if (update_plan == TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_POPUP) {
+    if (update_plan == TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_PANEL) {
         if (!plain_text) {
             typio_wl_set_preedit(session->frontend, "", -1, -1);
         } else {
@@ -789,14 +789,14 @@ static void update_wayland_text_ui(TypioWlSession *session, TypioInputContext *c
     session->last_preedit_cursor = cursor_pos;
 
     end_ms = typio_wl_monotonic_ms();
-    popup_ms = (popup_done_ms >= start_ms) ? (popup_done_ms - start_ms) : 0;
+    panel_ms = (panel_done_ms >= start_ms) ? (panel_done_ms - start_ms) : 0;
     total_ms = (end_ms >= start_ms) ? (end_ms - start_ms) : 0;
     if (total_ms >= TYPIO_WL_UI_SLOW_UPDATE_MS) {
         typio_log_debug(
-            "Wayland text UI slow: total=%" PRIu64 "ms popup=%" PRIu64 "ms preedit_changed=%s",
+            "Wayland text UI slow: total=%" PRIu64 "ms panel=%" PRIu64 "ms preedit_changed=%s",
             total_ms,
-            popup_ms,
-            update_plan == TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_POPUP ? "yes" : "no");
+            panel_ms,
+            update_plan == TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_PANEL ? "yes" : "no");
     }
 
     free(plain_text);

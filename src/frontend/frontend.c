@@ -288,7 +288,7 @@ static bool frontend_wayland_bind(TypioWlFrontend *frontend) {
         return false;
     }
     if (!frontend->compositor || !frontend->shm) {
-        typio_log_warning("Compositor missing wl_compositor or wl_shm; popup candidates disabled");
+        typio_log_warning("Compositor missing wl_compositor or wl_shm; panel candidates disabled");
     }
 
     frontend->input_method = zwp_input_method_manager_v2_get_input_method(
@@ -323,12 +323,12 @@ static bool frontend_wayland_bind(TypioWlFrontend *frontend) {
     frontend->panel = typio_panel_create(frontend);
     if (frontend->panel) {
         if (typio_panel_is_available(frontend->panel)) {
-            typio_log_info("Candidate popup surface ready");
+            typio_log_info("Candidate panel surface ready");
         } else if (!frontend->compositor || !frontend->shm) {
-            typio_log_warning("Popup disabled: compositor=%p, shm=%p",
+            typio_log_warning("Panel disabled: compositor=%p, shm=%p",
                       (void *)frontend->compositor, (void *)frontend->shm);
         } else {
-            typio_log_warning("Failed to initialize candidate popup surface; keeping candidate state inline");
+            typio_log_warning("Failed to initialize candidate panel surface; keeping candidate state inline");
         }
     } else {
         typio_log_warning("Failed to initialize text UI backend");

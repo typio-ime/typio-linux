@@ -5,7 +5,7 @@
  * string and stopped caching once full, so a long CJK session (an unbounded
  * stream of distinct phrases, all served by the same fallback font) collapsed
  * to a ~0% hit rate and re-ran the expensive resolver on every composition —
- * the source of the "lag after a while, including the popup" report.
+ * the source of the "lag after a while, including the panel" report.
  *
  * These tests stand in for "mock longtime / frequent composition": a mock
  * resolver counts how often the expensive path runs while we feed thousands

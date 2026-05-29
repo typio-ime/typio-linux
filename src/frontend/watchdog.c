@@ -17,7 +17,7 @@
 static const char *stage_name(TypioWlLoopStage stage) {
     switch (stage) {
     case TYPIO_WL_LOOP_STAGE_IDLE:              return "idle";
-    case TYPIO_WL_LOOP_STAGE_POPUP_UPDATE:      return "popup_update";
+    case TYPIO_WL_LOOP_STAGE_PANEL_UPDATE:      return "panel_update";
     case TYPIO_WL_LOOP_STAGE_PREPARE_READ:      return "prepare_read";
     case TYPIO_WL_LOOP_STAGE_FLUSH:             return "flush";
     case TYPIO_WL_LOOP_STAGE_POLL:              return "poll";

@@ -12,10 +12,10 @@ TypioWlTextUiPlan typio_wl_text_ui_plan_update(const char *last_preedit_text,
 
     if (last_preedit_cursor != next_preedit_cursor ||
         strcmp(last_text, next_text) != 0) {
-        return TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_POPUP;
+        return TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_PANEL;
     }
 
-    return TYPIO_WL_TEXT_UI_SYNC_POPUP_ONLY;
+    return TYPIO_WL_TEXT_UI_SYNC_PANEL_ONLY;
 }
 
 void typio_wl_text_ui_reset_tracking(bool *panel_update_pending,
@@ -35,7 +35,7 @@ void typio_wl_text_ui_reset_tracking(bool *panel_update_pending,
     }
 }
 
-bool typio_wl_text_ui_should_flush_popup_update(bool panel_update_pending,
+bool typio_wl_text_ui_should_flush_panel_update(bool panel_update_pending,
                                                 bool has_session,
                                                 bool has_context,
                                                 bool context_focused) {

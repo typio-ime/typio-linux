@@ -30,72 +30,72 @@ static int tests_passed = 0;
 
 #define ASSERT_EQ(a, b) ASSERT((a) == (b))
 
-TEST(syncs_popup_only_when_preedit_and_cursor_match) {
+TEST(syncs_panel_only_when_preedit_and_cursor_match) {
     ASSERT_EQ(typio_wl_text_ui_plan_update("ni", 2, "ni", 2),
-              TYPIO_WL_TEXT_UI_SYNC_POPUP_ONLY);
+              TYPIO_WL_TEXT_UI_SYNC_PANEL_ONLY);
 }
 
 TEST(syncs_when_preedit_text_changes) {
     ASSERT_EQ(typio_wl_text_ui_plan_update("ni", 2, "nih", 3),
-              TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_POPUP);
+              TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_PANEL);
 }
 
 TEST(syncs_when_cursor_changes) {
     ASSERT_EQ(typio_wl_text_ui_plan_update("ni", 1, "ni", 2),
-              TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_POPUP);
+              TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_PANEL);
 }
 
 TEST(treats_null_preedit_as_empty_string) {
     ASSERT_EQ(typio_wl_text_ui_plan_update(nullptr, -1, nullptr, -1),
-              TYPIO_WL_TEXT_UI_SYNC_POPUP_ONLY);
+              TYPIO_WL_TEXT_UI_SYNC_PANEL_ONLY);
     ASSERT_EQ(typio_wl_text_ui_plan_update(nullptr, -1, "", -1),
-              TYPIO_WL_TEXT_UI_SYNC_POPUP_ONLY);
+              TYPIO_WL_TEXT_UI_SYNC_PANEL_ONLY);
     ASSERT_EQ(typio_wl_text_ui_plan_update("", -1, "ni", 2),
-              TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_POPUP);
+              TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_PANEL);
 }
 
 TEST(reset_tracking_clears_pending_and_preedit_state) {
-    bool popup_update_pending = true;
+    bool panel_update_pending = true;
     char *last_preedit_text = strdup("ni");
     int last_preedit_cursor = 2;
 
     ASSERT(last_preedit_text != nullptr);
 
-    typio_wl_text_ui_reset_tracking(&popup_update_pending,
+    typio_wl_text_ui_reset_tracking(&panel_update_pending,
                                     &last_preedit_text,
                                     &last_preedit_cursor);
 
-    ASSERT_EQ(popup_update_pending, false);
+    ASSERT_EQ(panel_update_pending, false);
     ASSERT_EQ(last_preedit_text, nullptr);
     ASSERT_EQ(last_preedit_cursor, -1);
 }
 
 TEST(reset_tracking_accepts_null_fields) {
-    bool popup_update_pending = true;
+    bool panel_update_pending = true;
 
-    typio_wl_text_ui_reset_tracking(&popup_update_pending, nullptr, nullptr);
-    ASSERT_EQ(popup_update_pending, false);
+    typio_wl_text_ui_reset_tracking(&panel_update_pending, nullptr, nullptr);
+    ASSERT_EQ(panel_update_pending, false);
 
     typio_wl_text_ui_reset_tracking(nullptr, nullptr, nullptr);
 }
 
-TEST(flush_popup_update_requires_focused_context) {
-    ASSERT_EQ(typio_wl_text_ui_should_flush_popup_update(true, true, true, true), true);
-    ASSERT_EQ(typio_wl_text_ui_should_flush_popup_update(false, true, true, true), false);
-    ASSERT_EQ(typio_wl_text_ui_should_flush_popup_update(true, false, true, true), false);
-    ASSERT_EQ(typio_wl_text_ui_should_flush_popup_update(true, true, false, true), false);
-    ASSERT_EQ(typio_wl_text_ui_should_flush_popup_update(true, true, true, false), false);
+TEST(flush_panel_update_requires_focused_context) {
+    ASSERT_EQ(typio_wl_text_ui_should_flush_panel_update(true, true, true, true), true);
+    ASSERT_EQ(typio_wl_text_ui_should_flush_panel_update(false, true, true, true), false);
+    ASSERT_EQ(typio_wl_text_ui_should_flush_panel_update(true, false, true, true), false);
+    ASSERT_EQ(typio_wl_text_ui_should_flush_panel_update(true, true, false, true), false);
+    ASSERT_EQ(typio_wl_text_ui_should_flush_panel_update(true, true, true, false), false);
 }
 
 int main(void) {
     printf("Running text UI state tests:\n");
-    run_test_syncs_popup_only_when_preedit_and_cursor_match();
+    run_test_syncs_panel_only_when_preedit_and_cursor_match();
     run_test_syncs_when_preedit_text_changes();
     run_test_syncs_when_cursor_changes();
     run_test_treats_null_preedit_as_empty_string();
     run_test_reset_tracking_clears_pending_and_preedit_state();
     run_test_reset_tracking_accepts_null_fields();
-    run_test_flush_popup_update_requires_focused_context();
+    run_test_flush_panel_update_requires_focused_context();
     printf("\nPassed %d/%d tests\n", tests_passed, tests_run);
     return 0;
 }
