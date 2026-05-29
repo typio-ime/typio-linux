@@ -109,7 +109,7 @@ if build_voice
 endif
 
 # ── Dependencies ──────────────────────────────────────────────────────────
-daemon_deps = [libtypio_dep, dl_dep]
+daemon_deps = [libtypio_dep, dl_dep, vulkan_dep]
 
 if enable_wayland
     daemon_deps += [wayland_client_dep, xkbcommon_dep]

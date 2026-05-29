@@ -58,6 +58,7 @@ libtypio_dep = dependency('libtypio',
 if enable_wayland
     wayland_client_dep = dependency('wayland-client', required: true)
     xkbcommon_dep = dependency('xkbcommon', required: true)
+    vulkan_dep = dependency('vulkan', required: true)
     wayland_scanner = find_program('wayland-scanner', required: true)
 endif
 
