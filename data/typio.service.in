@@ -11,9 +11,6 @@ Type=simple
 ExecStart=@TYPIO_HOST_DIR@/typio
 Restart=on-failure
 RestartSec=2s
-# Session environment variables for X11/Wayland compatibility
-Environment=DISPLAY=:0
-Environment=WAYLAND_DISPLAY=wayland-0
 
 [Install]
 WantedBy=graphical-session.target
