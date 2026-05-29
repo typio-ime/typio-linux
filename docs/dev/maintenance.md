@@ -182,25 +182,25 @@ The Wayland frontend is designed for sustained operation (days to weeks). Change
 
 ### Font Cache Management
 
-`flux_renderer.c` maintains three caches:
+`text_shaper.c` maintains three caches:
 
 - **Font-object cache** (`FONT_OBJ_CACHE_CAP` = 64) — `FcPattern` → `TypioFluxFont`.
 - **Font-file cache** (`FONT_FILE_CACHE_CAP` = 32) — `(path, weight)` → `FcPattern` + file handle.
 - **Fallback-font cache** (`FALLBACK_FONT_CACHE_CAP` = 16, `src/ui/fallback_cache.c`) — coverage-keyed LRU. Each resolved fallback font remembers the `FcCharSet` it covers; a later text reuses it when its codepoints are a subset (`FcCharSetIsSubset`). Keyed on coverage, **not** the text string, so a long CJK session — an unbounded stream of distinct phrases served by one font — resolves ~once per script instead of re-running `FcFontSort` per phrase. (The earlier text-keyed, cap-then-stop cache degraded to a ~0 % hit rate and re-ran the resolver on every composition; unit-tested in `tests/test_fallback_cache.c`.)
 
-There is also a **glyph atlas** (`src/ui/renderer.c`, `glyph_atlas_*`): a
+There is also a **glyph atlas** (`src/ui/panel/text_shaper.c`, `glyph_atlas_*`): a
 single persistent R8 texture holding every rasterised glyph, keyed
 `(font_id, glyph_id)` and packed by the skyline allocator in
 `src/ui/glyph_pack.c` (ADR-0012). It is bounded (one ~4 MiB texture) and the
 reason candidate paging no longer uploads textures on the hot path. It is keyed
 on `font_id`, so it is dropped alongside the font objects in
-`typio_flux_engine_purge_font_caches()` and rebuilt lazily.
+`typio_text_shaper_purge_font_caches()` and rebuilt lazily.
 
 These caches are warmed on first use and survive for the lifetime of the process. To prevent unbounded Fontconfig growth:
 
-- **`typio_flux_engine_purge_font_caches()`** must be called at safe idle boundaries. Currently this happens on every config reload (`wl_runtime_config.c`). It drains the font caches **and** frees the glyph atlas (both must be idle — it is called where the GPU is not mid-frame).
+- **`typio_text_shaper_purge_font_caches()`** must be called at safe idle boundaries. Currently this happens on every config reload (`runtime_config.c`). It drains the font caches **and** frees the glyph atlas (both must be idle — it is called where the GPU is not mid-frame).
 - Do not call `FcFini()` during an active composition or while the GPU renderer is holding font atlas references.
-- If you add a new cache in `flux_renderer.c`, add a corresponding `*_cache_clear()` helper and wire it into `typio_flux_engine_purge_font_caches()`.
+- If you add a new cache in `text_shaper.c`, add a corresponding `*_cache_clear()` helper and wire it into `typio_text_shaper_purge_font_caches()`.
 
 ### Composition Pipeline
 
@@ -227,7 +227,7 @@ When investigating long-term slowdown:
 
 1. Check whether the symptom survives a daemon restart. If yes, suspect RIME userdb or compositor state.
 2. If the symptom disappears after restart but reappears over time, it could be a CPU-side cache degradation **or** an off-CPU stall. **Triage CPU vs off-CPU first** (next subsection) — do not assume it is font lookups or `candidate_snapshot_assign` allocations until on-CPU profiling confirms a CPU hotspot.
-3. Verify that `typio_flux_engine_purge_font_caches()` is being invoked (debug log or breakpoint in `wl_runtime_config.c`).
+3. Verify that `typio_text_shaper_purge_font_caches()` is being invoked (debug log or breakpoint in `runtime_config.c`).
 
 ### Diagnosing event-loop stalls with system tools
 
@@ -256,7 +256,7 @@ uses `perf_event_open` (not ptrace) and works on your own process.
    -ex 'thread apply all bt 12'; done` (root, while reproducing). The process
    runs freely between attaches, so this samples real wall-clock blocking.
    Aggregate the non-idle frames. The 2026-05 signature was the main thread in
-   `popup_present → flux_frame_present → vkQueuePresentKHR →
+   `panel_surface_present → flux_frame_present → vkQueuePresentKHR →
    wsi_wl_swapchain_queue_present` ~86 % of the time — a FIFO present blocking
    on compositor buffer release (fixed by ADR-0010's non-blocking present).
 
@@ -276,7 +276,8 @@ chain:
 - **Synchronous per-text-run texture upload** — a *real* anti-pattern, but
   **not** the root cause of the recurring lag (see the next bullet). A gdb
   profile while paging once caught `typio_flux_fill_layout → build_layout_image
-  → flux_image_create → submit_one_shot_and_wait → vkWaitForFences`:
+  → flux_image_create → submit_one_shot_and_wait → vkWaitForFences` (both since
+  removed/renamed):
   `build_layout_image` rasterised a whole text run into one texture and uploaded
   it synchronously. Removed by a **shared glyph atlas** — rasterise each glyph
   once, reference sub-rects, upload-once-per-glyph

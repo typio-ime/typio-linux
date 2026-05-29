@@ -123,7 +123,7 @@ update_plan = typio_wl_text_ui_plan_update(session->last_preedit_text,
                                            new_text, cursor_pos);
 ```
 
-If `update_plan == POPUP_ONLY`, the popup is repainted synchronously but the expensive `zwp_input_method_v2.set_preedit_string` → `done` round-trip to the application is skipped entirely. This avoids composition-update jank in heavyweight clients like Chrome.
+If `update_plan == PANEL_ONLY`, the popup is repainted synchronously but the expensive `zwp_input_method_v2.set_preedit_string` → `done` round-trip to the application is skipped entirely. This avoids composition-update jank in heavyweight clients like Chrome.
 
 ## Source Map
 
@@ -135,8 +135,8 @@ If `update_plan == POPUP_ONLY`, the popup is repainted synchronously but the exp
 | `zwp_input_method_keyboard_grab_v2` | `src/frontend/keyboard.c` | Grab create/destroy, key/modifiers/repeat listeners, emergency exit |
 | Key epoch + tracking | `src/input/tracker.{c,h}` | Epoch fence and symmetric press/release |
 | `zwp_virtual_keyboard_v1` | `src/input/bridge.c` | Keymap handoff, readiness gating, unhandled-key forwarding, fail-safe downgrade |
-| `zwp_input_popup_surface_v2` | `src/ui/popup/panel.c` | Popup geometry, present, retry-on-stall |
-| Popup rendering | `src/ui/popup/paint.c` | Vulkan swapchain on `wl_surface` |
+| `zwp_input_popup_surface_v2` | `src/ui/panel/surface.c` | Popup geometry, present, retry-on-stall |
+| Popup rendering | `src/ui/panel/paint.c` | Vulkan swapchain on `wl_surface` |
 | Resume detection | `src/engine/resume.c` | logind + boottime heuristic (records facts) |
 | Protocol XML | `protocols/input-method-unstable-v2.xml` | Wayland protocol definition (upstream) |
 
