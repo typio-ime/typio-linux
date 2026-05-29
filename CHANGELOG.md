@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3] — 2026-05-29
+
+### Fixed
+- Make `flux` a required dependency when Wayland is enabled, preventing silent fallback to a no-op popup stub.
+- Explicitly link `libvulkan` to resolve `vkCreateWaylandSurfaceKHR` undefined reference at link time.
+
 ## [0.0.2] — 2026-05-29
 
 ### Fixed
