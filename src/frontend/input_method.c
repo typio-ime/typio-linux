@@ -4,6 +4,7 @@
  */
 
 #include "internal.h"
+#include "panel.h"
 #include "identity.h"
 #include "monotonic.h"
 #include "preedit.h"
@@ -542,7 +543,7 @@ static void transition_to_inactive(TypioWlFrontend *frontend, const char *reason
                                     &frontend->session->last_preedit_cursor);
     typio_input_context_focus_out(frontend->session->ctx);
     typio_input_context_reset(frontend->session->ctx);
-    typio_wl_text_ui_backend_hide(frontend->text_ui_backend);
+    typio_panel_hide(frontend->panel);
 
     typio_wl_lifecycle_hard_reset_keyboard(frontend, reason);
     typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_INACTIVE, "focus out complete");
@@ -681,7 +682,7 @@ static void on_commit_callback([[maybe_unused]] TypioInputContext *ctx, const ch
 
     /* Clear preedit first */
     typio_wl_set_preedit(session->frontend, "", -1, -1);
-    typio_wl_text_ui_backend_hide(session->frontend->text_ui_backend);
+    typio_panel_hide(session->frontend->panel);
 
     /* Commit the text */
     typio_wl_commit_string(session->frontend, text);
@@ -762,7 +763,7 @@ static void update_wayland_text_ui(TypioWlSession *session, TypioInputContext *c
     /* Keep the popup synchronous so candidate navigation updates the visible
      * highlight immediately. When the preedit is unchanged, skip the protocol
      * round-trip to the focused application and only refresh the popup. */
-    typio_wl_text_ui_backend_update(session->frontend->text_ui_backend, ctx);
+    typio_panel_update(session->frontend->panel, ctx);
     popup_done_ms = typio_wl_monotonic_ms();
 
     session->frontend->popup_update_pending = false;
@@ -770,7 +771,7 @@ static void update_wayland_text_ui(TypioWlSession *session, TypioInputContext *c
      * releasing swapchain buffers (display asleep / occluded after a
      * lock or suspend), re-arm the flush so the event loop keeps retrying
      * until the visible highlight catches up with the committed selection. */
-    if (typio_wl_candidate_panel_present_retry_pending(session->frontend->text_ui_backend)) {
+    if (typio_panel_present_retry_pending(session->frontend->panel)) {
         session->frontend->popup_update_pending = true;
     }
     if (update_plan == TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_POPUP) {

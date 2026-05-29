@@ -14,6 +14,7 @@
 #include <flux/vulkan.h>
 
 #include "internal.h"
+#include "panel.h"
 #include "layout.h"
 #include "paint.h"
 #include "theme.h"
@@ -22,6 +23,7 @@
 #include "monotonic.h"
 #include "preedit.h"
 #include "typio/runtime/instance.h"
+#include "typio/abi/input_context.h"
 #include "typio/abi/log.h"
 
 #include <inttypes.h>
@@ -96,7 +98,7 @@ typedef struct PanelRetireSlot {
 
 /* ── Main panel struct ──────────────────────────────────────────────── */
 
-struct TypioWlCandidatePanel {
+struct TypioPanel {
     TypioWlFrontend *frontend;
 
     /* Wayland surface objects */
@@ -304,7 +306,7 @@ static PanelDelta classify_delta(const PanelGeometry *geom,
 
 /* ── Output helpers ─────────────────────────────────────────────────── */
 
-static const TypioWlOutput *find_frontend_output(const TypioWlCandidatePanel *panel,
+static const TypioWlOutput *find_frontend_output(const TypioPanel *panel,
                                                    struct wl_output *output) {
     for (TypioWlOutput *o = panel->frontend ? panel->frontend->outputs : nullptr;
          o; o = o->next) {
@@ -313,7 +315,7 @@ static const TypioWlOutput *find_frontend_output(const TypioWlCandidatePanel *pa
     return nullptr;
 }
 
-static bool tracks_output(const TypioWlCandidatePanel *panel,
+static bool tracks_output(const TypioPanel *panel,
                            struct wl_output *output) {
     for (PanelOutputRef *r = panel->entered_outputs; r; r = r->next) {
         if (r->output == output) return true;
@@ -332,7 +334,7 @@ static bool tracks_output(const TypioWlCandidatePanel *panel,
  *      reupload+recommit when enter arrives.
  *   5. 1.0f.
  */
-static float render_scale(const TypioWlCandidatePanel *panel) {
+static float render_scale(const TypioPanel *panel) {
     if (panel->fractional_scale_120 > 0) {
         return (float)panel->fractional_scale_120 / 120.0f;
     }
@@ -356,13 +358,13 @@ static float render_scale(const TypioWlCandidatePanel *panel) {
     return best > 0 ? (float)best : 1.0f;
 }
 
-static void track_output(TypioWlCandidatePanel *panel, struct wl_output *output);
-static void untrack_output(TypioWlCandidatePanel *panel, struct wl_output *output);
-static void refresh_visible(TypioWlCandidatePanel *panel);
+static void track_output(TypioPanel *panel, struct wl_output *output);
+static void untrack_output(TypioPanel *panel, struct wl_output *output);
+static void refresh_visible(TypioPanel *panel);
 
 /* ── Mode label ─────────────────────────────────────────────────────── */
 
-static char *build_mode_label(TypioWlCandidatePanel *panel) {
+static char *build_mode_label(TypioPanel *panel) {
     const TypioEngineMode *mode;
 
     if (!panel || !panel->frontend || !panel->frontend->instance) return nullptr;
@@ -375,7 +377,7 @@ static char *build_mode_label(TypioWlCandidatePanel *panel) {
 
 /* ── Config helpers ─────────────────────────────────────────────────── */
 
-static const PanelConfig *get_config(TypioWlCandidatePanel *panel) {
+static const PanelConfig *get_config(TypioPanel *panel) {
     if (!panel->config_valid) {
         panel_config_load(&panel->config,
                            panel->frontend ? panel->frontend->instance : nullptr);
@@ -393,7 +395,7 @@ static const PanelConfig *get_config(TypioWlCandidatePanel *panel) {
  *
  * If the swapchain has never been built (fx_ready == false), nothing on
  * the GPU references `g`, so it can be freed immediately. */
-static void retire_geometry(TypioWlCandidatePanel *panel, PanelGeometry *g) {
+static void retire_geometry(TypioPanel *panel, PanelGeometry *g) {
     if (!g) return;
     if (!panel || !panel->fx_ready) {
         panel_geometry_free(g);
@@ -408,7 +410,7 @@ static void retire_geometry(TypioWlCandidatePanel *panel, PanelGeometry *g) {
  * geometry — defer their release to the retire ring on the same epoch
  * cadence. */
 static void panel_retire_layout(void *user, TypioTextShape *layout) {
-    TypioWlCandidatePanel *panel = (TypioWlCandidatePanel *)user;
+    TypioPanel *panel = (TypioPanel *)user;
     if (!layout) return;
     if (!panel || !panel->fx_ready) {
         typio_text_shape_free(layout);
@@ -431,7 +433,7 @@ static flux_color panel_bg_color(const TypioPanelPalette *p) {
                                   panel_u8(p->bg_b), panel_u8(p->bg_a));
 }
 
-static void fx_teardown(TypioWlCandidatePanel *panel) {
+static void fx_teardown(TypioPanel *panel) {
     if (!panel) return;
 
     flux_device *dev = (panel->fx_surface || panel->vk_surface) ? typio_render_device_get() : nullptr;
@@ -475,7 +477,7 @@ static inline int panel_quantize_up(int v) {
 /* Create / resize the swapchain to cover (w, h) physical pixels. With a
  * viewport the buffer is grow-only and quantised (the content is cropped to
  * size at present time); without one it tracks (w, h) exactly. */
-static bool ensure_fx_surface(TypioWlCandidatePanel *panel, int w, int h) {
+static bool ensure_fx_surface(TypioPanel *panel, int w, int h) {
     if (!panel || !panel->frontend || !panel->surface || w <= 0 || h <= 0) return false;
 
     flux_device *dev = typio_render_device_get();
@@ -586,7 +588,7 @@ typedef enum {
  * after a few consecutive stalls, recreate the swapchain (which also clears the
  * per-frame semaphores left dangling by the stalled acquires) so presentation
  * resumes cleanly once the session is back. */
-static PanelPresentResult panel_present(TypioWlCandidatePanel *panel,
+static PanelPresentResult panel_present(TypioPanel *panel,
                                         const PanelGeometry *geom, int selected) {
     if (!panel->fx_ready || !geom || !geom->palette) return PANEL_PRESENT_FAIL;
 
@@ -640,7 +642,7 @@ static PanelPresentResult panel_present(TypioWlCandidatePanel *panel,
 
 /* ── Surface hide ───────────────────────────────────────────────────── */
 
-static void hide_surface(TypioWlCandidatePanel *panel) {
+static void hide_surface(TypioPanel *panel) {
     if (!panel || !panel->surface || !panel->visible) return;
 
     /* Unmap by committing a null buffer. The flux swapchain stays alive so a
@@ -658,7 +660,7 @@ static void hide_surface(TypioWlCandidatePanel *panel) {
 
 /* ── Core render ─────────────────────────────────────────────────────── */
 
-static bool panel_render(TypioWlCandidatePanel *panel,
+static bool panel_render(TypioPanel *panel,
                           const TypioCandidateList *cands,
                           const char *preedit_text,
                           const char *mode_label) {
@@ -821,7 +823,7 @@ static bool panel_render(TypioWlCandidatePanel *panel,
 static void on_text_input_rectangle(void *data,
                                      [[maybe_unused]] struct zwp_input_popup_surface_v2 *s,
                                      int32_t x, int32_t y, int32_t w, int32_t h) {
-    TypioWlCandidatePanel *panel = (TypioWlCandidatePanel *)data;
+    TypioPanel *panel = (TypioPanel *)data;
     panel->text_input_x = x;
     panel->text_input_y = y;
     panel->text_input_w = w;
@@ -835,13 +837,13 @@ static const struct zwp_input_popup_surface_v2_listener popup_surface_listener =
 static void on_surface_enter(void *data,
                                [[maybe_unused]] struct wl_surface *surface,
                                struct wl_output *output) {
-    track_output((TypioWlCandidatePanel *)data, output);
+    track_output((TypioPanel *)data, output);
 }
 
 static void on_surface_leave(void *data,
                                [[maybe_unused]] struct wl_surface *surface,
                                struct wl_output *output) {
-    untrack_output((TypioWlCandidatePanel *)data, output);
+    untrack_output((TypioPanel *)data, output);
 }
 
 /* wl_surface v6: integer scale hint emitted before the first commit. We
@@ -850,7 +852,7 @@ static void on_surface_leave(void *data,
 static void on_surface_preferred_buffer_scale(void *data,
                                               [[maybe_unused]] struct wl_surface *surface,
                                               int32_t factor) {
-    TypioWlCandidatePanel *panel = (TypioWlCandidatePanel *)data;
+    TypioPanel *panel = (TypioPanel *)data;
     if (!panel || factor <= 0) return;
     if (panel->preferred_buffer_scale == factor) return;
     panel->preferred_buffer_scale = factor;
@@ -878,7 +880,7 @@ static const struct wl_surface_listener wl_surface_listener = {
 static void on_fractional_preferred_scale(void *data,
                                           [[maybe_unused]] struct wp_fractional_scale_v1 *scale,
                                           uint32_t scale_120) {
-    TypioWlCandidatePanel *panel = (TypioWlCandidatePanel *)data;
+    TypioPanel *panel = (TypioPanel *)data;
     if (!panel || scale_120 == 0) return;
     if (panel->fractional_scale_120 == scale_120) return;
     panel->fractional_scale_120 = scale_120;
@@ -891,14 +893,14 @@ static const struct wp_fractional_scale_v1_listener fractional_scale_listener = 
 
 /* ── Output tracking (refresh panel when scale changes) ─────────────── */
 
-static void refresh_visible(TypioWlCandidatePanel *panel) {
+static void refresh_visible(TypioPanel *panel) {
     if (!panel || !panel->visible || !panel->frontend || !panel->frontend->session) return;
     TypioInputContext *ctx = panel->frontend->session->ctx;
     if (!ctx) return;
-    typio_wl_text_ui_backend_update(panel->frontend->text_ui_backend, ctx);
+    typio_panel_update(panel, ctx);
 }
 
-static void track_output(TypioWlCandidatePanel *panel, struct wl_output *output) {
+static void track_output(TypioPanel *panel, struct wl_output *output) {
     if (!panel || !output || tracks_output(panel, output)) return;
     PanelOutputRef *r = (PanelOutputRef *)calloc(1, sizeof(*r));
     if (!r) return;
@@ -908,7 +910,7 @@ static void track_output(TypioWlCandidatePanel *panel, struct wl_output *output)
     refresh_visible(panel);
 }
 
-static void untrack_output(TypioWlCandidatePanel *panel, struct wl_output *output) {
+static void untrack_output(TypioPanel *panel, struct wl_output *output) {
     PanelOutputRef **link = &panel->entered_outputs;
     while (*link) {
         PanelOutputRef *r = *link;
@@ -922,7 +924,7 @@ static void untrack_output(TypioWlCandidatePanel *panel, struct wl_output *outpu
     }
 }
 
-static void clear_outputs(TypioWlCandidatePanel *panel) {
+static void clear_outputs(TypioPanel *panel) {
     while (panel && panel->entered_outputs) {
         PanelOutputRef *r = panel->entered_outputs;
         panel->entered_outputs = r->next;
@@ -930,20 +932,11 @@ static void clear_outputs(TypioWlCandidatePanel *panel) {
     }
 }
 
-static bool ensure_created(TypioWlFrontend *frontend) {
-    if (!frontend || !frontend->text_ui_backend) return false;
-    TypioWlTextUiBackend *backend = frontend->text_ui_backend;
-    if (backend->candidate_panel) return backend->candidate_panel->surface && backend->candidate_panel->popup_surface;
-    if (!frontend->compositor || !frontend->input_method) return false;
-    backend->candidate_panel = typio_wl_candidate_panel_create(frontend);
-    return backend->candidate_panel != nullptr;
-}
-
 /* ── Public API ─────────────────────────────────────────────────────── */
 
-TypioWlCandidatePanel *typio_wl_candidate_panel_create(TypioWlFrontend *frontend) {
+TypioPanel *typio_panel_create(TypioWlFrontend *frontend) {
     if (!frontend || !frontend->compositor || !frontend->input_method) return nullptr;
-    TypioWlCandidatePanel *panel = (TypioWlCandidatePanel *)calloc(1, sizeof(*panel));
+    TypioPanel *panel = (TypioPanel *)calloc(1, sizeof(*panel));
     if (!panel) return nullptr;
     panel->frontend = frontend;
     panel->selected = -1;
@@ -978,7 +971,7 @@ TypioWlCandidatePanel *typio_wl_candidate_panel_create(TypioWlFrontend *frontend
     return panel;
 }
 
-void typio_wl_candidate_panel_destroy(TypioWlCandidatePanel *panel) {
+void typio_panel_destroy(TypioPanel *panel) {
     if (!panel) return;
     hide_surface(panel);
     fx_teardown(panel);
@@ -997,12 +990,9 @@ void typio_wl_candidate_panel_destroy(TypioWlCandidatePanel *panel) {
     free(panel);
 }
 
-bool typio_wl_candidate_panel_update_content(TypioWlTextUiBackend *backend,
-                                                             const TypioPanelContent *content) {
-    if (!backend || !backend->frontend || !content) return false;
-    if (!ensure_created(backend->frontend)) return false;
-    TypioWlCandidatePanel *panel = backend->candidate_panel;
-    if (!panel) return false;
+bool typio_panel_update_content(TypioPanel *panel,
+                                const TypioPanelContent *content) {
+    if (!panel || !content) return false;
 
     /* Update persistent status only when the caller explicitly sets it.
      * InputContext-driven updates leave status.message == nullptr so they
@@ -1040,33 +1030,38 @@ bool typio_wl_candidate_panel_update_content(TypioWlTextUiBackend *backend,
     return ok;
 }
 
-bool typio_wl_candidate_panel_update(TypioWlTextUiBackend *backend, TypioInputContext *ctx) {
-    if (!backend || !backend->frontend) return false;
-    (void)ctx;
+/* Convenience wrapper: build a content descriptor from the input context plus
+ * the host-side candidate snapshot. Candidates are no longer exposed via the
+ * libtypio input-context surface; the composition callback in input_method.c
+ * maintains a deep copy on the session. */
+bool typio_panel_update(TypioPanel *panel, TypioInputContext *ctx) {
+    if (!panel) return false;
 
     TypioPanelContent content;
     typio_panel_content_init(&content);
-    if (backend->frontend->session) {
-        content.input.candidates = &backend->frontend->session->candidate_snapshot;
+    if (ctx) {
+        if (panel->frontend && panel->frontend->session) {
+            content.input.candidates = &panel->frontend->session->candidate_snapshot;
+        }
+        content.input.preedit = typio_input_context_get_preedit(ctx);
     }
-    return typio_wl_candidate_panel_update_content(backend, &content);
+    return typio_panel_update_content(panel, &content);
 }
 
-void typio_wl_candidate_panel_hide(TypioWlTextUiBackend *backend) {
-    if (backend && backend->candidate_panel) hide_surface(backend->candidate_panel);
+void typio_panel_hide(TypioPanel *panel) {
+    if (panel) hide_surface(panel);
 }
 
-bool typio_wl_candidate_panel_is_available(TypioWlTextUiBackend *backend) {
-    return backend && backend->candidate_panel && backend->candidate_panel->surface && backend->candidate_panel->popup_surface;
+bool typio_panel_is_available(TypioPanel *panel) {
+    return panel && panel->surface && panel->popup_surface;
 }
 
-bool typio_wl_candidate_panel_present_retry_pending(TypioWlTextUiBackend *backend) {
-    return backend && backend->candidate_panel && backend->candidate_panel->present_retry;
+bool typio_panel_present_retry_pending(TypioPanel *panel) {
+    return panel && panel->present_retry;
 }
 
-void typio_wl_candidate_panel_invalidate_config(TypioWlTextUiBackend *backend) {
-    if (!backend || !backend->candidate_panel) return;
-    TypioWlCandidatePanel *panel = backend->candidate_panel;
+void typio_panel_invalidate_config(TypioPanel *panel) {
+    if (!panel) return;
     panel->config_valid = false;
     memset(&panel->theme_cache, 0, sizeof(panel->theme_cache));
     /* Invalidating the LRU directly frees its layouts' flux_image resources
@@ -1090,9 +1085,8 @@ void typio_wl_candidate_panel_invalidate_config(TypioWlTextUiBackend *backend) {
     panel->geom = nullptr;
 }
 
-void typio_wl_candidate_panel_handle_output_change(TypioWlTextUiBackend *backend, struct wl_output *output) {
-    if (!backend || !output || !backend->candidate_panel) return;
-    TypioWlCandidatePanel *panel = backend->candidate_panel;
+void typio_panel_handle_output_change(TypioPanel *panel, struct wl_output *output) {
+    if (!panel || !output) return;
     if (!tracks_output(panel, output)) return;
     if (!find_frontend_output(panel, output)) untrack_output(panel, output);
     else refresh_visible(panel);
@@ -1100,9 +1094,8 @@ void typio_wl_candidate_panel_handle_output_change(TypioWlTextUiBackend *backend
 
 /* ── Status indicator (unified panel backend) ───────────────────────── */
 
-bool typio_wl_candidate_panel_show_status(TypioWlTextUiBackend *backend,
-                                                      const char *text) {
-    if (!backend || !backend->frontend) return false;
+bool typio_panel_show_status(TypioPanel *panel, const char *text) {
+    if (!panel) return false;
 
     TypioPanelContent content;
     typio_panel_content_init(&content);
@@ -1110,5 +1103,15 @@ bool typio_wl_candidate_panel_show_status(TypioWlTextUiBackend *backend,
         content.status.active  = true;
         content.status.message = text;
     }
-    return typio_wl_candidate_panel_update_content(backend, &content);
+    return typio_panel_update_content(panel, &content);
+}
+
+void typio_panel_hide_status(TypioPanel *panel) {
+    if (!panel) return;
+
+    TypioPanelContent content;
+    typio_panel_content_init(&content);
+    content.status.active  = false;
+    content.status.message = "";  /* empty string signals explicit clear */
+    typio_panel_update_content(panel, &content);
 }

@@ -17,7 +17,6 @@
 #include "content.h"
 #include "resume.h"
 #include "startup.h"
-#include "backend.h"
 #include "bridge.h"
 #include "typio/abi/input_context.h"
 #include "typio/abi/types.h"
@@ -56,13 +55,8 @@ extern "C" {
 /* Forward declarations */
 typedef struct TypioWlSession TypioWlSession;
 typedef struct TypioWlKeyboard TypioWlKeyboard;
-typedef struct TypioWlCandidatePanel TypioWlCandidatePanel;
+typedef struct TypioPanel TypioPanel;
 typedef struct TypioWlOutput TypioWlOutput;
-
-struct TypioWlTextUiBackend {
-    TypioWlFrontend *frontend;
-    TypioWlCandidatePanel *candidate_panel;
-};
 
 typedef enum TypioWlLoopStage {
     TYPIO_WL_LOOP_STAGE_IDLE = 0,
@@ -256,7 +250,7 @@ struct TypioWlFrontend {
     /* Session and keyboard state */
     TypioWlSession *session;
     TypioWlKeyboard *keyboard;
-    TypioWlTextUiBackend *text_ui_backend;
+    TypioPanel *panel;
     TypioWlIdentityProvider *identity_provider;
     TypioWlIdentity current_identity;
 
@@ -372,21 +366,7 @@ void typio_wl_keyboard_process_key_release(TypioWlKeyboard *keyboard,
                                            uint32_t modifiers, uint32_t unicode,
                                            uint32_t time);
 
-/* Candidate panel implementation (candidate_panel.c) */
-typedef struct TypioWlCandidatePanel TypioWlCandidatePanel;
-TypioWlCandidatePanel *typio_wl_candidate_panel_create(TypioWlFrontend *frontend);
-void typio_wl_candidate_panel_destroy(TypioWlCandidatePanel *candidate_panel);
-bool typio_wl_candidate_panel_update(TypioWlTextUiBackend *backend, TypioInputContext *ctx);
-void typio_wl_candidate_panel_hide(TypioWlTextUiBackend *backend);
-bool typio_wl_candidate_panel_is_available(TypioWlTextUiBackend *backend);
-bool typio_wl_candidate_panel_present_retry_pending(TypioWlTextUiBackend *backend);
-void typio_wl_candidate_panel_invalidate_config(TypioWlTextUiBackend *backend);
-void typio_wl_candidate_panel_handle_output_change(TypioWlTextUiBackend *backend,
-                                                   struct wl_output *output);
-bool typio_wl_candidate_panel_show_status(TypioWlTextUiBackend *backend,
-                                          const char *text);
-bool typio_wl_candidate_panel_update_content(TypioWlTextUiBackend *backend,
-                                             const TypioPanelContent *content);
+/* Panel (candidate UI) public API lives in ui/panel/panel.h. */
 
 /* Commit helpers */
 void typio_wl_commit_string(TypioWlFrontend *frontend, const char *text);

@@ -13,12 +13,12 @@
 
 #include "boundary.h"
 #include "candidate_guard.h"
+#include "panel.h"
 #include "debug.h"
 #include "tracker_access.h"
 #include "typio/abi/shortcut.h"
 #include "chords.h"
 #include "startup.h"
-#include "backend.h"
 #include "bridge.h"
 #include "trace.h"
 #include "xkb_modifiers.h"
@@ -407,7 +407,7 @@ void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
             snprintf(hint, sizeof(hint), "[Voice unavailable: %s]",
                      reason ? reason : "unknown");
             key_set_state(frontend, key, TYPIO_KEY_TRACK_VOICE_PTT_UNAVAIL);
-            typio_wl_text_ui_backend_show_status(frontend->text_ui_backend, hint);
+            typio_panel_show_status(frontend->panel, hint);
             decision = key_route_decision(TYPIO_WL_KEY_ACTION_CONSUME,
                                           TYPIO_WL_KEY_REASON_VOICE_PTT_UNAVAILABLE);
             key_route_trace_decision(keyboard, "press-ptt-unavail", key, keysym,
@@ -581,7 +581,7 @@ void typio_wl_key_route_process_release(TypioWlKeyboard *keyboard,
         key_route_trace_decision(keyboard, "release-ptt-unavail", key, keysym,
                                  modifiers, unicode, kstate, decision,
                                  "release");
-        typio_wl_text_ui_backend_hide_status(frontend->text_ui_backend);
+        typio_panel_hide_status(frontend->panel);
         key_clear_tracking(frontend, key);
         typio_log_debug("Voice PTT unavail released: keycode=%u", key);
         return;

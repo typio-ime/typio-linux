@@ -9,6 +9,7 @@
 #include "monotonic.h"
 #include "backoff.h"
 #include "internal.h"
+#include "panel.h"
 #include "aux_adapters.h"
 #include "ipc/ipc_bus.h"
 #include "typio/typio.h"
@@ -196,20 +197,20 @@ static void voice_event_cb(const TypioVoiceSessionEvent *event, void *user_data)
     case TYPIO_VOICE_EVENT_STATE_CHANGE:
         switch (event->state) {
         case TYPIO_VOICE_STATE_LOADING:
-            typio_wl_text_ui_backend_show_status(frontend->text_ui_backend,
+            typio_panel_show_status(frontend->panel,
                                                   "[Loading voice model...]");
             break;
         case TYPIO_VOICE_STATE_RECORDING:
-            typio_wl_text_ui_backend_show_status(frontend->text_ui_backend,
+            typio_panel_show_status(frontend->panel,
                                                   "[Recording...]");
             break;
         case TYPIO_VOICE_STATE_PROCESSING:
-            typio_wl_text_ui_backend_show_status(frontend->text_ui_backend,
+            typio_panel_show_status(frontend->panel,
                                                   "[Processing...]");
             break;
         case TYPIO_VOICE_STATE_IDLE:
         default:
-            typio_wl_text_ui_backend_hide_status(frontend->text_ui_backend);
+            typio_panel_hide_status(frontend->panel);
             break;
         }
         break;
@@ -229,7 +230,7 @@ static void voice_event_cb(const TypioVoiceSessionEvent *event, void *user_data)
         }
         break;
     case TYPIO_VOICE_EVENT_ERROR:
-        typio_wl_text_ui_backend_show_status(frontend->text_ui_backend,
+        typio_panel_show_status(frontend->panel,
                                               event->error);
         break;
     }
@@ -319,9 +320,9 @@ static bool frontend_wayland_bind(TypioWlFrontend *frontend) {
         typio_log_warning("No virtual keyboard manager; unhandled keys will be lost");
     }
 
-    frontend->text_ui_backend = typio_wl_text_ui_backend_create(frontend);
-    if (frontend->text_ui_backend) {
-        if (typio_wl_text_ui_backend_is_available(frontend->text_ui_backend)) {
+    frontend->panel = typio_panel_create(frontend);
+    if (frontend->panel) {
+        if (typio_panel_is_available(frontend->panel)) {
             typio_log_info("Candidate popup surface ready");
         } else if (!frontend->compositor || !frontend->shm) {
             typio_log_warning("Popup disabled: compositor=%p, shm=%p",
@@ -347,9 +348,9 @@ static void frontend_wayland_unbind(TypioWlFrontend *frontend) {
         typio_wl_keyboard_destroy(frontend->keyboard);
         frontend->keyboard = nullptr;
     }
-    if (frontend->text_ui_backend) {
-        typio_wl_text_ui_backend_destroy(frontend->text_ui_backend);
-        frontend->text_ui_backend = nullptr;
+    if (frontend->panel) {
+        typio_panel_destroy(frontend->panel);
+        frontend->panel = nullptr;
     }
     if (frontend->virtual_keyboard) {
         typio_wl_vk_set_state(frontend, TYPIO_WL_VK_STATE_ABSENT,
@@ -617,9 +618,9 @@ void typio_wl_frontend_destroy(TypioWlFrontend *frontend) {
         frontend->keyboard = nullptr;
     }
 
-    if (frontend->text_ui_backend) {
-        typio_wl_text_ui_backend_destroy(frontend->text_ui_backend);
-        frontend->text_ui_backend = nullptr;
+    if (frontend->panel) {
+        typio_panel_destroy(frontend->panel);
+        frontend->panel = nullptr;
     }
 
     if (frontend->config_dir_watch >= 0 && frontend->config_watch_fd >= 0) {
@@ -760,7 +761,7 @@ static void registry_handle_global_remove(void *data,
         if (output->name == name) {
             *link = output->next;
             if (output->output) {
-                typio_wl_text_ui_backend_handle_output_change(frontend->text_ui_backend,
+                typio_panel_handle_output_change(frontend->panel,
                                                               output->output);
                 wl_output_destroy(output->output);
             }
@@ -823,7 +824,7 @@ static void output_handle_scale(void *data, [[maybe_unused]] struct wl_output *w
     }
 
     output->scale = factor > 0 ? factor : 1;
-    typio_wl_text_ui_backend_handle_output_change(output->frontend->text_ui_backend,
+    typio_panel_handle_output_change(output->frontend->panel,
                                                   output->output);
 }
 

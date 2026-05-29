@@ -1,4 +1,5 @@
 #include "internal.h"
+#include "panel.h"
 #ifdef HAVE_FLUX
 #include "text_shaper.h"
 #endif
@@ -63,7 +64,7 @@ static void runtime_config_refresh(TypioWlFrontend *frontend) {
     typio_text_shaper_purge_font_caches();
 #endif
 
-    typio_wl_text_ui_backend_invalidate_config(frontend->text_ui_backend);
+    typio_panel_invalidate_config(frontend->panel);
 
     TypioConfig *config = typio_instance_get_config(frontend->instance);
     typio_shortcut_config_load(&frontend->shortcuts, config);

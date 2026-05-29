@@ -1,62 +1,62 @@
 /**
  * @file stub.c
- * @brief No-op stub for candidate panel when flux is unavailable.
+ * @brief No-op Panel implementation when flux (the GPU canvas) is unavailable.
  */
 
-#include "internal.h"
-#include "backend.h"
+#include "panel.h"
 
-#include <stdlib.h>
+#include <stddef.h>
 
-TypioWlCandidatePanel *typio_wl_candidate_panel_create(TypioWlFrontend *frontend) {
+TypioPanel *typio_panel_create(TypioWlFrontend *frontend) {
     (void)frontend;
     return NULL;
 }
 
-void typio_wl_candidate_panel_destroy(TypioWlCandidatePanel *panel) {
+void typio_panel_destroy(TypioPanel *panel) {
     (void)panel;
 }
 
-bool typio_wl_candidate_panel_update_content(TypioWlTextUiBackend *backend,
-                                             const TypioPanelContent *content) {
-    (void)backend;
+bool typio_panel_is_available(TypioPanel *panel) {
+    (void)panel;
+    return false;
+}
+
+bool typio_panel_present_retry_pending(TypioPanel *panel) {
+    (void)panel;
+    return false;
+}
+
+bool typio_panel_update_content(TypioPanel *panel, const TypioPanelContent *content) {
+    (void)panel;
     (void)content;
     return false;
 }
 
-bool typio_wl_candidate_panel_update(TypioWlTextUiBackend *backend, TypioInputContext *ctx) {
-    (void)backend;
+bool typio_panel_update(TypioPanel *panel, TypioInputContext *ctx) {
+    (void)panel;
     (void)ctx;
     return false;
 }
 
-void typio_wl_candidate_panel_hide(TypioWlTextUiBackend *backend) {
-    (void)backend;
+void typio_panel_hide(TypioPanel *panel) {
+    (void)panel;
 }
 
-bool typio_wl_candidate_panel_is_available(TypioWlTextUiBackend *backend) {
-    (void)backend;
-    return false;
+void typio_panel_invalidate_config(TypioPanel *panel) {
+    (void)panel;
 }
 
-bool typio_wl_candidate_panel_present_retry_pending(TypioWlTextUiBackend *backend) {
-    (void)backend;
-    return false;
-}
-
-void typio_wl_candidate_panel_invalidate_config(TypioWlTextUiBackend *backend) {
-    (void)backend;
-}
-
-void typio_wl_candidate_panel_handle_output_change(TypioWlTextUiBackend *backend,
-                                                   struct wl_output *output) {
-    (void)backend;
+void typio_panel_handle_output_change(TypioPanel *panel, struct wl_output *output) {
+    (void)panel;
     (void)output;
 }
 
-bool typio_wl_candidate_panel_show_status(TypioWlTextUiBackend *backend,
-                                          const char *text) {
-    (void)backend;
+bool typio_panel_show_status(TypioPanel *panel, const char *text) {
+    (void)panel;
     (void)text;
     return false;
+}
+
+void typio_panel_hide_status(TypioPanel *panel) {
+    (void)panel;
 }

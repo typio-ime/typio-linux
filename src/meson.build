@@ -60,7 +60,6 @@ if enable_wayland
         'input/xkb.c',
         'frontend/aux_handler.c',
         'frontend/aux_adapters.c',
-        'ui/backend.c',
         'ui/state.c',
         'engine/reconcile.c',
         'engine/reconciler.c',
