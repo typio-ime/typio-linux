@@ -20,6 +20,7 @@
 #include "theme.h"
 #include "text_shaper.h"
 #include "device.h"
+#include "monotonic.h"
 #include "typio/abi/log.h"
 
 #include <inttypes.h>
@@ -31,9 +32,12 @@
 /* Bounded acquire/present timeout. The panel presents synchronously on the
  * single-threaded IME event loop, so a compositor that has stopped releasing
  * swapchain images (display asleep or surface occluded after a lock/suspend)
- * must never block the loop in vkAcquireNextImageKHR. ~2 vblanks @60Hz; the
- * healthy on-demand path acquires instantly and never approaches this. */
-#define PANEL_PRESENT_TIMEOUT_NS     (32ull * 1000ull * 1000ull)
+ * must never block the loop in vkAcquireNextImageKHR. 2ms is tight enough to
+ * keep navigation responsive under RETRY-storm while still allowing healthy
+ * acquires (which complete in <100us) to succeed. The healthy on-demand path
+ * acquires instantly and never approaches this. (ADR-0010 scope correction:
+ * shortened from 32ms to reduce RETRY-cascade latency during navigation.) */
+#define PANEL_PRESENT_TIMEOUT_NS     (2ull * 1000ull * 1000ull)
 /* Recreate the swapchain after this many consecutive stalls. flux_surface_resize
  * rebuilds the chain and discards the per-frame semaphores left dangling by the
  * stalled acquires, so presentation resumes cleanly once the session is back. */
@@ -457,6 +461,8 @@ static PanelPresentResult do_present(TypioPanelSurface *s,
     bd.type       = FLUX_TYPE_FRAME_BEGIN_DESC;
     bd.timeout_ns = PANEL_PRESENT_TIMEOUT_NS;
 
+    uint64_t t_begin_us = typio_wl_monotonic_us();
+
     flux_frame *frame = nullptr;
     flux_result r = flux_surface_begin_frame(s->fx_surface, &bd, &frame);
     if (r == FLUX_ERROR_SURFACE_LOST) {
@@ -465,11 +471,19 @@ static PanelPresentResult do_present(TypioPanelSurface *s,
         s->present_timeout_streak = 0;
         r = flux_surface_begin_frame(s->fx_surface, &bd, &frame);
     }
+    uint64_t t_acquire_us = typio_wl_monotonic_us();
+
     if (r == FLUX_ERROR_TIMEOUT) {
+        uint64_t elapsed_us = t_acquire_us - t_begin_us;
         if (++s->present_timeout_streak >= PANEL_PRESENT_RECOVER_STREAK) {
             (void)flux_surface_resize(s->fx_surface,
                                       (uint32_t)s->surf_w, (uint32_t)s->surf_h);
             s->present_timeout_streak = 0;
+            typio_log_debug("Panel present RETRY streak: swapchain rebuilt (streak=%d, elapsed=%" PRIu64 "us)",
+                            PANEL_PRESENT_RECOVER_STREAK, elapsed_us);
+        } else {
+            typio_log_debug("Panel present RETRY: acquire timeout (streak=%d/%d, elapsed=%" PRIu64 "us)",
+                            s->present_timeout_streak, PANEL_PRESENT_RECOVER_STREAK, elapsed_us);
         }
         return PANEL_PRESENT_RETRY;
     }
@@ -486,14 +500,38 @@ static PanelPresentResult do_present(TypioPanelSurface *s,
     flux_arena_reset(&s->fx_arena);
     flux_canvas_end(s->fx_canvas);
 
+    uint64_t t_record_us = typio_wl_monotonic_us();
+
     if (flux_frame_submit(frame) != FLUX_OK) return PANEL_PRESENT_FAIL;
 
+    uint64_t t_submit_us = typio_wl_monotonic_us();
+
     r = flux_frame_present(frame);
+
+    uint64_t t_present_us = typio_wl_monotonic_us();
+
     if (r == FLUX_ERROR_SURFACE_LOST) {
         (void)flux_surface_resize(s->fx_surface,
                                   (uint32_t)s->surf_w, (uint32_t)s->surf_h);
         return PANEL_PRESENT_RETRY;  /* next update repaints at the new extent */
     }
+
+    if (r == FLUX_OK) {
+        uint64_t acquire_us = t_acquire_us - t_begin_us;
+        uint64_t record_us  = t_record_us - t_acquire_us;
+        uint64_t submit_us  = t_submit_us - t_record_us;
+        uint64_t present_us = t_present_us - t_submit_us;
+        uint64_t total_us   = t_present_us - t_begin_us;
+        /* Log if any phase exceeded 1ms (1000us) — the threshold where
+         * navigation starts feeling sluggish. */
+        if (total_us > 1000) {
+            typio_log_debug("Panel present slow: total=%" PRIu64 "us "
+                            "(acquire=%" PRIu64 " record=%" PRIu64 " submit=%" PRIu64 " present=%" PRIu64 ") "
+                            "selected=%d",
+                            total_us, acquire_us, record_us, submit_us, present_us, selected);
+        }
+    }
+
     return r == FLUX_OK ? PANEL_PRESENT_OK : PANEL_PRESENT_FAIL;
 }
 

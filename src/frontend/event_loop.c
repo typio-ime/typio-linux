@@ -11,6 +11,7 @@
 
 #include "frontend_aux.h"
 #include "monotonic.h"
+#include "panel.h"
 #include "reconciler.h"
 #include "state.h"
 #include "typio/abi/input_context.h"
@@ -36,6 +37,18 @@ static void event_loop_flush_pending_panel(TypioWlFrontend *frontend) {
             frontend->session->ctx != nullptr,
             frontend->session->ctx &&
                 typio_input_context_is_focused(frontend->session->ctx))) {
+        return;
+    }
+
+    /* If the previous present returned RETRY (compositor not releasing
+     * swapchain images), skip this flush entirely. The panel_update_pending
+     * flag stays armed, so the next flush (once the compositor catches up)
+     * will use the latest candidate state. This prevents the event loop
+     * from blocking on repeated 2ms timeouts during navigation, and lets
+     * it continue processing key events. When the compositor finally
+     * releases an image, the visible highlight jumps directly to the
+     * current selected position — the correct behaviour for input UI. */
+    if (frontend->panel && typio_panel_present_retry_pending(frontend->panel)) {
         return;
     }
 

@@ -31,6 +31,16 @@ static inline uint64_t typio_wl_monotonic_ms(void) {
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000L);
 }
 
+static inline uint64_t typio_wl_monotonic_us(void) {
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+
+    return (uint64_t)ts.tv_sec * 1000000ULL + (uint64_t)(ts.tv_nsec / 1000L);
+}
+
 static inline uint64_t typio_wl_boottime_ms(void) {
     struct timespec ts;
 

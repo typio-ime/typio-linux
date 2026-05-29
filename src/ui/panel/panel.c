@@ -169,7 +169,7 @@ static bool panel_render(TypioPanel *panel,
     float               scale;
     int                 new_selected;
     PanelDelta          delta;
-    uint64_t            t0, t1;
+    uint64_t            t0, t_classify, t_geometry, t_present, t1;
     const char         *delta_name = "unknown";
     static const TypioCandidateList empty_cands = {};
 
@@ -229,6 +229,8 @@ static bool panel_render(TypioPanel *panel,
         break;
     }
 
+    t_classify = typio_wl_monotonic_ms();
+
     if (delta == PANEL_DELTA_CONTENT || delta == PANEL_DELTA_STYLE) {
         PanelGeometry *new_geom = panel_geometry_compute(&panel->render,
                                                           cands,
@@ -243,9 +245,13 @@ static bool panel_render(TypioPanel *panel,
         panel->geom = new_geom;
     }
 
+    t_geometry = typio_wl_monotonic_ms();
+
     if (!panel->geom) return false;
 
     PanelPresentResult pres = panel_surface_present(panel->surface, panel->geom, new_selected);
+    t_present = typio_wl_monotonic_ms();
+
     bool ok = (pres == PANEL_PRESENT_OK);
     if (pres == PANEL_PRESENT_OK) {
         panel->selected = new_selected;
@@ -260,10 +266,17 @@ static bool panel_render(TypioPanel *panel,
     }
 
     t1 = typio_wl_monotonic_ms();
-    if (ok && (t1 - t0) >= PANEL_SLOW_RENDER_MS) {
-        typio_log_debug("Panel slow render: %" PRIu64 "ms delta=%s candidates=%zu "
-                        "selected=%d w=%d h=%d scale=%.3f sig=%" PRIu64,
-                        t1 - t0, delta_name, cands->count, new_selected,
+    uint64_t total_ms = t1 - t0;
+    if (ok && total_ms >= PANEL_SLOW_RENDER_MS) {
+        typio_log_debug("Panel slow render: %" PRIu64 "ms "
+                        "(classify=%" PRIu64 " geometry=%" PRIu64 " present=%" PRIu64 ") "
+                        "delta=%s candidates=%zu selected=%d "
+                        "w=%d h=%d scale=%.3f sig=%" PRIu64,
+                        total_ms,
+                        t_classify - t0,
+                        t_geometry - t_classify,
+                        t_present - t_geometry,
+                        delta_name, cands->count, new_selected,
                         panel->geom ? panel->geom->panel_w : 0,
                         panel->geom ? panel->geom->panel_h : 0,
                         (double)scale, cands->content_signature);
