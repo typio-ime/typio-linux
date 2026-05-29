@@ -1,0 +1,104 @@
+# Build directories
+build/
+build-meson/
+build-headless/
+out/
+cmake-build-*/
+core/target/
+cli/target/
+
+# Meson subproject artifacts
+subprojects/.wraplock
+subprojects/flux
+
+# AI assistant tooling (local, not project artifacts)
+.claude/
+.codex
+.codex/
+.kimi/
+.opencode/
+.cursor/
+.gemini/
+.antigravitycli/
+.aider*
+
+# IDE specific files
+.idea/
+.vscode/
+.nvimlog
+*.swp
+*.swo
+
+# Prerequisites
+*.d
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Linker output
+*.ilk
+*.map
+*.exp
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Kernel Module Compile Results
+*.mod*
+*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+Mkfile.old
+dkms.conf
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

@@ -1,0 +1,431 @@
+#include "app.h"
+
+#include "ipc/ipc_bus.h"
+#include "typio/typio.h"
+
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static int tests_run = 0;
+static int tests_passed = 0;
+
+#define TEST(name) \
+    static void test_##name(void); \
+    static void run_test_##name(void) { \
+        printf("  Running %s... ", #name); \
+        tests_run++; \
+        test_##name(); \
+        tests_passed++; \
+        printf("OK\n"); \
+    } \
+    static void test_##name(void)
+
+#define ASSERT(expr) \
+    do { \
+        if (!(expr)) { \
+            printf("FAILED\n"); \
+            printf("    Assertion failed: %s\n", #expr); \
+            printf("    At %s:%d\n", __FILE__, __LINE__); \
+            exit(1); \
+        } \
+    } while (0)
+
+#define ASSERT_STR_EQ(a, b) ASSERT(strcmp((a), (b)) == 0)
+
+typedef struct FakeTray {
+    char icon[128];
+    char keyboard_engine[128];
+    char tooltip_title[128];
+    char tooltip_description[256];
+    bool active;
+} FakeTray;
+
+static void ensure_dir(const char *path) {
+    ASSERT(path != NULL);
+    ASSERT(mkdir(path, 0755) == 0 || access(path, F_OK) == 0);
+}
+
+static void write_text_file(const char *path, const char *content) {
+    FILE *fp;
+
+    ASSERT(path != NULL);
+    fp = fopen(path, "w");
+    ASSERT(fp != NULL);
+    if (content && *content) {
+        ASSERT(fputs(content, fp) >= 0);
+    }
+    ASSERT(fclose(fp) == 0);
+}
+
+static TypioInstance *create_temp_instance(char *root_template,
+                                           TypioInstanceConfig *config_out) {
+    static char config_dir[1024];
+    static char data_dir[1024];
+    static char state_dir[1024];
+    static char engine_dir[1024];
+
+    ASSERT(mkdtemp(root_template) != NULL);
+    ASSERT(snprintf(config_dir, sizeof(config_dir), "%s/config", root_template) < (int)sizeof(config_dir));
+    ASSERT(snprintf(data_dir, sizeof(data_dir), "%s/data", root_template) < (int)sizeof(data_dir));
+    ASSERT(snprintf(state_dir, sizeof(state_dir), "%s/state", root_template) < (int)sizeof(state_dir));
+    ASSERT(snprintf(engine_dir, sizeof(engine_dir), "%s/engines", root_template) < (int)sizeof(engine_dir));
+
+    ensure_dir(config_dir);
+    ensure_dir(data_dir);
+    ensure_dir(state_dir);
+    ensure_dir(engine_dir);
+
+    memset(config_out, 0, sizeof(*config_out));
+    config_out->config_dir = config_dir;
+    config_out->data_dir = data_dir;
+    config_out->state_dir = state_dir;
+    (void)engine_dir; /* plugin discovery is host-driven; tests register mocks directly */
+    return typio_instance_new_with_config(config_out);
+}
+
+static TypioResult mock_init(TypioEngine *engine, [[maybe_unused]] TypioInstance *instance) {
+    engine->active = true;
+    return TYPIO_OK;
+}
+
+static TypioKeyProcessResult mock_process_key([[maybe_unused]] TypioKeyboardEngine *engine,
+                                              [[maybe_unused]] TypioInputContext *ctx,
+                                              [[maybe_unused]] const TypioKeyEvent *event) {
+    return TYPIO_KEY_NOT_HANDLED;
+}
+
+static const TypioEngineInfo mock_rime_info = {
+    .name = "rime",
+    .display_name = "Rime",
+    .description = "Mock rime engine",
+    .version = "1.0",
+    .author = "test",
+    .icon = "typio-rime",
+    .language = "zh_CN",
+    .type = TYPIO_ENGINE_TYPE_KEYBOARD,
+    .required_capabilities = (const char *const[]){ "preedit", NULL },
+    .optional_capabilities = NULL,
+};
+
+static const TypioEngineBaseOps mock_rime_base_ops = {
+    .init = mock_init,
+    .destroy = NULL,
+    .focus_in = NULL,
+    .focus_out = NULL,
+    .reset = NULL,
+    .reload_config = NULL,
+};
+
+static const TypioKeyboardEngineOps mock_rime_keyboard_ops = {
+    .process_key = mock_process_key,
+};
+
+static const TypioEngineInfo *mock_rime_get_info(void) {
+    return &mock_rime_info;
+}
+
+static TypioKeyboardEngine *mock_rime_create(void) {
+    return typio_keyboard_engine_new(&mock_rime_info, &mock_rime_base_ops,
+                                     &mock_rime_keyboard_ops);
+}
+
+static const TypioEngineInfo mock_basic_info = {
+    .name = "basic",
+    .display_name = "Basic",
+    .description = "Mock basic engine",
+    .version = "1.0",
+    .author = "test",
+    .icon = "typio-keyboard",
+    .language = "en",
+    .type = TYPIO_ENGINE_TYPE_KEYBOARD,
+    .required_capabilities = NULL,
+    .optional_capabilities = NULL,
+};
+
+static const TypioEngineInfo *mock_basic_get_info(void) {
+    return &mock_basic_info;
+}
+
+static TypioKeyboardEngine *mock_basic_create(void) {
+    return typio_keyboard_engine_new(&mock_basic_info, &mock_rime_base_ops,
+                                     &mock_rime_keyboard_ops);
+}
+
+static const TypioEngineInfo mock_voice_info = {
+    .name = "mock-voice",
+    .display_name = "Mock Voice Engine",
+    .description = "Mock voice engine",
+    .version = "1.0",
+    .author = "test",
+    .icon = NULL,
+    .language = "und",
+    .type = TYPIO_ENGINE_TYPE_VOICE,
+    .required_capabilities = (const char *const[]){ "voice_input", NULL },
+    .optional_capabilities = NULL,
+};
+
+static const TypioEngineBaseOps mock_voice_base_ops = {
+    .init = mock_init,
+    .destroy = NULL,
+    .focus_in = NULL,
+    .focus_out = NULL,
+    .reset = NULL,
+    .reload_config = NULL,
+};
+
+static const TypioEngineInfo *mock_voice_get_info(void) {
+    return &mock_voice_info;
+}
+
+static char *mock_voice_process_audio([[maybe_unused]] TypioVoiceEngine *engine,
+                                       [[maybe_unused]] const float *samples,
+                                       [[maybe_unused]] size_t n_samples) {
+    return NULL;
+}
+
+static const TypioVoiceEngineOps mock_voice_ops = {
+    .process_audio = mock_voice_process_audio,
+};
+
+static TypioVoiceEngine *mock_voice_create(void) {
+    return typio_voice_engine_new(&mock_voice_info, &mock_voice_base_ops,
+                                  &mock_voice_ops);
+}
+
+TEST(engine_change_preserves_dynamic_status_icon_for_tray) {
+    char root[] = "/tmp/typio-daemon-app-test-XXXXXX";
+    TypioInstanceConfig config = {};
+    TypioInstance *instance = create_temp_instance(root, &config);
+    TypioEngineManager *manager;
+    TypiodApp app = {};
+    FakeTray tray = {};
+
+    ASSERT(instance != NULL);
+    ASSERT(typio_instance_init(instance) == TYPIO_OK);
+
+    manager = typio_instance_get_engine_manager(instance);
+    ASSERT(manager != NULL);
+    ASSERT(typio_engine_manager_register_keyboard(manager,
+                                                  mock_rime_create,
+                                                  mock_rime_get_info) == TYPIO_OK);
+    ASSERT(typio_engine_manager_set_active_keyboard(manager, "rime") == TYPIO_OK);
+
+    app.instance = instance;
+    app.tray = (TypioTray *)&tray;
+
+    typio_instance_notify_status_icon(instance, "typio-rime-latin");
+    typiod_test_on_engine_change(instance, &mock_rime_info, &app);
+
+    ASSERT_STR_EQ(tray.icon, "typio-rime-latin");
+    ASSERT_STR_EQ(tray.keyboard_engine, "rime");
+    ASSERT(tray.active);
+    ASSERT_STR_EQ(tray.tooltip_title, "Typio");
+
+    typio_instance_free(instance);
+}
+
+TEST(engine_change_uses_static_icon_after_dynamic_engine) {
+    char root[] = "/tmp/typio-daemon-app-test-XXXXXX";
+    TypioInstanceConfig config = {};
+    TypioInstance *instance = create_temp_instance(root, &config);
+    TypioEngineManager *manager;
+    TypiodApp app = {};
+    FakeTray tray = {};
+
+    ASSERT(instance != NULL);
+    ASSERT(typio_instance_init(instance) == TYPIO_OK);
+
+    manager = typio_instance_get_engine_manager(instance);
+    ASSERT(manager != NULL);
+    ASSERT(typio_engine_manager_register_keyboard(manager,
+                                                  mock_rime_create,
+                                                  mock_rime_get_info) == TYPIO_OK);
+    ASSERT(typio_engine_manager_register_keyboard(manager,
+                                                  mock_basic_create,
+                                                  mock_basic_get_info) == TYPIO_OK);
+    ASSERT(typio_engine_manager_set_active_keyboard(manager, "rime") == TYPIO_OK);
+
+    app.instance = instance;
+    app.tray = (TypioTray *)&tray;
+
+    typio_instance_notify_status_icon(instance, "typio-rime-latin");
+    ASSERT(typio_engine_manager_set_active_keyboard(manager, "basic") == TYPIO_OK);
+    typio_instance_clear_status_icon(instance);
+    typiod_test_on_engine_change(instance, NULL, &app);
+
+    ASSERT_STR_EQ(tray.icon, "typio-keyboard");
+    ASSERT_STR_EQ(tray.keyboard_engine, "basic");
+    ASSERT(tray.active);
+
+    typio_instance_free(instance);
+}
+
+TEST(voice_engine_change_updates_tray_tooltip) {
+    char root[] = "/tmp/typio-daemon-app-test-XXXXXX";
+    TypioInstanceConfig config = {};
+    TypioInstance *instance = create_temp_instance(root, &config);
+    TypioEngineManager *manager;
+    TypiodApp app = {};
+    FakeTray tray = {};
+
+    ASSERT(instance != NULL);
+    ASSERT(typio_instance_init(instance) == TYPIO_OK);
+
+    manager = typio_instance_get_engine_manager(instance);
+    ASSERT(manager != NULL);
+    ASSERT(typio_engine_manager_register_voice(manager,
+                                               mock_voice_create,
+                                               mock_voice_get_info) == TYPIO_OK);
+
+    app.instance = instance;
+    app.tray = (TypioTray *)&tray;
+
+    typiod_test_update_tray_engine_status(&app);
+    ASSERT(strstr(tray.tooltip_description, "Voice: Disabled") != NULL);
+
+    ASSERT(typio_engine_manager_set_active_voice(manager, "mock-voice") == TYPIO_OK);
+    typiod_test_on_voice_engine_change(instance, &mock_voice_info, &app);
+    ASSERT(strstr(tray.tooltip_description, "Voice: Mock Voice Engine") != NULL);
+
+    typio_instance_free(instance);
+}
+
+TEST(app_init_removes_legacy_top_level_recent_logs) {
+    char root[] = "/tmp/typio-daemon-app-test-XXXXXX";
+    char config_dir[1024];
+    char data_dir[1024];
+    char state_dir[1024];
+    char engine_dir[1024];
+    char logs_dir[1024];
+    char latest_log[1024];
+    char legacy_latest[1024];
+    char legacy_archive[1024];
+    char engine_state[1024];
+    TypioInstanceConfig config = {};
+    TypiodApp app = {};
+    char *argv[] = {(char *)"test_server_app", NULL};
+
+    ASSERT(mkdtemp(root) != NULL);
+    ASSERT(snprintf(config_dir, sizeof(config_dir), "%s/config", root) < (int)sizeof(config_dir));
+    ASSERT(snprintf(data_dir, sizeof(data_dir), "%s/data", root) < (int)sizeof(data_dir));
+    ASSERT(snprintf(state_dir, sizeof(state_dir), "%s/state", root) < (int)sizeof(state_dir));
+    ASSERT(snprintf(engine_dir, sizeof(engine_dir), "%s/engines", root) < (int)sizeof(engine_dir));
+    ASSERT(snprintf(logs_dir, sizeof(logs_dir), "%s/logs", state_dir) < (int)sizeof(logs_dir));
+    ASSERT(snprintf(latest_log, sizeof(latest_log), "%s/latest.log", logs_dir) < (int)sizeof(latest_log));
+    ASSERT(snprintf(legacy_latest, sizeof(legacy_latest), "%s/typio-recent.log", state_dir) <
+           (int)sizeof(legacy_latest));
+    ASSERT(snprintf(legacy_archive, sizeof(legacy_archive),
+                    "%s/typio-recent-20260401-174727-762678.log", state_dir) <
+           (int)sizeof(legacy_archive));
+    ASSERT(snprintf(engine_state, sizeof(engine_state), "%s/engine-state.toml", state_dir) <
+           (int)sizeof(engine_state));
+
+    ensure_dir(config_dir);
+    ensure_dir(data_dir);
+    ensure_dir(state_dir);
+    ensure_dir(engine_dir);
+    ensure_dir(logs_dir);
+
+    write_text_file(latest_log, "current\n");
+    write_text_file(legacy_latest, "legacy\n");
+    write_text_file(legacy_archive, "legacy archive\n");
+    write_text_file(engine_state, "engine = \"basic\"\n");
+
+    config.config_dir = config_dir;
+    config.data_dir = data_dir;
+    config.state_dir = state_dir;
+    (void)engine_dir;
+
+    ASSERT(typiod_app_init(&app, &config, false, argv));
+    ASSERT(access(legacy_latest, F_OK) != 0);
+    ASSERT(access(legacy_archive, F_OK) != 0);
+    ASSERT(access(latest_log, F_OK) == 0);
+    ASSERT(access(engine_state, F_OK) == 0);
+    ASSERT_STR_EQ(app.recent_log_dump_path, latest_log);
+
+    typiod_app_shutdown(&app);
+}
+
+int main(void) {
+    printf("Running server app tests:\n");
+    run_test_engine_change_preserves_dynamic_status_icon_for_tray();
+    run_test_engine_change_uses_static_icon_after_dynamic_engine();
+    run_test_voice_engine_change_updates_tray_tooltip();
+    run_test_app_init_removes_legacy_top_level_recent_logs();
+    printf("\nPassed %d/%d tests\n", tests_passed, tests_run);
+    return 0;
+}
+
+#ifdef HAVE_SYSTRAY
+TypioTray *typio_tray_new([[maybe_unused]] TypioInstance *instance,
+                          [[maybe_unused]] const TypioTrayConfig *config) {
+    return NULL;
+}
+
+void typio_tray_destroy([[maybe_unused]] TypioTray *tray) {}
+int typio_tray_get_fd([[maybe_unused]] TypioTray *tray) { return -1; }
+int typio_tray_dispatch([[maybe_unused]] TypioTray *tray) { return 0; }
+void typio_tray_set_status([[maybe_unused]] TypioTray *tray,
+                           [[maybe_unused]] TypioTrayStatus status) {}
+void typio_tray_set_tooltip(TypioTray *tray,
+                            const char *title,
+                            const char *description) {
+    FakeTray *fake = (FakeTray *)tray;
+    snprintf(fake->tooltip_title, sizeof(fake->tooltip_title), "%s", title ? title : "");
+    snprintf(fake->tooltip_description, sizeof(fake->tooltip_description), "%s",
+             description ? description : "");
+}
+bool typio_tray_is_registered([[maybe_unused]] TypioTray *tray) { return false; }
+
+void typio_tray_set_icon(TypioTray *tray, const char *icon_name) {
+    FakeTray *fake = (FakeTray *)tray;
+    snprintf(fake->icon, sizeof(fake->icon), "%s", icon_name ? icon_name : "");
+}
+
+void typio_tray_update_engine(TypioTray *tray, const char *engine_name, bool is_active) {
+    FakeTray *fake = (FakeTray *)tray;
+    snprintf(fake->keyboard_engine, sizeof(fake->keyboard_engine), "%s",
+             engine_name ? engine_name : "");
+    fake->active = is_active;
+}
+#endif
+
+TypioIpcBus *typio_ipc_bus_new([[maybe_unused]] TypioInstance *instance) { return NULL; }
+void typio_ipc_bus_destroy([[maybe_unused]] TypioIpcBus *bus) {}
+int typio_ipc_bus_get_fd([[maybe_unused]] TypioIpcBus *bus) { return -1; }
+void typio_ipc_bus_dispatch([[maybe_unused]] TypioIpcBus *bus) {}
+void typio_ipc_bus_emit_properties_changed([[maybe_unused]] TypioIpcBus *bus) {}
+void typio_ipc_bus_set_runtime_state_callback([[maybe_unused]] TypioIpcBus *bus,
+                                               [[maybe_unused]] TypioIpcBusRuntimeStateCallback callback,
+                                               [[maybe_unused]] void *user_data) {}
+void typio_ipc_bus_set_stop_callback([[maybe_unused]] TypioIpcBus *bus,
+                                      [[maybe_unused]] TypioIpcBusStopCallback callback,
+                                      [[maybe_unused]] void *user_data) {}
+void typio_ipc_bus_bind_state_controller([[maybe_unused]] TypioIpcBus *bus,
+                                          [[maybe_unused]] struct TypioStateController *ctrl) {}
+
+#ifdef HAVE_WAYLAND
+TypioWlFrontend *typio_wl_frontend_new([[maybe_unused]] TypioInstance *instance,
+                                       [[maybe_unused]] const TypioWlFrontendConfig *config) {
+    return NULL;
+}
+void typio_wl_frontend_destroy([[maybe_unused]] TypioWlFrontend *frontend) {}
+int typio_wl_frontend_run([[maybe_unused]] TypioWlFrontend *frontend) { return 0; }
+void typio_wl_frontend_stop([[maybe_unused]] TypioWlFrontend *frontend) {}
+const char *typio_wl_frontend_get_error([[maybe_unused]] TypioWlFrontend *frontend) { return NULL; }
+void typio_wl_frontend_set_tray([[maybe_unused]] TypioWlFrontend *frontend,
+                                [[maybe_unused]] void *tray) {}
+void typio_wl_frontend_set_ipc_bus([[maybe_unused]] TypioWlFrontend *frontend,
+                                    [[maybe_unused]] void *bus) {}
+void typio_wl_frontend_set_status_bus([[maybe_unused]] TypioWlFrontend *frontend,
+                                      [[maybe_unused]] void *status_bus) {}
+void typio_wl_frontend_remember_active_engine([[maybe_unused]] TypioWlFrontend *frontend,
+                                              [[maybe_unused]] const char *engine_name) {}
+void typio_wl_frontend_remember_active_mode([[maybe_unused]] TypioWlFrontend *frontend,
+                                            [[maybe_unused]] const char *engine_name,
+                                            [[maybe_unused]] const char *mode_id) {}
+#endif

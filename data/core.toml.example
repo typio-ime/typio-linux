@@ -1,0 +1,59 @@
+# Typio framework configuration example
+#
+# Location: $XDG_CONFIG_HOME/typio/core.toml
+#          (defaults to ~/.config/typio/core.toml)
+#
+# This file owns framework-level settings: engine selection, keyboard
+# policy, notifications, shortcuts, and voice runtime. Frontend styling
+# (popup theme, fonts, colours) lives in a separate file per frontend —
+# the Wayland frontend reads wayland.toml next to this file.
+
+default_keyboard_engine = "basic"
+# default_voice_engine = "whisper"
+
+[keyboard]
+# Remember and restore the keyboard engine and engine mode per application.
+# per_app_preferences = true
+
+# ── Engine-owned sections ────────────────────────────────────────────
+# Each engine plugin registers its own `engines.<name>.*` schema. The
+# entries below are illustrative; consult the plugin's documentation for
+# the authoritative list of keys and defaults.
+
+[engines.basic]
+# "forward" sends printable keys through virtual keyboard forwarding.
+# "commit" lets the basic engine commit printable text directly.
+# printable_key_mode = "forward"
+
+# Enable compose sequences for accented characters in the basic engine.
+# When enabled: ' + a → á, ` + e → è, ~ + n → ñ, " + u → ü, etc.
+# Default: false
+# compose = true
+
+[engines.rime]
+# shared_data_dir = "/usr/share/rime-data"
+# user_data_dir = "~/.local/share/typio/rime"
+# full_check = false
+
+[engines.mozc]
+# server_path = "/usr/lib/mozc/mozc_server"
+
+# Voice input configuration (unified engine format)
+# For whisper: model is ggml model name (base, small, medium, large)
+#   place model at ~/.local/share/typio/whisper/ggml-<model>.bin
+# For sherpa-onnx: model is the directory name under ~/.local/share/typio/sherpa-onnx/
+#   supports transducer (Zipformer), paraformer, whisper ONNX, nemo-ctc, SenseVoice
+
+# [engines.whisper]
+# language = "zh"
+# model = "base"
+
+# [engines.sherpa-onnx]
+# language = "auto"
+# model = "sensevoice-small"
+
+# Keyboard shortcuts
+[shortcuts]
+# switch_keyboard_engine = "Ctrl+Shift"
+# exit = "Ctrl+Shift+Escape"
+# voice_ptt = "Super+v"

@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # libtypio is installed here so pkg-config / the linker can find it.
+  PKG_CONFIG_PATH: /home/runner/.local/lib/pkgconfig
+  LD_LIBRARY_PATH: /home/runner/.local/lib
+
+jobs:
+  build-test:
+    name: Build & test against libtypio
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build pkg-config \
+            libwayland-dev wayland-protocols libxkbcommon-dev \
+            libdbus-1-dev libpipewire-0.3-dev \
+            libfreetype6-dev libharfbuzz-dev libfontconfig-dev \
+            libvulkan-dev glslang-tools
+
+      # libtypio is a separate repo under the same owner. flux is pulled
+      # by the host's subprojects/flux.wrap at configure time.
+      - name: Checkout libtypio
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/libtypio
+          path: _libtypio
+
+      - name: Build & install libtypio
+        run: |
+          meson setup _libtypio/build _libtypio \
+            --prefix="$HOME/.local" -Dbuild_tests=false
+          ninja -C _libtypio/build install
+
+      - name: Configure host
+        run: meson setup build --prefix="$HOME/.local" -Denable_systray=true
+
+      - name: Build
+        run: ninja -C build
+
+      - name: Test
+        run: meson test -C build --print-errorlogs

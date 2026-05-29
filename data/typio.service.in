@@ -1,0 +1,19 @@
+[Unit]
+Description=Typio Input Method Daemon
+Documentation=man:typio(1)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+# Simple type keeps the daemon running as a foreground process
+Type=simple
+# Path is filled at install time by the build system
+ExecStart=@TYPIO_HOST_DIR@/typio
+Restart=on-failure
+RestartSec=2s
+# Session environment variables for X11/Wayland compatibility
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+
+[Install]
+WantedBy=graphical-session.target

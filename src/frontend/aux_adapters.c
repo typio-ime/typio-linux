@@ -1,0 +1,122 @@
+/**
+ * @file aux_adapters.c
+ * @brief TypioWlAuxHandler adapters for status bus, tray, and voice.
+ */
+
+#include "typio_build_config.h"
+#include "aux_handler.h"
+#include "resume.h"
+#include "typio/abi/log.h"
+#include <stdlib.h>
+
+static int resume_signal_aux_fd(void *userdata) {
+    TypioWlResumeSignal *rs = (TypioWlResumeSignal *)userdata;
+    return rs ? typio_wl_resume_signal_get_fd(rs) : -1;
+}
+
+static void resume_signal_aux_ready(void *userdata) {
+    TypioWlResumeSignal *rs = (TypioWlResumeSignal *)userdata;
+    if (rs)
+        typio_wl_resume_signal_dispatch(rs);
+}
+
+TypioWlAuxHandler *typio_wl_aux_handler_for_resume_signal(TypioWlResumeSignal *rs) {
+    if (!rs) return nullptr;
+    return typio_wl_aux_handler_new("resume_signal",
+                                     resume_signal_aux_fd,
+                                     resume_signal_aux_ready,
+                                     nullptr,
+                                     rs);
+}
+
+#include "ipc/ipc_bus.h"
+
+static int ipc_bus_aux_fd(void *userdata) {
+    struct TypioIpcBus *bus = (struct TypioIpcBus *)userdata;
+    return bus ? typio_ipc_bus_get_fd(bus) : -1;
+}
+
+static void ipc_bus_aux_ready(void *userdata) {
+    struct TypioIpcBus *bus = (struct TypioIpcBus *)userdata;
+    if (bus) {
+        typio_ipc_bus_dispatch(bus);
+    }
+}
+
+TypioWlAuxHandler *typio_wl_aux_handler_for_ipc_bus(struct TypioIpcBus *bus) {
+    if (!bus) return nullptr;
+    return typio_wl_aux_handler_new("ipc_bus",
+                                     ipc_bus_aux_fd,
+                                     ipc_bus_aux_ready,
+                                     nullptr,
+                                     bus);
+}
+
+#ifdef HAVE_SYSTRAY
+#include "tray/tray.h"
+
+static int tray_aux_fd(void *userdata) {
+    TypioTray *tray = (TypioTray *)userdata;
+    return tray ? typio_tray_get_fd(tray) : -1;
+}
+
+static void tray_aux_ready(void *userdata) {
+    TypioTray *tray = (TypioTray *)userdata;
+    if (tray) {
+        int result = typio_tray_dispatch(tray);
+        if (result < 0) {
+            typio_log_warning("Tray dispatch failed");
+        }
+    }
+}
+
+TypioWlAuxHandler *typio_wl_aux_handler_for_tray(TypioTray *tray) {
+    if (!tray) return nullptr;
+    return typio_wl_aux_handler_new("tray",
+                                     tray_aux_fd,
+                                     tray_aux_ready,
+                                     nullptr,
+                                     tray);
+}
+#endif
+
+#ifdef HAVE_VOICE
+#include "typio/runtime/voice.h"
+#include "typio/abi/voice.h"
+
+typedef struct {
+    TypioVoiceSession *voice;
+    TypioWlFrontend *frontend;
+} VoiceAuxData;
+
+static int voice_aux_fd(void *userdata) {
+    VoiceAuxData *d = (VoiceAuxData *)userdata;
+    return d ? typio_voice_session_get_fd(d->voice) : -1;
+}
+
+static void voice_aux_ready(void *userdata) {
+    VoiceAuxData *d = (VoiceAuxData *)userdata;
+    if (!d || !d->voice) return;
+    typio_voice_session_dispatch(d->voice);
+}
+
+static void voice_aux_free(void *userdata) {
+    free(userdata);
+}
+
+TypioWlAuxHandler *typio_wl_aux_handler_for_voice(TypioVoiceSession *voice,
+                                                    TypioWlFrontend *frontend) {
+    if (!voice) return nullptr;
+    VoiceAuxData *d = calloc(1, sizeof(VoiceAuxData));
+    if (!d) return nullptr;
+    d->voice = voice;
+    d->frontend = frontend;
+    TypioWlAuxHandler *h = typio_wl_aux_handler_new("voice",
+                                                      voice_aux_fd,
+                                                      voice_aux_ready,
+                                                      voice_aux_free,
+                                                      d);
+    if (!h) free(d);
+    return h;
+}
+#endif
