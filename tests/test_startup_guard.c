@@ -49,21 +49,6 @@ TEST(guard_window_current_before_created) {
     ASSERT(!typio_wl_startup_guard_is_in_guard_window(10, 5));
 }
 
-TEST(classify_suppresses_stale_in_window) {
-    ASSERT(typio_wl_startup_guard_classify_press(10, 11, true) ==
-           TYPIO_WL_STARTUP_SUPPRESS_STALE_KEY);
-}
-
-TEST(classify_allows_after_window) {
-    ASSERT(typio_wl_startup_guard_classify_press(10, 13, true) ==
-           TYPIO_WL_STARTUP_SUPPRESS_NONE);
-}
-
-TEST(classify_allows_when_suppress_disabled) {
-    ASSERT(typio_wl_startup_guard_classify_press(10, 11, false) ==
-           TYPIO_WL_STARTUP_SUPPRESS_NONE);
-}
-
 TEST(cleans_up_shortcut_orphan_releases_with_blocking_modifiers) {
     ASSERT(typio_wl_boundary_bridge_should_forward_orphan_release_cleanup(
         TYPIO_KEY_space,
@@ -92,9 +77,6 @@ int main(void) {
     run_test_guard_window_epoch_plus_two();
     run_test_guard_window_epoch_plus_three_outside();
     run_test_guard_window_current_before_created();
-    run_test_classify_suppresses_stale_in_window();
-    run_test_classify_allows_after_window();
-    run_test_classify_allows_when_suppress_disabled();
     run_test_cleans_up_shortcut_orphan_releases_with_blocking_modifiers();
     run_test_does_not_treat_plain_releases_as_shortcut_orphan_cleanup();
     printf("\nPassed %d/%d tests\n", tests_passed, tests_run);

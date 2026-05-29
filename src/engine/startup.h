@@ -2,18 +2,19 @@
  * @file startup_guard.h
  * @brief Epoch-based startup filtering for freshly activated keyboard grabs
  *
- * When a new keyboard grab is established, the compositor may re-send press
- * events for keys that are already physically held.  These "inherited" presses
- * are not genuine new user input and must be suppressed.
+ * When a new keyboard grab is established, the compositor may re-send a
+ * *release* for a key that was physically held before the grab existed and
+ * lifted just after.  Such an orphan release has no matching press in the
+ * current grab generation; the release path forwards it to the virtual
+ * keyboard so the focused client's key state does not get stuck down.
  *
  * The guard uses the Wayland dispatch epoch (a counter incremented after each
- * wl_display_dispatch) to identify these re-sent presses deterministically:
- * any press that arrives within the first TYPIO_WL_STARTUP_GUARD_EPOCHS
- * dispatch cycles after the grab was created is treated as stale.
+ * wl_display_dispatch) to bound that orphan-release window deterministically:
+ * a release arriving within the first TYPIO_WL_STARTUP_GUARD_EPOCHS dispatch
+ * cycles after the grab was created may be a pre-grab orphan.
  *
- * This replaces the previous time-based 50ms window, which was racy when
- * JavaScript processing or compositor roundtrips introduced latency between
- * the physical keypress and the IME activation.
+ * Genuine new *presses* are never filtered here — a key whose generation does
+ * not match the active grab is dropped by the grab-generation fence instead.
  */
 
 #ifndef TYPIO_WL_STARTUP_GUARD_H
@@ -36,17 +37,8 @@ extern "C" {
  */
 #define TYPIO_WL_STARTUP_GUARD_EPOCHS 2ULL
 
-typedef enum {
-    TYPIO_WL_STARTUP_SUPPRESS_NONE = 0,
-    TYPIO_WL_STARTUP_SUPPRESS_STALE_KEY,
-} TypioWlStartupSuppressReason;
-
 bool typio_wl_startup_guard_is_in_guard_window(uint64_t created_at_epoch,
                                                 uint64_t current_epoch);
-TypioWlStartupSuppressReason typio_wl_startup_guard_classify_press(
-    uint64_t created_at_epoch,
-    uint64_t current_epoch,
-    bool suppress_stale_keys);
 
 #ifdef __cplusplus
 }

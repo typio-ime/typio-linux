@@ -134,12 +134,11 @@ struct TypioWlKeyboard {
     uint32_t repeat_time;   /* Timestamp of the original press */
     bool repeating;         /* Whether a key is currently repeating */
 
-    /* Startup guard: suppress stale keys held from previous grab.
-     * Keys that arrive as presses within the first two Wayland dispatch
-     * epochs after the grab is created are treated as compositor re-sends
-     * of already-held keys, not genuine new user input. */
-    bool suppress_stale_keys;
-    size_t startup_suppressed_count;
+    /* Grab epoch stamp: the Wayland dispatch epoch at which this grab was
+     * created. The release path uses it to forward orphan releases of keys
+     * that were physically held before this grab existed. Stale *presses*
+     * are not filtered by a dispatch window — a key whose generation does
+     * not match the active grab is caught by the generation fence instead. */
     uint64_t created_at_epoch;
 
     /* Key event arbiter for system shortcut detection */

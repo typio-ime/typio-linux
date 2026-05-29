@@ -306,7 +306,6 @@ void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
                                       uint32_t time) {
     TypioWlFrontend *frontend = keyboard->frontend;
     TypioKeyTrackState kstate = key_get_state(frontend, key);
-    TypioWlStartupSuppressReason suppress_reason;
     TypioWlReservedAction reserved_action;
     TypioWlKeyDecision decision;
 
@@ -354,32 +353,6 @@ void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
     }
 
     key_claim_current_generation(frontend, key);
-
-    suppress_reason = typio_wl_startup_guard_classify_press(
-        keyboard->created_at_epoch,
-        frontend->dispatch_epoch,
-        keyboard->suppress_stale_keys);
-
-    if (keyboard->suppress_stale_keys &&
-        keyboard->startup_suppressed_count == 0 &&
-        suppress_reason != TYPIO_WL_STARTUP_SUPPRESS_STALE_KEY) {
-        keyboard->suppress_stale_keys = false;
-        typio_log_debug("Startup key suppression cleared (startup window elapsed)");
-    }
-
-    if (suppress_reason == TYPIO_WL_STARTUP_SUPPRESS_STALE_KEY) {
-        key_set_state(frontend, key, TYPIO_KEY_TRACK_SUPPRESSED_STARTUP);
-        keyboard->startup_suppressed_count++;
-        decision = key_route_decision(TYPIO_WL_KEY_ACTION_CONSUME,
-                                      TYPIO_WL_KEY_REASON_STARTUP_SUPPRESSED);
-        key_route_trace_decision(keyboard, "press-suppress", key, keysym,
-                                 modifiers, unicode,
-                                 TYPIO_KEY_TRACK_SUPPRESSED_STARTUP, decision,
-                                 "stale");
-        typio_log_debug("Suppressing startup key press: keycode=%u keysym=0x%x reason=stale",
-                  key, keysym);
-        return;
-    }
 
     decision = key_route_shortcut_decision(&frontend->shortcuts,
                                            keysym, modifiers,
@@ -562,13 +535,6 @@ void typio_wl_key_route_process_release(TypioWlKeyboard *keyboard,
         key_route_trace_decision(keyboard, "release-forward", key, keysym,
                                  modifiers, unicode, kstate, decision, nullptr);
         key_clear_tracking(frontend, key);
-        if (keyboard->startup_suppressed_count > 0)
-            keyboard->startup_suppressed_count--;
-        if (keyboard->suppress_stale_keys &&
-            keyboard->startup_suppressed_count == 0) {
-            keyboard->suppress_stale_keys = false;
-            typio_log_debug("Startup key suppression cleared");
-        }
         typio_wl_vk_forward_key(keyboard, time, key, WL_KEYBOARD_KEY_STATE_RELEASED, unicode);
         typio_log_debug("Forwarding release for startup key: keycode=%u", key);
         return;
@@ -703,11 +669,6 @@ void typio_wl_key_route_process_release(TypioWlKeyboard *keyboard,
         key_route_trace_decision(keyboard, "release-engine", key, keysym,
                                  modifiers, unicode, kstate, decision,
                                  "idle_release");
-        if (keyboard->suppress_stale_keys &&
-            keyboard->startup_suppressed_count == 0) {
-            keyboard->suppress_stale_keys = false;
-            typio_log_debug("Startup key suppression cleared (unseen key released)");
-        }
         {
             TypioKeyEvent ev = {
                 .type      = TYPIO_EVENT_KEY_RELEASE,

@@ -242,18 +242,10 @@ static bool rebuild_keyboard_grab(TypioWlFrontend *frontend,
 
     typio_wl_vk_expect_keymap(frontend, "keyboard grab rebuilt");
 
-    /* Only suppress stale keys when rebuilding an existing grab.
-     * When no previous grab existed (fresh activation after auto-focus),
-     * the re-sent key is the first time the IME sees it — not stale. */
-    if (!had_keyboard) {
-        frontend->keyboard->suppress_stale_keys = false;
-    }
-
     typio_wl_trace(frontend,
                    "keyboard_grab",
-                   "action=rebuild result=ok created_at_epoch=%" PRIu64 " suppress_stale_keys=%s",
-                   frontend->keyboard->created_at_epoch,
-                   frontend->keyboard->suppress_stale_keys ? "yes" : "no");
+                   "action=rebuild result=ok created_at_epoch=%" PRIu64,
+                   frontend->keyboard->created_at_epoch);
     return true;
 }
 

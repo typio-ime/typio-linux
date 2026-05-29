@@ -209,7 +209,6 @@ TypioWlKeyboard *typio_wl_keyboard_create(TypioWlFrontend *frontend) {
     tracking_reset(frontend);
 
     kb->frontend = frontend;
-    kb->suppress_stale_keys = true;
     kb->created_at_epoch = frontend->dispatch_epoch;
     typio_wl_key_arbiter_init(&kb->arbiter);
 

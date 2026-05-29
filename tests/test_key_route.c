@@ -164,16 +164,6 @@ bool typio_wl_candidate_guard_should_consume(TypioInputContext *ctx,
     return false;
 }
 
-TypioWlStartupSuppressReason typio_wl_startup_guard_classify_press(
-    uint64_t created_at_epoch,
-    uint64_t current_epoch,
-    bool suppress_stale_keys) {
-    (void)created_at_epoch;
-    (void)current_epoch;
-    (void)suppress_stale_keys;
-    return TYPIO_WL_STARTUP_SUPPRESS_NONE;
-}
-
 bool typio_wl_startup_guard_is_in_guard_window(uint64_t created_at_epoch,
                                                uint64_t current_epoch) {
     (void)created_at_epoch;
