@@ -156,7 +156,7 @@ configure_file(
     output: 'typio-autostart.desktop',
     configuration: desktop_conf,
     install: true,
-    install_dir: prefix / 'etc' / 'xdg' / 'autostart',
+    install_dir: get_option('sysconfdir') / 'xdg' / 'autostart',
 )
 configure_file(
     input: 'data/typio.service.in',
