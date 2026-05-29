@@ -14,22 +14,22 @@ extern "C" {
 #endif
 
 #ifdef HAVE_FLUX
-TypioTextEngine *typio_flux_engine_create(void);
-void typio_flux_engine_destroy(TypioTextEngine *engine);
+TypioTextShaper *typio_text_shaper_create(void);
+void typio_text_shaper_destroy(TypioTextShaper *engine);
 
 /* Purge all font caches (file, object, fallback) and drain Fontconfig's
  * internal caches.  Safe to call periodically from the host event loop or
  * after a configuration reload.  Subsequent text layout operations will
  * re-populate caches on demand. */
-void typio_flux_engine_purge_font_caches(void);
+void typio_text_shaper_purge_font_caches(void);
 
 /* Shared, lazily-created flux device.
  *
  * Non-headless: created with the Wayland WSI instance extensions and the
- * swapchain device extension so the candidate popup can present a Vulkan
+ * swapchain device extension so the candidate panel can present a Vulkan
  * swapchain directly onto its zwp_input_popup_surface_v2 wl_surface.
  * Returns NULL if no Vulkan device is available. */
-flux_device *typio_flux_device_get(void);
+flux_device *typio_render_device_get(void);
 
 /*
  * Record a shaped text layout into a flux canvas as a tinted coverage blit.
@@ -42,11 +42,11 @@ flux_device *typio_flux_device_get(void);
  * x, y : top-left origin of the layout in surface pixels (baseline is added
  *        internally from the layout metrics).
  */
-bool typio_flux_fill_layout(flux_canvas *canvas, flux_arena *arena,
-                            TypioTextLayout *layout, float x, float y,
+bool typio_text_shape_fill(flux_canvas *canvas, flux_arena *arena,
+                            TypioTextShape *layout, float x, float y,
                             TypioColor tint);
 
-void typio_flux_layout_free(TypioTextLayout *layout);
+void typio_text_shape_free(TypioTextShape *layout);
 #endif /* HAVE_FLUX */
 
 #ifdef __cplusplus

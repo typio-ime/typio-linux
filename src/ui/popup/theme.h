@@ -1,6 +1,6 @@
 /**
  * @file candidate_panel_theme.h
- * @brief Theme detection and color palettes for popup UI
+ * @brief Theme detection and color palettes for panel UI
  */
 
 #ifndef TYPIO_WL_CANDIDATE_POPUP_THEME_H
@@ -13,13 +13,13 @@
 extern "C" {
 #endif
 
-typedef enum TypioCandidatePanelThemeMode {
-    TYPIO_CANDIDATE_POPUP_THEME_AUTO = 0,  /* detect from desktop settings */
-    TYPIO_CANDIDATE_POPUP_THEME_LIGHT,     /* always use built-in light    */
-    TYPIO_CANDIDATE_POPUP_THEME_DARK,      /* always use built-in dark     */
-} TypioCandidatePanelThemeMode;
+typedef enum TypioPanelThemeMode {
+    TYPIO_PANEL_THEME_AUTO = 0,  /* detect from desktop settings */
+    TYPIO_PANEL_THEME_LIGHT,     /* always use built-in light    */
+    TYPIO_PANEL_THEME_DARK,      /* always use built-in dark     */
+} TypioPanelThemeMode;
 
-typedef struct TypioCandidatePanelPalette {
+typedef struct TypioPanelPalette {
     double bg_r, bg_g, bg_b, bg_a;
     double border_r, border_g, border_b, border_a;
     double text_r, text_g, text_b;
@@ -29,27 +29,27 @@ typedef struct TypioCandidatePanelPalette {
     double selection_text_r, selection_text_g, selection_text_b;
     /* Voice / IME status indicators share the preedit colour and the
      * preedit layout slot — there is no separate "status" treatment. */
-} TypioCandidatePanelPalette;
+} TypioPanelPalette;
 
-typedef struct TypioCandidatePanelThemeCache {
-    const TypioCandidatePanelPalette *palette;
-    TypioCandidatePanelThemeMode mode;
+typedef struct TypioPanelThemeCache {
+    const TypioPanelPalette *palette;
+    TypioPanelThemeMode mode;
     uint64_t resolved_at_ms;
-} TypioCandidatePanelThemeCache;
+} TypioPanelThemeCache;
 
 /**
  * Resolve the palette for @mode, using the cache to avoid repeated
  * filesystem reads during rapid rendering cycles.
  */
-const TypioCandidatePanelPalette *typio_candidate_panel_theme_resolve(
-    TypioCandidatePanelThemeCache *cache, TypioCandidatePanelThemeMode mode);
+const TypioPanelPalette *typio_panel_theme_resolve(
+    TypioPanelThemeCache *cache, TypioPanelThemeMode mode);
 
 /**
  * Return the built-in light palette pointer.
- * Usable as an identity check: (resolved == typio_candidate_panel_palette_dark()).
+ * Usable as an identity check: (resolved == typio_panel_palette_dark()).
  */
-const TypioCandidatePanelPalette *typio_candidate_panel_palette_light(void);
-const TypioCandidatePanelPalette *typio_candidate_panel_palette_dark(void);
+const TypioPanelPalette *typio_panel_palette_light(void);
+const TypioPanelPalette *typio_panel_palette_dark(void);
 
 /**
  * Parse a "#rrggbb" or "#rrggbbaa" hex color string.
@@ -63,7 +63,7 @@ bool typio_parse_hex_color(const char *hex,
  * Compute a stable FNV-1a content hash of a palette, usable for change
  * detection without comparing raw pointers.
  */
-uint64_t typio_candidate_panel_palette_hash(const TypioCandidatePanelPalette *p);
+uint64_t typio_panel_palette_hash(const TypioPanelPalette *p);
 
 #ifdef __cplusplus
 }

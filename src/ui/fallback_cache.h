@@ -6,7 +6,7 @@
  *
  * Resolving a fallback font (FcFontSort over the whole system font set plus a
  * per-codepoint coverage scan) is expensive and runs synchronously on the IME
- * event loop, ahead of the popup present. CJK input produces an unbounded
+ * event loop, ahead of the panel present. CJK input produces an unbounded
  * stream of distinct candidate strings, so a cache keyed on the text itself
  * collapses to a ~0% hit rate and re-runs the resolve on every keystroke.
  *

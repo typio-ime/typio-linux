@@ -25,7 +25,7 @@ typedef struct {
     float    y_offset;   /* y offset from HarfBuzz positioning */
 } GlyphEntry;
 
-struct TypioTextLayout {
+struct TypioTextShape {
     GlyphEntry *glyphs;
     size_t      count;
     FT_Face     face;     /* borrowed; valid while font cache holds it */
@@ -177,7 +177,7 @@ static bool text_has_non_ascii(const char *text);
 /* ── Fallback font cache ───────────────────────────────────────────────
  *
  * Resolving a fallback font (FcFontSort + per-codepoint coverage scan) is
- * expensive and runs synchronously on the IME event loop ahead of the popup
+ * expensive and runs synchronously on the IME event loop ahead of the panel
  * present.  The coverage-keyed LRU in fallback_cache.{c,h} keeps the resolve
  * to ~once per script even under an unbounded stream of distinct CJK phrases;
  * here we just own a process-global instance and feed it the FreeType-backed
@@ -297,11 +297,11 @@ static void flux_log_cb(flux_log_level level,
     (void)level; (void)file; (void)line; (void)fmt; (void)msg; (void)user;
 }
 
-flux_device *typio_flux_device_get(void)
+flux_device *typio_render_device_get(void)
 {
     if (global_device) return global_device;
 
-    /* Wayland WSI: the candidate popup presents a swapchain directly onto
+    /* Wayland WSI: the candidate panel presents a swapchain directly onto
      * its zwp_input_popup_surface_v2 wl_surface, so the device needs the
      * surface + wayland-surface instance extensions and the swapchain
      * device extension. The graphics queue is assumed present-capable
@@ -527,7 +527,7 @@ static char *find_fallback_font(const char *text, int32_t weight,
     return result;
 }
 
-static bool layout_has_missing_glyphs(const TypioTextLayout *layout)
+static bool layout_has_missing_glyphs(const TypioTextShape *layout)
 {
     if (!layout || !layout->glyphs) return false;
     for (size_t i = 0; i < layout->count; ++i) {
@@ -537,7 +537,7 @@ static bool layout_has_missing_glyphs(const TypioTextLayout *layout)
     return false;
 }
 
-static void flux_free_layout_internal(TypioTextLayout *layout)
+static void flux_free_layout_internal(TypioTextShape *layout)
 {
     if (!layout) return;
     /* Layouts own no GPU resource — glyph pixels live in the shared, persistent
@@ -546,10 +546,10 @@ static void flux_free_layout_internal(TypioTextLayout *layout)
     free(layout);
 }
 
-static TypioTextLayout *flux_shape_text(FontObjEntry *font,
+static TypioTextShape *flux_shape_text(FontObjEntry *font,
                                         const char *text)
 {
-    TypioTextLayout *layout = (TypioTextLayout *)calloc(1, sizeof(*layout));
+    TypioTextShape *layout = (TypioTextShape *)calloc(1, sizeof(*layout));
     if (!layout) return NULL;
 
     layout->face    = font->face;
@@ -594,7 +594,7 @@ fail:
     return NULL;
 }
 
-static TypioTextLayout *flux_create_layout(void *engine,
+static TypioTextShape *flux_create_layout(void *engine,
                                            const char *text,
                                            const char *font_desc)
 {
@@ -603,8 +603,8 @@ static TypioTextLayout *flux_create_layout(void *engine,
     char *fb_file   = NULL;
     float size_px;
     FontObjEntry *font = NULL;
-    TypioTextLayout *layout    = NULL;
-    TypioTextLayout *fb_layout = NULL;
+    TypioTextShape *layout    = NULL;
+    TypioTextShape *fb_layout = NULL;
     int32_t weight = 400;
 
     (void)engine;
@@ -648,18 +648,18 @@ fail:
     return NULL;
 }
 
-static void flux_get_metrics(TypioTextLayout *layout, float *out_w, float *out_h)
+static void flux_get_metrics(TypioTextShape *layout, float *out_w, float *out_h)
 {
     if (out_w) *out_w = layout ? layout->width    : 0.0f;
     if (out_h) *out_h = layout ? layout->height   : 0.0f;
 }
 
-static float flux_get_baseline(TypioTextLayout *layout)
+static float flux_get_baseline(TypioTextShape *layout)
 {
     return layout ? layout->baseline : 0.0f;
 }
 
-void typio_flux_layout_free(TypioTextLayout *layout)
+void typio_text_shape_free(TypioTextShape *layout)
 {
     flux_free_layout_internal(layout);
 }
@@ -708,8 +708,8 @@ static GlyphAtlas g_atlas;
 static void glyph_atlas_free(void)
 {
     if (g_atlas.image) {
-        /* The atlas may still be referenced by an in-flight popup frame. */
-        flux_device *dev = typio_flux_device_get();
+        /* The atlas may still be referenced by an in-flight panel frame. */
+        flux_device *dev = typio_render_device_get();
         if (dev) flux_device_wait_idle(dev);
         flux_image_release(g_atlas.image);
     }
@@ -721,7 +721,7 @@ static bool glyph_atlas_ensure(void)
 {
     if (g_atlas.image) return true;
 
-    flux_device *dev = typio_flux_device_get();
+    flux_device *dev = typio_render_device_get();
     if (!dev) return false;
 
     /* Clear so the gutters between glyphs sample as zero coverage. */
@@ -749,7 +749,7 @@ static bool glyph_atlas_ensure(void)
 }
 
 /* Look up a glyph's atlas slot, rasterising and uploading it on first sight.
- * After warm-up every popup glyph is a hash hit with zero GPU work.
+ * After warm-up every panel glyph is a hash hit with zero GPU work.
  *
  * Overflow is handled NON-destructively: once the atlas is physically full a
  * new glyph is recorded as a non-drawable slot (so it is not retried every
@@ -812,8 +812,8 @@ static const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t
     return &g_atlas.slots[i];
 }
 
-bool typio_flux_fill_layout(flux_canvas *canvas, flux_arena *arena,
-                            TypioTextLayout *layout, float x, float y,
+bool typio_text_shape_fill(flux_canvas *canvas, flux_arena *arena,
+                            TypioTextShape *layout, float x, float y,
                             TypioColor tint)
 {
     (void)arena;
@@ -845,20 +845,20 @@ bool typio_flux_fill_layout(flux_canvas *canvas, flux_arena *arena,
     return true;
 }
 
-static TypioTextEngineVTable flux_engine_vtable = {
+static TypioTextShaperVTable flux_engine_vtable = {
     .create_layout = flux_create_layout,
     .get_metrics   = flux_get_metrics,
     .get_baseline  = flux_get_baseline,
-    .free_layout   = typio_flux_layout_free,
+    .free_layout   = typio_text_shape_free,
 };
 
-TypioTextEngine *typio_flux_engine_create(void)
+TypioTextShaper *typio_text_shaper_create(void)
 {
-    TypioTextEngine *engine = (TypioTextEngine *)calloc(1, sizeof(*engine));
+    TypioTextShaper *engine = (TypioTextShaper *)calloc(1, sizeof(*engine));
     if (!engine) return NULL;
 
     /* The text engine only needs FreeType (shaping + outlines). The Vulkan
-     * device is created lazily by the popup when it first presents. */
+     * device is created lazily by the panel when it first presents. */
     if (!ensure_ft_library()) {
         free(engine);
         return NULL;
@@ -869,7 +869,7 @@ TypioTextEngine *typio_flux_engine_create(void)
     return engine;
 }
 
-void typio_flux_engine_destroy(TypioTextEngine *engine)
+void typio_text_shaper_destroy(TypioTextShaper *engine)
 {
     if (!engine) return;
     glyph_atlas_free();
@@ -879,9 +879,9 @@ void typio_flux_engine_destroy(TypioTextEngine *engine)
     free(engine);
 }
 
-void typio_flux_engine_purge_font_caches(void)
+void typio_text_shaper_purge_font_caches(void)
 {
-    /* The glyph atlas is intentionally NOT freed here. Cached popup layouts
+    /* The glyph atlas is intentionally NOT freed here. Cached panel layouts
      * borrow FT_Face pointers and carry a font_id; freeing the atlas would
      * force the next draw to re-rasterise via those faces, but this purge has
      * just freed them — a use-after-free on any reload that does not also

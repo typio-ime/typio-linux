@@ -11,11 +11,11 @@ TypioWlTextUiPlan typio_wl_text_ui_plan_update(const char *last_preedit_text,
                                                const char *next_preedit_text,
                                                int next_preedit_cursor);
 
-void typio_wl_text_ui_reset_tracking(bool *popup_update_pending,
+void typio_wl_text_ui_reset_tracking(bool *panel_update_pending,
                                      char **last_preedit_text,
                                      int *last_preedit_cursor);
 
-bool typio_wl_text_ui_should_flush_popup_update(bool popup_update_pending,
+bool typio_wl_text_ui_should_flush_popup_update(bool panel_update_pending,
                                                 bool has_session,
                                                 bool has_context,
                                                 bool context_focused);

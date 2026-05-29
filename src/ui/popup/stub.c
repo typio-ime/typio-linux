@@ -13,8 +13,8 @@ TypioWlCandidatePanel *typio_wl_candidate_panel_create(TypioWlFrontend *frontend
     return NULL;
 }
 
-void typio_wl_candidate_panel_destroy(TypioWlCandidatePanel *popup) {
-    (void)popup;
+void typio_wl_candidate_panel_destroy(TypioWlCandidatePanel *panel) {
+    (void)panel;
 }
 
 bool typio_wl_candidate_panel_update_content(TypioWlTextUiBackend *backend,

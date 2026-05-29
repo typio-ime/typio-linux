@@ -18,25 +18,25 @@
 
 /* ── Constants ──────────────────────────────────────────────────────── */
 
-#define POPUP_LAYOUT_CACHE_CAP  128  /* LRU cache capacity (entries)     */
-#define POPUP_MAX_ROWS          16   /* max candidates shown per page     */
-#define POPUP_MIN_WIDTH         220  /* minimum popup width (logical px)  */
-#define POPUP_PAD_X             10
-#define POPUP_PAD_Y             6
-#define POPUP_ROW_PAD_X         6    /* horizontal padding inside each row */
-#define POPUP_ROW_PAD_Y         3    /* vertical padding inside each row   */
-#define POPUP_ROW_GAP           0    /* gap between rows (vertical layout) */
-#define POPUP_COL_GAP           2    /* gap between columns (horizontal)   */
-#define POPUP_SECTION_GAP       6
-#define POPUP_LABEL_GAP         5    /* gap between index label and text   */
-#define POPUP_DEFAULT_FONT_SIZE 16
+#define PANEL_LAYOUT_CACHE_CAP  128  /* LRU cache capacity (entries)     */
+#define PANEL_MAX_ROWS          16   /* max candidates shown per page     */
+#define PANEL_MIN_WIDTH         220  /* minimum panel width (logical px)  */
+#define PANEL_PAD_X             10
+#define PANEL_PAD_Y             6
+#define PANEL_ROW_PAD_X         6    /* horizontal padding inside each row */
+#define PANEL_ROW_PAD_Y         3    /* vertical padding inside each row   */
+#define PANEL_ROW_GAP           0    /* gap between rows (vertical layout) */
+#define PANEL_COL_GAP           2    /* gap between columns (horizontal)   */
+#define PANEL_SECTION_GAP       6
+#define PANEL_LABEL_GAP         5    /* gap between index label and text   */
+#define PANEL_DEFAULT_FONT_SIZE 16
 
 /* ── Configuration ──────────────────────────────────────────────────── */
 
 typedef enum {
-    POPUP_LAYOUT_VERTICAL = 0,
-    POPUP_LAYOUT_HORIZONTAL,
-} PopupLayoutMode;
+    PANEL_LAYOUT_VERTICAL = 0,
+    PANEL_LAYOUT_HORIZONTAL,
+} PanelLayoutMode;
 
 typedef struct {
     bool   has_bg;         double bg_r, bg_g, bg_b, bg_a;
@@ -46,30 +46,30 @@ typedef struct {
     bool   has_preedit;    double preedit_r, preedit_g, preedit_b;
     bool   has_selection;  double selection_r, selection_g, selection_b, selection_a;
     bool   has_sel_text;   double sel_text_r, sel_text_g, sel_text_b;
-} PopupThemeVariant;
+} PanelThemeVariant;
 
 typedef struct {
-    TypioCandidatePanelThemeMode theme_mode;
-    PopupLayoutMode              layout_mode;
+    TypioPanelThemeMode theme_mode;
+    PanelLayoutMode              layout_mode;
     int                          font_size;
     bool                         mode_indicator;
     char                         font_desc[128];
     char                         label_font_desc[128];
     char                         aux_font_desc[128];
     char                         font_family[80];
-    PopupThemeVariant            light_custom;
-    PopupThemeVariant            dark_custom;
-} PopupConfig;
+    PanelThemeVariant            light_custom;
+    PanelThemeVariant            dark_custom;
+} PanelConfig;
 
 /* ── Per-row geometry ───────────────────────────────────────────────── */
 
 typedef struct {
-    /* Both layouts borrowed from PopupRenderCtx; do NOT free here. The
+    /* Both layouts borrowed from PanelRenderCtx; do NOT free here. The
      * cached textures are colour-independent (R8 coverage); the text /
      * selection colour is applied at draw time via the tint, so there is
      * no separate selected-colour layout. */
-    TypioTextLayout *label_layout;
-    TypioTextLayout *layout;
+    TypioTextShape *label_layout;
+    TypioTextShape *layout;
 
     int label_w, label_h;
     int text_w,  text_h;
@@ -82,28 +82,28 @@ typedef struct {
 
     float label_ink_y_offset;
     float text_ink_y_offset;
-} PopupRow;
+} PanelRow;
 
 /* ── Geometry snapshot ──────────────────────────────────────────────── */
 
 typedef struct {
-    PopupRow rows[POPUP_MAX_ROWS];
+    PanelRow rows[PANEL_MAX_ROWS];
     size_t   row_count;
 
     /* Preedit zone — shows either an IME preedit string or a transient
      * status message (e.g. "[Recording...]"); both use the same palette
      * colour and the same layout slot. May be NULL. */
-    TypioTextLayout *preedit_layout;
+    TypioTextShape *preedit_layout;
     float        pre_x, pre_y;   /* subpixel-accurate */
     int          pre_w, pre_h;
 
     /* Mode label — owned by this geometry (may be NULL) */
-    TypioTextLayout *mode_layout;
+    TypioTextShape *mode_layout;
     float        mode_x, mode_y; /* subpixel-accurate */
     int          mode_w, mode_h;
     int          mode_divider_y; /* -1 if no divider */
 
-    int popup_w, popup_h;   /* logical-pixel dimensions */
+    int panel_w, panel_h;   /* logical-pixel dimensions */
     /* Logical-to-physical pixel ratio. 1.0f on unscaled, integer for
      * legacy integer scale (e.g. 2.0f), arbitrary for fractional scale
      * (e.g. 1.25f). Drives font scaling, ink metrics, and the swapchain
@@ -114,11 +114,11 @@ typedef struct {
     uint64_t    palette_sig;
     char        preedit_text[256];
     char        mode_label[128];
-    PopupConfig config;
+    PanelConfig config;
 
-    TypioCandidatePanelPalette resolved_palette;
-    const TypioCandidatePanelPalette *palette;
-} PopupGeometry;
+    TypioPanelPalette resolved_palette;
+    const TypioPanelPalette *palette;
+} PanelGeometry;
 
 /* ── LRU layout cache ───────────────────────────────────────────────── */
 
@@ -128,8 +128,8 @@ typedef struct {
     char         text[512];
     char         label_font_desc[96];
     char         font_desc[96];
-    TypioTextLayout *label_layout;
-    TypioTextLayout *layout;
+    TypioTextShape *label_layout;
+    TypioTextShape *layout;
     float        label_pixel_w;
     float        label_pixel_h;
     float        label_pixel_baseline;  /* alphabetic baseline from top */
@@ -137,53 +137,53 @@ typedef struct {
     float        pixel_h;
     float        pixel_baseline;        /* alphabetic baseline from top */
     uint32_t     lru_tick;
-} PopupLayoutEntry;
+} PanelLayoutEntry;
 
 /* ── Persistent text engine + LRU cache ───────────────────────────── */
 
 /* When the LRU evicts an entry whose layout/label_layout may still be
- * referenced by a geometry parked in the popup's retire ring (or by an
- * in-flight GPU frame), the popup MUST take ownership of the freeing —
- * an immediate free here is a use-after-free. PopupRenderCtx defers to
+ * referenced by a geometry parked in the panel's retire ring (or by an
+ * in-flight GPU frame), the panel MUST take ownership of the freeing —
+ * an immediate free here is a use-after-free. PanelRenderCtx defers to
  * this callback when set; if it is NULL the layout is freed eagerly. */
-typedef struct PopupRenderCtx PopupRenderCtx;
-typedef void (*PopupLayoutEvictFn)(void *user, TypioTextLayout *layout);
+typedef struct PanelRenderCtx PanelRenderCtx;
+typedef void (*PanelLayoutEvictFn)(void *user, TypioTextShape *layout);
 
-struct PopupRenderCtx {
-    TypioTextEngine  *engine;
-    PopupLayoutEntry  entries[POPUP_LAYOUT_CACHE_CAP];
+struct PanelRenderCtx {
+    TypioTextShaper  *engine;
+    PanelLayoutEntry  entries[PANEL_LAYOUT_CACHE_CAP];
     uint32_t          tick;
-    PopupLayoutEvictFn evict_cb;   /* NULL ⇒ free eagerly */
+    PanelLayoutEvictFn evict_cb;   /* NULL ⇒ free eagerly */
     void              *evict_user;
 };
 
 /* ── Functions ──────────────────────────────────────────────────────── */
 
-void popup_render_ctx_init(PopupRenderCtx *pc);
-void popup_render_ctx_set_evict(PopupRenderCtx *pc,
-                                PopupLayoutEvictFn cb, void *user);
-void popup_render_ctx_free(PopupRenderCtx *pc);
-void popup_render_ctx_invalidate(PopupRenderCtx *pc);
+void panel_render_ctx_init(PanelRenderCtx *pc);
+void panel_render_ctx_set_evict(PanelRenderCtx *pc,
+                                PanelLayoutEvictFn cb, void *user);
+void panel_render_ctx_free(PanelRenderCtx *pc);
+void panel_render_ctx_invalidate(PanelRenderCtx *pc);
 
-PopupGeometry *popup_geometry_compute(PopupRenderCtx *pc,
+PanelGeometry *panel_geometry_compute(PanelRenderCtx *pc,
                                       const TypioCandidateList *candidates,
                                       const char *preedit_text,
                                       const char *mode_label,
-                                      const PopupConfig *config,
-                                      const TypioCandidatePanelPalette *palette,
+                                      const PanelConfig *config,
+                                      const TypioPanelPalette *palette,
                                       float scale);
 
-PopupGeometry *popup_geometry_update_aux(PopupRenderCtx *pc,
-                                         const PopupGeometry *base,
+PanelGeometry *panel_geometry_update_aux(PanelRenderCtx *pc,
+                                         const PanelGeometry *base,
                                          const char *preedit_text,
                                          const char *mode_label);
 
-void popup_geometry_free(PopupGeometry *g);
+void panel_geometry_free(PanelGeometry *g);
 
-void popup_config_load(PopupConfig *cfg, TypioInstance *instance);
+void panel_config_load(PanelConfig *cfg, TypioInstance *instance);
 
-void popup_config_build_palette(const PopupConfig *cfg,
-                                 TypioCandidatePanelThemeCache *cache,
-                                 TypioCandidatePanelPalette *out_palette);
+void panel_config_build_palette(const PanelConfig *cfg,
+                                 TypioPanelThemeCache *cache,
+                                 TypioPanelPalette *out_palette);
 
 #endif /* TYPIO_WL_CANDIDATE_POPUP_LAYOUT_H */

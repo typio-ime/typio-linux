@@ -1,6 +1,6 @@
 /**
  * @file candidate_panel_theme.c
- * @brief Theme detection and color palettes for popup UI
+ * @brief Theme detection and color palettes for panel UI
  *
  * Detects the desktop dark/light preference by checking (in order):
  *   1. GTK_THEME environment variable
@@ -19,12 +19,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TYPIO_CANDIDATE_POPUP_THEME_CACHE_MS 5000
+#define TYPIO_PANEL_THEME_CACHE_MS 5000
 
 /* ── Built-in palettes ──────────────────────────────────────────────── */
 
 /* Light: clean white surface, cool-gray chrome, blue-600 accent. */
-static const TypioCandidatePanelPalette palette_light = {
+static const TypioPanelPalette palette_light = {
     .bg_r = 1.000, .bg_g = 1.000, .bg_b = 1.000, .bg_a = 0.97,
     .border_r = 0.820, .border_g = 0.835, .border_b = 0.859, .border_a = 1.0,
     .text_r = 0.067, .text_g = 0.094, .text_b = 0.153,
@@ -35,7 +35,7 @@ static const TypioCandidatePanelPalette palette_light = {
 };
 
 /* Dark: deep-gray surface, blue-500 accent. */
-static const TypioCandidatePanelPalette palette_dark = {
+static const TypioPanelPalette palette_dark = {
     .bg_r = 0.094, .bg_g = 0.098, .bg_b = 0.110, .bg_a = 0.97,
     .border_r = 0.173, .border_g = 0.184, .border_b = 0.212, .border_a = 1.0,
     .text_r = 0.910, .text_g = 0.918, .text_b = 0.929,
@@ -141,32 +141,32 @@ static bool desktop_prefers_dark(void) {
     return kde_prefers_dark();
 }
 
-static const TypioCandidatePanelPalette *resolve_uncached(TypioCandidatePanelThemeMode mode) {
+static const TypioPanelPalette *resolve_uncached(TypioPanelThemeMode mode) {
     switch (mode) {
-        case TYPIO_CANDIDATE_POPUP_THEME_DARK:
+        case TYPIO_PANEL_THEME_DARK:
             return &palette_dark;
-        case TYPIO_CANDIDATE_POPUP_THEME_LIGHT:
+        case TYPIO_PANEL_THEME_LIGHT:
             return &palette_light;
-        case TYPIO_CANDIDATE_POPUP_THEME_AUTO:
+        case TYPIO_PANEL_THEME_AUTO:
         default:
             return desktop_prefers_dark() ? &palette_dark : &palette_light;
     }
 }
 
-const TypioCandidatePanelPalette *typio_candidate_panel_palette_light(void) {
+const TypioPanelPalette *typio_panel_palette_light(void) {
     return &palette_light;
 }
 
-const TypioCandidatePanelPalette *typio_candidate_panel_palette_dark(void) {
+const TypioPanelPalette *typio_panel_palette_dark(void) {
     return &palette_dark;
 }
 
-const TypioCandidatePanelPalette *typio_candidate_panel_theme_resolve(
-    TypioCandidatePanelThemeCache *cache, TypioCandidatePanelThemeMode mode) {
+const TypioPanelPalette *typio_panel_theme_resolve(
+    TypioPanelThemeCache *cache, TypioPanelThemeMode mode) {
     uint64_t now = typio_wl_monotonic_ms();
 
     if (cache->palette && cache->mode == mode &&
-        now - cache->resolved_at_ms < TYPIO_CANDIDATE_POPUP_THEME_CACHE_MS) {
+        now - cache->resolved_at_ms < TYPIO_PANEL_THEME_CACHE_MS) {
         return cache->palette;
     }
 
@@ -201,7 +201,7 @@ bool typio_parse_hex_color(const char *hex,
     return true;
 }
 
-uint64_t typio_candidate_panel_palette_hash(const TypioCandidatePanelPalette *p) {
+uint64_t typio_panel_palette_hash(const TypioPanelPalette *p) {
     uint64_t h = 14695981039346656037ULL;
     const unsigned char *bytes = (const unsigned char *)p;
     size_t i;

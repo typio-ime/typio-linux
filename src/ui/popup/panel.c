@@ -1,10 +1,10 @@
 /**
  * @file candidate_panel.c
- * @brief Wayland input-popup coordinator.
+ * @brief Wayland input-panel coordinator.
  *
- * The popup presents a flux (Vulkan) swapchain directly onto its
+ * The panel presents a flux (Vulkan) swapchain directly onto its
  * zwp_input_popup_surface_v2 wl_surface. Each candidate update records the
- * popup into a flux canvas and presents one frame; the swapchain owns frame
+ * panel into a flux canvas and presents one frame; the swapchain owns frame
  * pacing and buffering, so there is no SHM buffer pool or manual frame
  * throttling.
  */
@@ -31,18 +31,18 @@
 #include <string.h>
 
 /* Render latency threshold for slow-render debug logging */
-#define POPUP_SLOW_RENDER_MS 8
+#define PANEL_SLOW_RENDER_MS 8
 
-/* Bounded acquire/present timeout. The popup presents synchronously on the
+/* Bounded acquire/present timeout. The panel presents synchronously on the
  * single-threaded IME event loop, so a compositor that has stopped releasing
  * swapchain images (display asleep or surface occluded after a lock/suspend)
  * must never block the loop in vkAcquireNextImageKHR. ~2 vblanks @60Hz; the
  * healthy on-demand path acquires instantly and never approaches this. */
-#define POPUP_PRESENT_TIMEOUT_NS     (32ull * 1000ull * 1000ull)
+#define PANEL_PRESENT_TIMEOUT_NS     (32ull * 1000ull * 1000ull)
 /* Recreate the swapchain after this many consecutive stalls. flux_surface_resize
  * rebuilds the chain and discards the per-frame semaphores left dangling by the
  * stalled acquires, so presentation resumes cleanly once the session is back. */
-#define POPUP_PRESENT_RECOVER_STREAK 2
+#define PANEL_PRESENT_RECOVER_STREAK 2
 
 /* Hard cap on per-epoch retire-slot growth. During a long present stall the
  * epoch does not advance, so geometries/layouts retired across many CONTENT
@@ -50,14 +50,14 @@
  * into a bounded vkDeviceWaitIdle + inline drain, trading a one-off ms-scale
  * stall for predictable memory use. Picked well above the realistic worst
  * case (one geometry + a handful of layout evictions per delta). */
-#define POPUP_RETIRE_SLOT_MAX 256
+#define PANEL_RETIRE_SLOT_MAX 256
 
 /* ── Output tracking ────────────────────────────────────────────────── */
 
-typedef struct PopupOutputRef {
+typedef struct PanelOutputRef {
     struct wl_output    *output;
-    struct PopupOutputRef *next;
-} PopupOutputRef;
+    struct PanelOutputRef *next;
+} PanelOutputRef;
 
 /* ── Frame-retire queue ─────────────────────────────────────────────── */
 
@@ -69,31 +69,31 @@ typedef struct PopupOutputRef {
  * Since ADR-0012 glyph pixels live in the shared, PERSISTENT glyph atlas;
  * geometry and layouts own NO GPU resource, and their pixels are baked into the
  * frame's transient vertex buffer at record time — so the GPU never references
- * them after popup_record returns, and an immediate CPU free would be safe.
+ * them after panel_record returns, and an immediate CPU free would be safe.
  * The deferral is therefore no longer required for correctness; it is retained
  * (a bounded, harmless CPU-free delay) and slated for removal once the atlas
  * change is runtime-verified, to avoid stacking two unverified hot-path changes
  * (see ADR-0012 "Residual legacy"). Depth = 3 = flux's frames_in_flight (2)
  * plus the just-presented frame. */
-#define POPUP_RETIRE_DEPTH 3
+#define PANEL_RETIRE_DEPTH 3
 
 typedef enum {
-    POPUP_RETIRE_GEOMETRY = 0,
-    POPUP_RETIRE_LAYOUT,
-} PopupRetireKind;
+    PANEL_RETIRE_GEOMETRY = 0,
+    PANEL_RETIRE_LAYOUT,
+} PanelRetireKind;
 
 typedef struct {
-    PopupRetireKind kind;
+    PanelRetireKind kind;
     void           *ptr;
-} PopupRetireItem;
+} PanelRetireItem;
 
-typedef struct PopupRetireSlot {
-    PopupRetireItem *items;
+typedef struct PanelRetireSlot {
+    PanelRetireItem *items;
     size_t           count;
     size_t           cap;
-} PopupRetireSlot;
+} PanelRetireSlot;
 
-/* ── Main popup struct ──────────────────────────────────────────────── */
+/* ── Main panel struct ──────────────────────────────────────────────── */
 
 struct TypioWlCandidatePanel {
     TypioWlFrontend *frontend;
@@ -108,7 +108,7 @@ struct TypioWlCandidatePanel {
     struct wp_viewport             *viewport;
     struct wp_fractional_scale_v1  *fractional_scale;
 
-    /* flux GPU present pipeline (Vulkan swapchain on the popup wl_surface) */
+    /* flux GPU present pipeline (Vulkan swapchain on the panel wl_surface) */
     VkSurfaceKHR  vk_surface;
     flux_surface *fx_surface;
     flux_canvas  *fx_canvas;
@@ -116,7 +116,7 @@ struct TypioWlCandidatePanel {
     bool          fx_ready;
     int           surf_w, surf_h;   /* swapchain BUFFER extent, physical px.
                                      * With a viewport this is grow-only and
-                                     * quantised (POPUP_SURFACE_QUANTUM): the
+                                     * quantised (PANEL_SURFACE_QUANTUM): the
                                      * buffer is the high-water mark and the
                                      * exact content rect is cropped out via
                                      * wp_viewport_set_source, so per-candidate
@@ -136,27 +136,27 @@ struct TypioWlCandidatePanel {
      * `retire[epoch % depth]` holds geometries/layouts that were live during
      * that epoch, freed when the slot is reused. These no longer own GPU
      * resources (glyphs live in the persistent atlas, ADR-0012), so this is now
-     * a conservative CPU-free deferral — see POPUP_RETIRE_DEPTH. */
-    PopupRetireSlot retire[POPUP_RETIRE_DEPTH];
+     * a conservative CPU-free deferral — see PANEL_RETIRE_DEPTH. */
+    PanelRetireSlot retire[PANEL_RETIRE_DEPTH];
     uint64_t        present_epoch;
 
-    /* Per-popup text engine context + LRU layout cache */
-    PopupRenderCtx render;
+    /* Per-panel text engine context + LRU layout cache */
+    PanelRenderCtx render;
 
     /* Current computed geometry (owned; NULL if not yet rendered) */
-    PopupGeometry *geom;
+    PanelGeometry *geom;
 
     /* Render configuration */
-    PopupConfig config;
+    PanelConfig config;
     bool        config_valid;
 
     /* Theme cache */
-    TypioCandidatePanelThemeCache theme_cache;
+    TypioPanelThemeCache theme_cache;
 
     /* Currently displayed selection index */
     int selected;
 
-    /* Whether the popup surface is currently visible */
+    /* Whether the panel surface is currently visible */
     bool visible;
 
     /* Transient status text (e.g. "[Recording...]"). Owned; freed on destroy
@@ -164,7 +164,7 @@ struct TypioWlCandidatePanel {
     char *status_text;
 
     /* Output tracking (for scale resolution; fallback path) */
-    PopupOutputRef *entered_outputs;
+    PanelOutputRef *entered_outputs;
 
     /* Scale signals — resolved in priority order:
      *   fractional_scale_120 (set by wp_fractional_scale_v1.preferred_scale, 24.8 fixed in 120ths)
@@ -179,47 +179,47 @@ struct TypioWlCandidatePanel {
     int text_input_x, text_input_y, text_input_w, text_input_h;
 };
 
-/* ── Retire helpers (defined here so popup methods below can call them) */
+/* ── Retire helpers (defined here so panel methods below can call them) */
 
-static void retire_item_free(PopupRetireItem *it) {
+static void retire_item_free(PanelRetireItem *it) {
     if (!it || !it->ptr) return;
     switch (it->kind) {
-    case POPUP_RETIRE_GEOMETRY:
-        popup_geometry_free((PopupGeometry *)it->ptr);
+    case PANEL_RETIRE_GEOMETRY:
+        panel_geometry_free((PanelGeometry *)it->ptr);
         break;
-    case POPUP_RETIRE_LAYOUT:
-        typio_flux_layout_free((TypioTextLayout *)it->ptr);
+    case PANEL_RETIRE_LAYOUT:
+        typio_text_shape_free((TypioTextShape *)it->ptr);
         break;
     }
     it->ptr = nullptr;
 }
 
-static void retire_slot_drain(PopupRetireSlot *slot);
+static void retire_slot_drain(PanelRetireSlot *slot);
 
-static void retire_slot_push(PopupRetireSlot *slot,
-                              PopupRetireKind kind, void *ptr) {
+static void retire_slot_push(PanelRetireSlot *slot,
+                              PanelRetireKind kind, void *ptr) {
     if (!ptr) return;
 
     /* Cap reached: fence the GPU and drain everything we've parked so far
      * in this slot inline. This converts the worst-case "RETRY-storm while
      * the user keeps paging candidates" into a bounded one-off stall
      * instead of unbounded memory growth. */
-    if (slot->count >= POPUP_RETIRE_SLOT_MAX) {
-        flux_device *dev = typio_flux_device_get();
+    if (slot->count >= PANEL_RETIRE_SLOT_MAX) {
+        flux_device *dev = typio_render_device_get();
         if (dev) flux_device_wait_idle(dev);
         retire_slot_drain(slot);
     }
 
     if (slot->count == slot->cap) {
         size_t ncap = slot->cap ? slot->cap * 2 : 4;
-        if (ncap > POPUP_RETIRE_SLOT_MAX) ncap = POPUP_RETIRE_SLOT_MAX;
-        PopupRetireItem *n = (PopupRetireItem *)realloc(slot->items, ncap * sizeof(*n));
+        if (ncap > PANEL_RETIRE_SLOT_MAX) ncap = PANEL_RETIRE_SLOT_MAX;
+        PanelRetireItem *n = (PanelRetireItem *)realloc(slot->items, ncap * sizeof(*n));
         if (!n) {
             /* Realloc failure: fall back to a device-wide fence so the
              * release is still safe. */
-            flux_device *dev = typio_flux_device_get();
+            flux_device *dev = typio_render_device_get();
             if (dev) flux_device_wait_idle(dev);
-            PopupRetireItem it = { kind, ptr };
+            PanelRetireItem it = { kind, ptr };
             retire_item_free(&it);
             return;
         }
@@ -231,14 +231,14 @@ static void retire_slot_push(PopupRetireSlot *slot,
     slot->count++;
 }
 
-static void retire_slot_drain(PopupRetireSlot *slot) {
+static void retire_slot_drain(PanelRetireSlot *slot) {
     for (size_t i = 0; i < slot->count; ++i) {
         retire_item_free(&slot->items[i]);
     }
     slot->count = 0;
 }
 
-static void retire_slot_free(PopupRetireSlot *slot) {
+static void retire_slot_free(PanelRetireSlot *slot) {
     retire_slot_drain(slot);
     free(slot->items);
     slot->items = nullptr;
@@ -248,23 +248,23 @@ static void retire_slot_free(PopupRetireSlot *slot) {
 /* ── Delta classification ───────────────────────────────────────────── */
 
 typedef enum {
-    POPUP_DELTA_NONE,
-    POPUP_DELTA_SELECTION,
-    POPUP_DELTA_AUX,
-    POPUP_DELTA_CONTENT,
-    POPUP_DELTA_STYLE,
-} PopupDelta;
+    PANEL_DELTA_NONE,
+    PANEL_DELTA_SELECTION,
+    PANEL_DELTA_AUX,
+    PANEL_DELTA_CONTENT,
+    PANEL_DELTA_STYLE,
+} PanelDelta;
 
-static PopupDelta classify_delta(const PopupGeometry *geom,
+static PanelDelta classify_delta(const PanelGeometry *geom,
                                   const TypioCandidateList *cands,
                                   const char *preedit,
                                   const char *mode_label,
-                                  const PopupConfig *cfg,
+                                  const PanelConfig *cfg,
                                   uint64_t palette_sig,
                                   float scale,
                                   int new_selected) {
     (void)new_selected;
-    if (!geom) return POPUP_DELTA_CONTENT;
+    if (!geom) return PANEL_DELTA_CONTENT;
 
     /* Float compare with a slack tolerance: fractional-scale jitter (e.g.
      * 1.2500000 vs 1.2500001 from successive preferred_scale events on the
@@ -277,50 +277,50 @@ static PopupDelta classify_delta(const PopupGeometry *geom,
         geom->config.mode_indicator != cfg->mode_indicator ||
         strcmp(geom->config.font_desc, cfg->font_desc) != 0 ||
         strcmp(geom->config.aux_font_desc, cfg->aux_font_desc) != 0) {
-        return POPUP_DELTA_STYLE;
+        return PANEL_DELTA_STYLE;
     }
 
     if (geom->content_sig != cands->content_signature) {
         /* If count changed, it's a full content change. */
         if (geom->row_count != cands->count) {
-            return POPUP_DELTA_CONTENT;
+            return PANEL_DELTA_CONTENT;
         }
 
         /* Without per-row signatures in the core API, we cannot prove that only
          * one row changed. Keep the conservative full-content path. */
-        return POPUP_DELTA_CONTENT;
+        return PANEL_DELTA_CONTENT;
     }
 
     const char *cur_pre = preedit ? preedit : "";
     const char *cur_mode = mode_label ? mode_label : "";
     if (strcmp(geom->preedit_text, cur_pre) != 0 ||
         strcmp(geom->mode_label, cur_mode) != 0) {
-        return POPUP_DELTA_AUX;
+        return PANEL_DELTA_AUX;
     }
 
-    return POPUP_DELTA_SELECTION;
+    return PANEL_DELTA_SELECTION;
 }
 
 /* ── Output helpers ─────────────────────────────────────────────────── */
 
-static const TypioWlOutput *find_frontend_output(const TypioWlCandidatePanel *popup,
+static const TypioWlOutput *find_frontend_output(const TypioWlCandidatePanel *panel,
                                                    struct wl_output *output) {
-    for (TypioWlOutput *o = popup->frontend ? popup->frontend->outputs : nullptr;
+    for (TypioWlOutput *o = panel->frontend ? panel->frontend->outputs : nullptr;
          o; o = o->next) {
         if (o->output == output) return o;
     }
     return nullptr;
 }
 
-static bool tracks_output(const TypioWlCandidatePanel *popup,
+static bool tracks_output(const TypioWlCandidatePanel *panel,
                            struct wl_output *output) {
-    for (PopupOutputRef *r = popup->entered_outputs; r; r = r->next) {
+    for (PanelOutputRef *r = panel->entered_outputs; r; r = r->next) {
         if (r->output == output) return true;
     }
     return false;
 }
 
-/* Resolve the logical-to-physical scale ratio for the popup.
+/* Resolve the logical-to-physical scale ratio for the panel.
  *
  * Priority (best signal first):
  *   1. wp_fractional_scale_v1.preferred_scale          (sub-integer, sent before commit)
@@ -331,42 +331,42 @@ static bool tracks_output(const TypioWlCandidatePanel *popup,
  *      reupload+recommit when enter arrives.
  *   5. 1.0f.
  */
-static float render_scale(const TypioWlCandidatePanel *popup) {
-    if (popup->fractional_scale_120 > 0) {
-        return (float)popup->fractional_scale_120 / 120.0f;
+static float render_scale(const TypioWlCandidatePanel *panel) {
+    if (panel->fractional_scale_120 > 0) {
+        return (float)panel->fractional_scale_120 / 120.0f;
     }
-    if (popup->preferred_buffer_scale > 0) {
-        return (float)popup->preferred_buffer_scale;
+    if (panel->preferred_buffer_scale > 0) {
+        return (float)panel->preferred_buffer_scale;
     }
 
     int best = 0;
-    for (PopupOutputRef *r = popup->entered_outputs; r; r = r->next) {
-        const TypioWlOutput *o = find_frontend_output(popup, r->output);
+    for (PanelOutputRef *r = panel->entered_outputs; r; r = r->next) {
+        const TypioWlOutput *o = find_frontend_output(panel, r->output);
         if (o && o->scale > best) best = o->scale;
     }
     if (best > 0) return (float)best;
 
     /* Initial guess: the highest-DPI output the frontend has seen. */
-    if (popup->frontend) {
-        for (TypioWlOutput *o = popup->frontend->outputs; o; o = o->next) {
+    if (panel->frontend) {
+        for (TypioWlOutput *o = panel->frontend->outputs; o; o = o->next) {
             if (o->scale > best) best = o->scale;
         }
     }
     return best > 0 ? (float)best : 1.0f;
 }
 
-static void track_output(TypioWlCandidatePanel *popup, struct wl_output *output);
-static void untrack_output(TypioWlCandidatePanel *popup, struct wl_output *output);
-static void refresh_visible(TypioWlCandidatePanel *popup);
+static void track_output(TypioWlCandidatePanel *panel, struct wl_output *output);
+static void untrack_output(TypioWlCandidatePanel *panel, struct wl_output *output);
+static void refresh_visible(TypioWlCandidatePanel *panel);
 
 /* ── Mode label ─────────────────────────────────────────────────────── */
 
-static char *build_mode_label(TypioWlCandidatePanel *popup) {
+static char *build_mode_label(TypioWlCandidatePanel *panel) {
     const TypioEngineMode *mode;
 
-    if (!popup || !popup->frontend || !popup->frontend->instance) return nullptr;
+    if (!panel || !panel->frontend || !panel->frontend->instance) return nullptr;
 
-    mode = typio_instance_get_last_mode(popup->frontend->instance);
+    mode = typio_instance_get_last_mode(panel->frontend->instance);
     if (!mode || !mode->display_label || !mode->display_label[0]) return nullptr;
 
     return strdup(mode->display_label);
@@ -374,13 +374,13 @@ static char *build_mode_label(TypioWlCandidatePanel *popup) {
 
 /* ── Config helpers ─────────────────────────────────────────────────── */
 
-static const PopupConfig *get_config(TypioWlCandidatePanel *popup) {
-    if (!popup->config_valid) {
-        popup_config_load(&popup->config,
-                           popup->frontend ? popup->frontend->instance : nullptr);
-        popup->config_valid = true;
+static const PanelConfig *get_config(TypioWlCandidatePanel *panel) {
+    if (!panel->config_valid) {
+        panel_config_load(&panel->config,
+                           panel->frontend ? panel->frontend->instance : nullptr);
+        panel->config_valid = true;
     }
-    return &popup->config;
+    return &panel->config;
 }
 
 /* ── Geometry retire (deferred GPU resource release) ─────────────────── */
@@ -392,71 +392,71 @@ static const PopupConfig *get_config(TypioWlCandidatePanel *popup) {
  *
  * If the swapchain has never been built (fx_ready == false), nothing on
  * the GPU references `g`, so it can be freed immediately. */
-static void retire_geometry(TypioWlCandidatePanel *popup, PopupGeometry *g) {
+static void retire_geometry(TypioWlCandidatePanel *panel, PanelGeometry *g) {
     if (!g) return;
-    if (!popup || !popup->fx_ready) {
-        popup_geometry_free(g);
+    if (!panel || !panel->fx_ready) {
+        panel_geometry_free(g);
         return;
     }
-    PopupRetireSlot *slot = &popup->retire[popup->present_epoch % POPUP_RETIRE_DEPTH];
-    retire_slot_push(slot, POPUP_RETIRE_GEOMETRY, g);
+    PanelRetireSlot *slot = &panel->retire[panel->present_epoch % PANEL_RETIRE_DEPTH];
+    retire_slot_push(slot, PANEL_RETIRE_GEOMETRY, g);
 }
 
-/* PopupRenderCtx evict callback. LRU evictions on the per-keystroke hot
+/* PanelRenderCtx evict callback. LRU evictions on the per-keystroke hot
  * path can drop layouts that are still referenced by the previous frame's
  * geometry — defer their release to the retire ring on the same epoch
  * cadence. */
-static void popup_retire_layout(void *user, TypioTextLayout *layout) {
-    TypioWlCandidatePanel *popup = (TypioWlCandidatePanel *)user;
+static void panel_retire_layout(void *user, TypioTextShape *layout) {
+    TypioWlCandidatePanel *panel = (TypioWlCandidatePanel *)user;
     if (!layout) return;
-    if (!popup || !popup->fx_ready) {
-        typio_flux_layout_free(layout);
+    if (!panel || !panel->fx_ready) {
+        typio_text_shape_free(layout);
         return;
     }
-    PopupRetireSlot *slot = &popup->retire[popup->present_epoch % POPUP_RETIRE_DEPTH];
-    retire_slot_push(slot, POPUP_RETIRE_LAYOUT, layout);
+    PanelRetireSlot *slot = &panel->retire[panel->present_epoch % PANEL_RETIRE_DEPTH];
+    retire_slot_push(slot, PANEL_RETIRE_LAYOUT, layout);
 }
 
 /* ── flux swapchain lifecycle ───────────────────────────────────────── */
 
-static inline uint8_t popup_u8(double v) {
+static inline uint8_t panel_u8(double v) {
     if (v <= 0.0) return 0;
     if (v >= 1.0) return 255;
     return (uint8_t)(v * 255.0 + 0.5);
 }
 
-static flux_color popup_bg_color(const TypioCandidatePanelPalette *p) {
-    return flux_color_rgba_premul(popup_u8(p->bg_r), popup_u8(p->bg_g),
-                                  popup_u8(p->bg_b), popup_u8(p->bg_a));
+static flux_color panel_bg_color(const TypioPanelPalette *p) {
+    return flux_color_rgba_premul(panel_u8(p->bg_r), panel_u8(p->bg_g),
+                                  panel_u8(p->bg_b), panel_u8(p->bg_a));
 }
 
-static void fx_teardown(TypioWlCandidatePanel *popup) {
-    if (!popup) return;
+static void fx_teardown(TypioWlCandidatePanel *panel) {
+    if (!panel) return;
 
-    flux_device *dev = (popup->fx_surface || popup->vk_surface) ? typio_flux_device_get() : nullptr;
-    if (dev && popup->fx_ready) flux_device_wait_idle(dev);
+    flux_device *dev = (panel->fx_surface || panel->vk_surface) ? typio_render_device_get() : nullptr;
+    if (dev && panel->fx_ready) flux_device_wait_idle(dev);
 
-    if (popup->fx_canvas) {
-        flux_canvas_destroy(popup->fx_canvas);
-        popup->fx_canvas = nullptr;
+    if (panel->fx_canvas) {
+        flux_canvas_destroy(panel->fx_canvas);
+        panel->fx_canvas = nullptr;
     }
-    if (popup->fx_ready) {
-        flux_arena_destroy(&popup->fx_arena);
+    if (panel->fx_ready) {
+        flux_arena_destroy(&panel->fx_arena);
     }
-    if (popup->fx_surface) {
-        flux_surface_release(popup->fx_surface);
-        popup->fx_surface = nullptr;
+    if (panel->fx_surface) {
+        flux_surface_release(panel->fx_surface);
+        panel->fx_surface = nullptr;
     }
-    if (popup->vk_surface != VK_NULL_HANDLE && dev) {
-        vkDestroySurfaceKHR(flux_device_vk_instance(dev), popup->vk_surface, nullptr);
+    if (panel->vk_surface != VK_NULL_HANDLE && dev) {
+        vkDestroySurfaceKHR(flux_device_vk_instance(dev), panel->vk_surface, nullptr);
     }
-    popup->vk_surface = VK_NULL_HANDLE;
-    popup->fx_ready   = false;
-    popup->surf_w = popup->surf_h = 0;
+    panel->vk_surface = VK_NULL_HANDLE;
+    panel->fx_ready   = false;
+    panel->surf_w = panel->surf_h = 0;
 }
 
 /* Swapchain buffer allocation quantum (physical px). Every candidate page
- * changes the popup's pixel width; rounding the buffer up to this quantum and
+ * changes the panel's pixel width; rounding the buffer up to this quantum and
  * growing it only when content exceeds it means the swapchain is rebuilt a
  * handful of times during warm-up and then never again. flux_surface_resize
  * does a vkDeviceWaitIdle plus three blocking compositor roundtrips
@@ -464,33 +464,33 @@ static void fx_teardown(TypioWlCandidatePanel *popup) {
  * loop, so eliminating per-page rebuilds is what removes the candidate-switch
  * lag (ADR-0013). Only meaningful with a viewport, which crops the oversized
  * buffer back to the exact content rect via wp_viewport_set_source. */
-#define POPUP_SURFACE_QUANTUM 64
+#define PANEL_SURFACE_QUANTUM 64
 
-static inline int popup_quantize_up(int v) {
+static inline int panel_quantize_up(int v) {
     if (v < 1) v = 1;
-    return ((v + POPUP_SURFACE_QUANTUM - 1) / POPUP_SURFACE_QUANTUM) * POPUP_SURFACE_QUANTUM;
+    return ((v + PANEL_SURFACE_QUANTUM - 1) / PANEL_SURFACE_QUANTUM) * PANEL_SURFACE_QUANTUM;
 }
 
 /* Create / resize the swapchain to cover (w, h) physical pixels. With a
  * viewport the buffer is grow-only and quantised (the content is cropped to
  * size at present time); without one it tracks (w, h) exactly. */
-static bool ensure_fx_surface(TypioWlCandidatePanel *popup, int w, int h) {
-    if (!popup || !popup->frontend || !popup->surface || w <= 0 || h <= 0) return false;
+static bool ensure_fx_surface(TypioWlCandidatePanel *panel, int w, int h) {
+    if (!panel || !panel->frontend || !panel->surface || w <= 0 || h <= 0) return false;
 
-    flux_device *dev = typio_flux_device_get();
+    flux_device *dev = typio_render_device_get();
     if (!dev) return false;
 
-    if (popup->vk_surface == VK_NULL_HANDLE) {
+    if (panel->vk_surface == VK_NULL_HANDLE) {
         VkWaylandSurfaceCreateInfoKHR ci = {
             .sType   = VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR,
             .pNext   = nullptr,
             .flags   = 0,
-            .display = popup->frontend->display,
-            .surface = popup->surface,
+            .display = panel->frontend->display,
+            .surface = panel->surface,
         };
         if (vkCreateWaylandSurfaceKHR(flux_device_vk_instance(dev), &ci, nullptr,
-                                      &popup->vk_surface) != VK_SUCCESS) {
-            popup->vk_surface = VK_NULL_HANDLE;
+                                      &panel->vk_surface) != VK_SUCCESS) {
+            panel->vk_surface = VK_NULL_HANDLE;
             return false;
         }
     }
@@ -499,19 +499,19 @@ static bool ensure_fx_surface(TypioWlCandidatePanel *popup, int w, int h) {
      * the buffer outlives small per-page width changes; without one it must
      * equal the content exactly (the buffer maps 1:1 to the surface). */
     int bw = w, bh = h;
-    if (popup->viewport) {
-        bw = popup_quantize_up(w);
-        bh = popup_quantize_up(h);
+    if (panel->viewport) {
+        bw = panel_quantize_up(w);
+        bh = panel_quantize_up(h);
     }
 
-    if (!popup->fx_surface) {
+    if (!panel->fx_surface) {
         flux_surface_desc sd = {};
         sd.type           = FLUX_TYPE_SURFACE_DESC;
-        sd.vk_surface_khr = popup->vk_surface;
+        sd.vk_surface_khr = panel->vk_surface;
         sd.width          = (uint32_t)bw;
         sd.height         = (uint32_t)bh;
         /* Non-blocking present (MAILBOX/IMMEDIATE, falls back to FIFO if the
-         * driver offers neither). The popup presents synchronously on the
+         * driver offers neither). The panel presents synchronously on the
          * single-threaded IME event loop, so a vsync/FIFO present blocks
          * vkQueuePresentKHR until the compositor releases a swapchain buffer
          * (≈ a refresh interval, and far longer when the compositor throttles
@@ -519,178 +519,178 @@ static bool ensure_fx_surface(TypioWlCandidatePanel *popup, int w, int h) {
          * makes candidate switching lag. Measured with gdb user-space stack
          * sampling: the main thread sat in anv_QueuePresentKHR ->
          * wsi_wl_swapchain_queue_present for ~86% of wall-clock while paging
-         * candidates. Tearing on a small candidate popup is irrelevant. */
+         * candidates. Tearing on a small candidate panel is irrelevant. */
         sd.vsync          = false;
-        if (flux_surface_create(dev, &sd, &popup->fx_surface) != FLUX_OK) {
-            popup->fx_surface = nullptr;
+        if (flux_surface_create(dev, &sd, &panel->fx_surface) != FLUX_OK) {
+            panel->fx_surface = nullptr;
             return false;
         }
 
         flux_canvas_desc cd = {};
         cd.type    = FLUX_TYPE_CANVAS_DESC;
-        cd.surface = popup->fx_surface;
-        if (flux_canvas_create(&cd, &popup->fx_canvas) != FLUX_OK) {
-            popup->fx_canvas = nullptr;
-            flux_surface_release(popup->fx_surface);
-            popup->fx_surface = nullptr;
+        cd.surface = panel->fx_surface;
+        if (flux_canvas_create(&cd, &panel->fx_canvas) != FLUX_OK) {
+            panel->fx_canvas = nullptr;
+            flux_surface_release(panel->fx_surface);
+            panel->fx_surface = nullptr;
             return false;
         }
 
-        if (flux_arena_init(&popup->fx_arena, 256 * 1024, nullptr) != FLUX_OK) {
-            flux_canvas_destroy(popup->fx_canvas);
-            popup->fx_canvas = nullptr;
-            flux_surface_release(popup->fx_surface);
-            popup->fx_surface = nullptr;
+        if (flux_arena_init(&panel->fx_arena, 256 * 1024, nullptr) != FLUX_OK) {
+            flux_canvas_destroy(panel->fx_canvas);
+            panel->fx_canvas = nullptr;
+            flux_surface_release(panel->fx_surface);
+            panel->fx_surface = nullptr;
             return false;
         }
 
-        popup->surf_w   = bw;
-        popup->surf_h   = bh;
-        popup->fx_ready = true;
-    } else if (popup->viewport) {
+        panel->surf_w   = bw;
+        panel->surf_h   = bh;
+        panel->fx_ready = true;
+    } else if (panel->viewport) {
         /* Grow-only: rebuild only when content exceeds the current buffer.
          * Shrinks and sub-quantum widenings reuse the existing swapchain and
          * are cropped to size by wp_viewport_set_source at present time. */
-        int nw = popup->surf_w, nh = popup->surf_h;
-        if (w > nw) nw = popup_quantize_up(w);
-        if (h > nh) nh = popup_quantize_up(h);
-        if ((nw != popup->surf_w || nh != popup->surf_h) &&
-            flux_surface_resize(popup->fx_surface, (uint32_t)nw, (uint32_t)nh) == FLUX_OK) {
-            popup->surf_w = nw;
-            popup->surf_h = nh;
+        int nw = panel->surf_w, nh = panel->surf_h;
+        if (w > nw) nw = panel_quantize_up(w);
+        if (h > nh) nh = panel_quantize_up(h);
+        if ((nw != panel->surf_w || nh != panel->surf_h) &&
+            flux_surface_resize(panel->fx_surface, (uint32_t)nw, (uint32_t)nh) == FLUX_OK) {
+            panel->surf_w = nw;
+            panel->surf_h = nh;
         }
-    } else if (popup->surf_w != w || popup->surf_h != h) {
+    } else if (panel->surf_w != w || panel->surf_h != h) {
         /* No viewport: buffer maps 1:1, must match content exactly. */
-        if (flux_surface_resize(popup->fx_surface, (uint32_t)w, (uint32_t)h) == FLUX_OK) {
-            popup->surf_w = w;
-            popup->surf_h = h;
+        if (flux_surface_resize(panel->fx_surface, (uint32_t)w, (uint32_t)h) == FLUX_OK) {
+            panel->surf_w = w;
+            panel->surf_h = h;
         }
     }
 
-    return popup->fx_ready;
+    return panel->fx_ready;
 }
 
 typedef enum {
-    POPUP_PRESENT_OK,     /* frame presented */
-    POPUP_PRESENT_RETRY,  /* transient stall; skip this frame, re-present later */
-    POPUP_PRESENT_FAIL,   /* hard failure */
-} PopupPresentResult;
+    PANEL_PRESENT_OK,     /* frame presented */
+    PANEL_PRESENT_RETRY,  /* transient stall; skip this frame, re-present later */
+    PANEL_PRESENT_FAIL,   /* hard failure */
+} PanelPresentResult;
 
-/* Record + present one frame of the popup.
+/* Record + present one frame of the panel.
  *
- * The acquire/fence wait is bounded (POPUP_PRESENT_TIMEOUT_NS) so a compositor
+ * The acquire/fence wait is bounded (PANEL_PRESENT_TIMEOUT_NS) so a compositor
  * that has stopped releasing swapchain images — e.g. while the display is
  * asleep or the surface is occluded behind a lock screen — cannot block the
- * single-threaded IME event loop. On a stall we return POPUP_PRESENT_RETRY and,
+ * single-threaded IME event loop. On a stall we return PANEL_PRESENT_RETRY and,
  * after a few consecutive stalls, recreate the swapchain (which also clears the
  * per-frame semaphores left dangling by the stalled acquires) so presentation
  * resumes cleanly once the session is back. */
-static PopupPresentResult popup_present(TypioWlCandidatePanel *popup,
-                                        const PopupGeometry *geom, int selected) {
-    if (!popup->fx_ready || !geom || !geom->palette) return POPUP_PRESENT_FAIL;
+static PanelPresentResult panel_present(TypioWlCandidatePanel *panel,
+                                        const PanelGeometry *geom, int selected) {
+    if (!panel->fx_ready || !geom || !geom->palette) return PANEL_PRESENT_FAIL;
 
     flux_frame_begin_desc bd = {};
     bd.type       = FLUX_TYPE_FRAME_BEGIN_DESC;
-    bd.timeout_ns = POPUP_PRESENT_TIMEOUT_NS;
+    bd.timeout_ns = PANEL_PRESENT_TIMEOUT_NS;
 
     flux_frame *frame = nullptr;
-    flux_result r = flux_surface_begin_frame(popup->fx_surface, &bd, &frame);
+    flux_result r = flux_surface_begin_frame(panel->fx_surface, &bd, &frame);
     if (r == FLUX_ERROR_SURFACE_LOST) {
-        (void)flux_surface_resize(popup->fx_surface,
-                                  (uint32_t)popup->surf_w, (uint32_t)popup->surf_h);
-        popup->present_timeout_streak = 0;
-        r = flux_surface_begin_frame(popup->fx_surface, &bd, &frame);
+        (void)flux_surface_resize(panel->fx_surface,
+                                  (uint32_t)panel->surf_w, (uint32_t)panel->surf_h);
+        panel->present_timeout_streak = 0;
+        r = flux_surface_begin_frame(panel->fx_surface, &bd, &frame);
     }
     if (r == FLUX_ERROR_TIMEOUT) {
-        if (++popup->present_timeout_streak >= POPUP_PRESENT_RECOVER_STREAK) {
+        if (++panel->present_timeout_streak >= PANEL_PRESENT_RECOVER_STREAK) {
             /* Stalled acquires leave stale per-frame semaphores; resizing the
              * surface to its current extent rebuilds the swapchain and resets
              * them. vkDeviceWaitIdle inside resize waits on GPU work (which
              * completes regardless of presentation), so it does not block. */
-            (void)flux_surface_resize(popup->fx_surface,
-                                      (uint32_t)popup->surf_w, (uint32_t)popup->surf_h);
-            popup->present_timeout_streak = 0;
+            (void)flux_surface_resize(panel->fx_surface,
+                                      (uint32_t)panel->surf_w, (uint32_t)panel->surf_h);
+            panel->present_timeout_streak = 0;
         }
-        return POPUP_PRESENT_RETRY;
+        return PANEL_PRESENT_RETRY;
     }
-    if (r != FLUX_OK) return POPUP_PRESENT_FAIL;
+    if (r != FLUX_OK) return PANEL_PRESENT_FAIL;
 
-    popup->present_timeout_streak = 0;
+    panel->present_timeout_streak = 0;
 
-    flux_color clear = popup_bg_color(geom->palette);
-    if (flux_canvas_begin(popup->fx_canvas, frame, &clear) != FLUX_OK) return POPUP_PRESENT_FAIL;
+    flux_color clear = panel_bg_color(geom->palette);
+    if (flux_canvas_begin(panel->fx_canvas, frame, &clear) != FLUX_OK) return PANEL_PRESENT_FAIL;
 
-    PopupPaintTarget target = { popup->fx_canvas, &popup->fx_arena };
-    popup_record(&target, geom, selected);
+    PanelPaintTarget target = { panel->fx_canvas, &panel->fx_arena };
+    panel_record(&target, geom, selected);
 
-    flux_arena_reset(&popup->fx_arena);
-    flux_canvas_end(popup->fx_canvas);
+    flux_arena_reset(&panel->fx_arena);
+    flux_canvas_end(panel->fx_canvas);
 
-    if (flux_frame_submit(frame) != FLUX_OK) return POPUP_PRESENT_FAIL;
+    if (flux_frame_submit(frame) != FLUX_OK) return PANEL_PRESENT_FAIL;
 
     r = flux_frame_present(frame);
     if (r == FLUX_ERROR_SURFACE_LOST) {
-        (void)flux_surface_resize(popup->fx_surface,
-                                  (uint32_t)popup->surf_w, (uint32_t)popup->surf_h);
-        return POPUP_PRESENT_RETRY;  /* next update repaints at the new extent */
+        (void)flux_surface_resize(panel->fx_surface,
+                                  (uint32_t)panel->surf_w, (uint32_t)panel->surf_h);
+        return PANEL_PRESENT_RETRY;  /* next update repaints at the new extent */
     }
-    return r == FLUX_OK ? POPUP_PRESENT_OK : POPUP_PRESENT_FAIL;
+    return r == FLUX_OK ? PANEL_PRESENT_OK : PANEL_PRESENT_FAIL;
 }
 
 /* ── Surface hide ───────────────────────────────────────────────────── */
 
-static void hide_surface(TypioWlCandidatePanel *popup) {
-    if (!popup || !popup->surface || !popup->visible) return;
+static void hide_surface(TypioWlCandidatePanel *panel) {
+    if (!panel || !panel->surface || !panel->visible) return;
 
     /* Unmap by committing a null buffer. The flux swapchain stays alive so a
      * later show only needs a present, not a swapchain rebuild. */
-    wl_surface_attach(popup->surface, nullptr, 0, 0);
-    wl_surface_commit(popup->surface);
+    wl_surface_attach(panel->surface, nullptr, 0, 0);
+    wl_surface_commit(panel->surface);
 
-    popup->visible       = false;
-    popup->selected      = -1;
-    popup->present_retry = false;
+    panel->visible       = false;
+    panel->selected      = -1;
+    panel->present_retry = false;
 
-    retire_geometry(popup, popup->geom);
-    popup->geom = nullptr;
+    retire_geometry(panel, panel->geom);
+    panel->geom = nullptr;
 }
 
 /* ── Core render ─────────────────────────────────────────────────────── */
 
-static bool popup_render(TypioWlCandidatePanel *popup,
+static bool panel_render(TypioWlCandidatePanel *panel,
                           const TypioCandidateList *cands,
                           const char *preedit_text,
                           const char *mode_label) {
-    const PopupConfig          *cfg;
-    TypioCandidatePanelPalette   palette;
+    const PanelConfig          *cfg;
+    TypioPanelPalette   palette;
     uint64_t                     pal_sig;
     float                        scale;
     int                          new_selected;
-    PopupDelta                   delta;
+    PanelDelta                   delta;
     uint64_t                     t0, t1;
     const char                  *delta_name = "unknown";
     static const TypioCandidateList empty_cands = {};
 
-    if (!popup || !popup->surface) return false;
+    if (!panel || !panel->surface) return false;
     if (!cands) {
         cands = &empty_cands;
     }
 
-    popup->present_retry = false;
+    panel->present_retry = false;
 
     t0  = typio_wl_monotonic_ms();
-    cfg = get_config(popup);
+    cfg = get_config(panel);
 
-    popup_config_build_palette(cfg, &popup->theme_cache, &palette);
-    pal_sig      = typio_candidate_panel_palette_hash(&palette);
-    scale        = render_scale(popup);
+    panel_config_build_palette(cfg, &panel->theme_cache, &palette);
+    pal_sig      = typio_panel_palette_hash(&palette);
+    scale        = render_scale(panel);
     new_selected = cands->count > 0 ? cands->selected : -1;
 
-    delta = classify_delta(popup->geom, cands, preedit_text, mode_label,
+    delta = classify_delta(panel->geom, cands, preedit_text, mode_label,
                             cfg, pal_sig, scale, new_selected);
 
-    if (delta == POPUP_DELTA_SELECTION && new_selected == popup->selected &&
-        popup->visible) {
+    if (delta == PANEL_DELTA_SELECTION && new_selected == panel->selected &&
+        panel->visible) {
         return true;
     }
 
@@ -700,61 +700,61 @@ static bool popup_render(TypioWlCandidatePanel *popup,
      * longer required for GPU safety but is kept conservatively. The
      * selection-only hot path frees nothing and stays out of the ring. */
     switch (delta) {
-    case POPUP_DELTA_NONE:
+    case PANEL_DELTA_NONE:
         return true;
 
-    case POPUP_DELTA_SELECTION:
+    case PANEL_DELTA_SELECTION:
         delta_name = "selection";
         break;  /* geometry unchanged; re-present with new selection */
 
-    case POPUP_DELTA_AUX: {
+    case PANEL_DELTA_AUX: {
         delta_name = "aux";
-        PopupGeometry *new_geom = popup_geometry_update_aux(&popup->render,
-                                                             popup->geom,
+        PanelGeometry *new_geom = panel_geometry_update_aux(&panel->render,
+                                                             panel->geom,
                                                              preedit_text,
                                                              mode_label);
         if (new_geom) {
-            retire_geometry(popup, popup->geom);
-            popup->geom = new_geom;
+            retire_geometry(panel, panel->geom);
+            panel->geom = new_geom;
         } else {
-            delta = POPUP_DELTA_CONTENT;  /* aux size changed; fall through */
+            delta = PANEL_DELTA_CONTENT;  /* aux size changed; fall through */
         }
         break;
     }
 
-    case POPUP_DELTA_STYLE:
+    case PANEL_DELTA_STYLE:
         delta_name = "style";
-        popup_render_ctx_invalidate(&popup->render);
+        panel_render_ctx_invalidate(&panel->render);
         break;
 
-    case POPUP_DELTA_CONTENT:
+    case PANEL_DELTA_CONTENT:
         delta_name = "content";
         break;
     }
 
-    if (delta == POPUP_DELTA_CONTENT || delta == POPUP_DELTA_STYLE) {
-        PopupGeometry *new_geom = popup_geometry_compute(&popup->render,
+    if (delta == PANEL_DELTA_CONTENT || delta == PANEL_DELTA_STYLE) {
+        PanelGeometry *new_geom = panel_geometry_compute(&panel->render,
                                                           cands,
                                                           preedit_text,
                                                           mode_label,
                                                           cfg, &palette, scale);
         if (!new_geom) {
-            typio_log_warning("Popup: geometry computation failed");
+            typio_log_warning("Panel: geometry computation failed");
             return false;
         }
-        retire_geometry(popup, popup->geom);
-        popup->geom = new_geom;
+        retire_geometry(panel, panel->geom);
+        panel->geom = new_geom;
     }
 
-    if (!popup->geom) return false;
+    if (!panel->geom) return false;
 
-    float s = popup->geom->scale > 0.0f ? popup->geom->scale : 1.0f;
-    int pw = (int)ceilf((float)popup->geom->popup_w * s);
-    int ph = (int)ceilf((float)popup->geom->popup_h * s);
+    float s = panel->geom->scale > 0.0f ? panel->geom->scale : 1.0f;
+    int pw = (int)ceilf((float)panel->geom->panel_w * s);
+    int ph = (int)ceilf((float)panel->geom->panel_h * s);
     if (pw < 1) pw = 1;
     if (ph < 1) ph = 1;
-    if (!ensure_fx_surface(popup, pw, ph)) {
-        typio_log_warning("Popup: flux surface unavailable");
+    if (!ensure_fx_surface(panel, pw, ph)) {
+        typio_log_warning("Panel: flux surface unavailable");
         return false;
     }
 
@@ -764,51 +764,51 @@ static bool popup_render(TypioWlCandidatePanel *popup,
      * scales correctly. Without those globals we fall back to the legacy
      * integer wl_surface buffer_scale path, rounding up to the nearest
      * integer (a small over-sample, but always crisp). */
-    if (popup->viewport) {
-        wl_surface_set_buffer_scale(popup->surface, 1);
+    if (panel->viewport) {
+        wl_surface_set_buffer_scale(panel->surface, 1);
         /* The swapchain buffer (surf_w × surf_h) is grow-only and usually
          * larger than this frame's content. Crop the source to the exact
          * content rect — rendered at the buffer's top-left — so the oversized
          * margin is never shown, then scale that rect to the logical size. */
-        wp_viewport_set_source(popup->viewport,
+        wp_viewport_set_source(panel->viewport,
                                wl_fixed_from_int(0), wl_fixed_from_int(0),
                                wl_fixed_from_int(pw), wl_fixed_from_int(ph));
-        wp_viewport_set_destination(popup->viewport,
-                                    popup->geom->popup_w,
-                                    popup->geom->popup_h);
+        wp_viewport_set_destination(panel->viewport,
+                                    panel->geom->panel_w,
+                                    panel->geom->panel_h);
     } else {
         int isc = (int)ceilf(s);
         if (isc < 1) isc = 1;
-        wl_surface_set_buffer_scale(popup->surface, isc);
+        wl_surface_set_buffer_scale(panel->surface, isc);
     }
 
-    PopupPresentResult pres = popup_present(popup, popup->geom, new_selected);
-    bool ok = (pres == POPUP_PRESENT_OK);
-    if (pres == POPUP_PRESENT_OK) {
-        popup->selected = new_selected;
-        popup->visible  = true;
+    PanelPresentResult pres = panel_present(panel, panel->geom, new_selected);
+    bool ok = (pres == PANEL_PRESENT_OK);
+    if (pres == PANEL_PRESENT_OK) {
+        panel->selected = new_selected;
+        panel->visible  = true;
         /* Advance the retire ring: anything pushed during the previous
-         * sweep at (epoch - POPUP_RETIRE_DEPTH + 1) is now safe to free. */
-        popup->present_epoch++;
-        retire_slot_drain(&popup->retire[popup->present_epoch % POPUP_RETIRE_DEPTH]);
-    } else if (pres == POPUP_PRESENT_RETRY) {
+         * sweep at (epoch - PANEL_RETIRE_DEPTH + 1) is now safe to free. */
+        panel->present_epoch++;
+        retire_slot_drain(&panel->retire[panel->present_epoch % PANEL_RETIRE_DEPTH]);
+    } else if (pres == PANEL_PRESENT_RETRY) {
         /* Compositor isn't releasing swapchain images yet (display asleep or
          * surface occluded after a lock/suspend). Skip this frame so the IME
          * event loop stays responsive, and ask it to re-present so the visible
          * highlight catches up once presentation resumes. selected/visible are
          * left unchanged so the retry re-renders this exact state. */
-        popup->present_retry = true;
+        panel->present_retry = true;
     } else {
-        typio_log_warning("Popup: present failed");
+        typio_log_warning("Panel: present failed");
     }
 
     t1 = typio_wl_monotonic_ms();
-    if (ok && (t1 - t0) >= POPUP_SLOW_RENDER_MS) {
-        typio_log_debug("Popup slow render: %" PRIu64 "ms delta=%s candidates=%zu "
+    if (ok && (t1 - t0) >= PANEL_SLOW_RENDER_MS) {
+        typio_log_debug("Panel slow render: %" PRIu64 "ms delta=%s candidates=%zu "
                         "selected=%d w=%d h=%d scale=%.3f sig=%" PRIu64,
                         t1 - t0, delta_name, cands->count, new_selected,
-                        popup->geom ? popup->geom->popup_w : 0,
-                        popup->geom ? popup->geom->popup_h : 0,
+                        panel->geom ? panel->geom->panel_w : 0,
+                        panel->geom ? panel->geom->panel_h : 0,
                         (double)scale, cands->content_signature);
     }
 
@@ -820,11 +820,11 @@ static bool popup_render(TypioWlCandidatePanel *popup,
 static void on_text_input_rectangle(void *data,
                                      [[maybe_unused]] struct zwp_input_popup_surface_v2 *s,
                                      int32_t x, int32_t y, int32_t w, int32_t h) {
-    TypioWlCandidatePanel *popup = (TypioWlCandidatePanel *)data;
-    popup->text_input_x = x;
-    popup->text_input_y = y;
-    popup->text_input_w = w;
-    popup->text_input_h = h;
+    TypioWlCandidatePanel *panel = (TypioWlCandidatePanel *)data;
+    panel->text_input_x = x;
+    panel->text_input_y = y;
+    panel->text_input_w = w;
+    panel->text_input_h = h;
 }
 
 static const struct zwp_input_popup_surface_v2_listener popup_surface_listener = {
@@ -849,18 +849,18 @@ static void on_surface_leave(void *data,
 static void on_surface_preferred_buffer_scale(void *data,
                                               [[maybe_unused]] struct wl_surface *surface,
                                               int32_t factor) {
-    TypioWlCandidatePanel *popup = (TypioWlCandidatePanel *)data;
-    if (!popup || factor <= 0) return;
-    if (popup->preferred_buffer_scale == factor) return;
-    popup->preferred_buffer_scale = factor;
-    refresh_visible(popup);
+    TypioWlCandidatePanel *panel = (TypioWlCandidatePanel *)data;
+    if (!panel || factor <= 0) return;
+    if (panel->preferred_buffer_scale == factor) return;
+    panel->preferred_buffer_scale = factor;
+    refresh_visible(panel);
 }
 
 static void on_surface_preferred_buffer_transform(
     [[maybe_unused]] void *data,
     [[maybe_unused]] struct wl_surface *surface,
     [[maybe_unused]] uint32_t transform) {
-    /* Popups are axis-aligned; no rotation handling needed. */
+    /* Panels are axis-aligned; no rotation handling needed. */
 }
 
 static const struct wl_surface_listener wl_surface_listener = {
@@ -877,54 +877,54 @@ static const struct wl_surface_listener wl_surface_listener = {
 static void on_fractional_preferred_scale(void *data,
                                           [[maybe_unused]] struct wp_fractional_scale_v1 *scale,
                                           uint32_t scale_120) {
-    TypioWlCandidatePanel *popup = (TypioWlCandidatePanel *)data;
-    if (!popup || scale_120 == 0) return;
-    if (popup->fractional_scale_120 == scale_120) return;
-    popup->fractional_scale_120 = scale_120;
-    refresh_visible(popup);
+    TypioWlCandidatePanel *panel = (TypioWlCandidatePanel *)data;
+    if (!panel || scale_120 == 0) return;
+    if (panel->fractional_scale_120 == scale_120) return;
+    panel->fractional_scale_120 = scale_120;
+    refresh_visible(panel);
 }
 
 static const struct wp_fractional_scale_v1_listener fractional_scale_listener = {
     .preferred_scale = on_fractional_preferred_scale,
 };
 
-/* ── Output tracking (refresh popup when scale changes) ─────────────── */
+/* ── Output tracking (refresh panel when scale changes) ─────────────── */
 
-static void refresh_visible(TypioWlCandidatePanel *popup) {
-    if (!popup || !popup->visible || !popup->frontend || !popup->frontend->session) return;
-    TypioInputContext *ctx = popup->frontend->session->ctx;
+static void refresh_visible(TypioWlCandidatePanel *panel) {
+    if (!panel || !panel->visible || !panel->frontend || !panel->frontend->session) return;
+    TypioInputContext *ctx = panel->frontend->session->ctx;
     if (!ctx) return;
-    typio_wl_text_ui_backend_update(popup->frontend->text_ui_backend, ctx);
+    typio_wl_text_ui_backend_update(panel->frontend->text_ui_backend, ctx);
 }
 
-static void track_output(TypioWlCandidatePanel *popup, struct wl_output *output) {
-    if (!popup || !output || tracks_output(popup, output)) return;
-    PopupOutputRef *r = (PopupOutputRef *)calloc(1, sizeof(*r));
+static void track_output(TypioWlCandidatePanel *panel, struct wl_output *output) {
+    if (!panel || !output || tracks_output(panel, output)) return;
+    PanelOutputRef *r = (PanelOutputRef *)calloc(1, sizeof(*r));
     if (!r) return;
     r->output = output;
-    r->next = popup->entered_outputs;
-    popup->entered_outputs = r;
-    refresh_visible(popup);
+    r->next = panel->entered_outputs;
+    panel->entered_outputs = r;
+    refresh_visible(panel);
 }
 
-static void untrack_output(TypioWlCandidatePanel *popup, struct wl_output *output) {
-    PopupOutputRef **link = &popup->entered_outputs;
+static void untrack_output(TypioWlCandidatePanel *panel, struct wl_output *output) {
+    PanelOutputRef **link = &panel->entered_outputs;
     while (*link) {
-        PopupOutputRef *r = *link;
+        PanelOutputRef *r = *link;
         if (r->output == output) {
             *link = r->next;
             free(r);
-            refresh_visible(popup);
+            refresh_visible(panel);
             return;
         }
         link = &r->next;
     }
 }
 
-static void clear_outputs(TypioWlCandidatePanel *popup) {
-    while (popup && popup->entered_outputs) {
-        PopupOutputRef *r = popup->entered_outputs;
-        popup->entered_outputs = r->next;
+static void clear_outputs(TypioWlCandidatePanel *panel) {
+    while (panel && panel->entered_outputs) {
+        PanelOutputRef *r = panel->entered_outputs;
+        panel->entered_outputs = r->next;
         free(r);
     }
 }
@@ -942,86 +942,86 @@ static bool ensure_created(TypioWlFrontend *frontend) {
 
 TypioWlCandidatePanel *typio_wl_candidate_panel_create(TypioWlFrontend *frontend) {
     if (!frontend || !frontend->compositor || !frontend->input_method) return nullptr;
-    TypioWlCandidatePanel *popup = (TypioWlCandidatePanel *)calloc(1, sizeof(*popup));
-    if (!popup) return nullptr;
-    popup->frontend = frontend;
-    popup->selected = -1;
-    popup->vk_surface = VK_NULL_HANDLE;
-    popup->surface = wl_compositor_create_surface(frontend->compositor);
-    if (!popup->surface) { free(popup); return nullptr; }
-    wl_surface_add_listener(popup->surface, &wl_surface_listener, popup);
-    popup->popup_surface = zwp_input_method_v2_get_input_popup_surface(frontend->input_method, popup->surface);
-    if (!popup->popup_surface) { wl_surface_destroy(popup->surface); free(popup); return nullptr; }
-    zwp_input_popup_surface_v2_add_listener(popup->popup_surface, &popup_surface_listener, popup);
+    TypioWlCandidatePanel *panel = (TypioWlCandidatePanel *)calloc(1, sizeof(*panel));
+    if (!panel) return nullptr;
+    panel->frontend = frontend;
+    panel->selected = -1;
+    panel->vk_surface = VK_NULL_HANDLE;
+    panel->surface = wl_compositor_create_surface(frontend->compositor);
+    if (!panel->surface) { free(panel); return nullptr; }
+    wl_surface_add_listener(panel->surface, &wl_surface_listener, panel);
+    panel->popup_surface = zwp_input_method_v2_get_input_popup_surface(frontend->input_method, panel->surface);
+    if (!panel->popup_surface) { wl_surface_destroy(panel->surface); free(panel); return nullptr; }
+    zwp_input_popup_surface_v2_add_listener(panel->popup_surface, &popup_surface_listener, panel);
 
     /* HiDPI helpers — both optional. The fractional-scale event fires
      * before the first commit, eliminating the legacy "render at 1× then
      * reupload at N×" round-trip the old enter-based path required. */
     if (frontend->viewporter) {
-        popup->viewport = wp_viewporter_get_viewport(frontend->viewporter, popup->surface);
+        panel->viewport = wp_viewporter_get_viewport(frontend->viewporter, panel->surface);
     }
     if (frontend->fractional_scale_manager) {
-        popup->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(
-            frontend->fractional_scale_manager, popup->surface);
-        if (popup->fractional_scale) {
-            wp_fractional_scale_v1_add_listener(popup->fractional_scale,
-                                                &fractional_scale_listener, popup);
+        panel->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(
+            frontend->fractional_scale_manager, panel->surface);
+        if (panel->fractional_scale) {
+            wp_fractional_scale_v1_add_listener(panel->fractional_scale,
+                                                &fractional_scale_listener, panel);
         }
     }
 
-    popup_render_ctx_init(&popup->render);
+    panel_render_ctx_init(&panel->render);
     /* Route LRU evictions through the retire ring (use-after-free guard:
      * the just-evicted layout's flux_image may still be referenced by the
      * frame the GPU is currently rendering). */
-    popup_render_ctx_set_evict(&popup->render, popup_retire_layout, popup);
-    return popup;
+    panel_render_ctx_set_evict(&panel->render, panel_retire_layout, panel);
+    return panel;
 }
 
-void typio_wl_candidate_panel_destroy(TypioWlCandidatePanel *popup) {
-    if (!popup) return;
-    hide_surface(popup);
-    fx_teardown(popup);
+void typio_wl_candidate_panel_destroy(TypioWlCandidatePanel *panel) {
+    if (!panel) return;
+    hide_surface(panel);
+    fx_teardown(panel);
     /* fx_teardown waited the device idle (or there was never a swapchain),
      * so retire-ring contents and the current geometry are safe to free now. */
-    for (size_t i = 0; i < POPUP_RETIRE_DEPTH; ++i) retire_slot_free(&popup->retire[i]);
-    popup_geometry_free(popup->geom);
-    popup->geom = nullptr;
-    popup_render_ctx_free(&popup->render);
-    clear_outputs(popup);
-    free(popup->status_text);
-    if (popup->fractional_scale) wp_fractional_scale_v1_destroy(popup->fractional_scale);
-    if (popup->viewport) wp_viewport_destroy(popup->viewport);
-    if (popup->popup_surface) zwp_input_popup_surface_v2_destroy(popup->popup_surface);
-    if (popup->surface) wl_surface_destroy(popup->surface);
-    free(popup);
+    for (size_t i = 0; i < PANEL_RETIRE_DEPTH; ++i) retire_slot_free(&panel->retire[i]);
+    panel_geometry_free(panel->geom);
+    panel->geom = nullptr;
+    panel_render_ctx_free(&panel->render);
+    clear_outputs(panel);
+    free(panel->status_text);
+    if (panel->fractional_scale) wp_fractional_scale_v1_destroy(panel->fractional_scale);
+    if (panel->viewport) wp_viewport_destroy(panel->viewport);
+    if (panel->popup_surface) zwp_input_popup_surface_v2_destroy(panel->popup_surface);
+    if (panel->surface) wl_surface_destroy(panel->surface);
+    free(panel);
 }
 
 bool typio_wl_candidate_panel_update_content(TypioWlTextUiBackend *backend,
                                                              const TypioPanelContent *content) {
     if (!backend || !backend->frontend || !content) return false;
     if (!ensure_created(backend->frontend)) return false;
-    TypioWlCandidatePanel *popup = backend->candidate_panel;
-    if (!popup) return false;
+    TypioWlCandidatePanel *panel = backend->candidate_panel;
+    if (!panel) return false;
 
     /* Update persistent status only when the caller explicitly sets it.
      * InputContext-driven updates leave status.message == nullptr so they
      * do not clobber a voice indicator that may still be visible. */
     if (content->status.active) {
-        free(popup->status_text);
-        popup->status_text = content->status.message ? strdup(content->status.message) : nullptr;
+        free(panel->status_text);
+        panel->status_text = content->status.message ? strdup(content->status.message) : nullptr;
     } else if (content->status.message != nullptr) {
         /* Explicit clear request: hide_status passes active=false with an
          * empty-string message to distinguish "clear" from "don't care". */
-        free(popup->status_text);
-        popup->status_text = nullptr;
+        free(panel->status_text);
+        panel->status_text = nullptr;
     }
 
     const TypioCandidateList *cands = content->input.candidates;
     const char *preedit = nullptr;
 
     /* No candidates and no persistent status → hide. */
-    if ((!cands || cands->count == 0) && (!popup->status_text || !popup->status_text[0])) {
-        hide_surface(popup);
+    if ((!cands || cands->count == 0) && (!panel->status_text || !panel->status_text[0])) {
+        hide_surface(panel);
         return true;
     }
 
@@ -1030,11 +1030,11 @@ bool typio_wl_candidate_panel_update_content(TypioWlTextUiBackend *backend,
      * an IME preedit string share the same palette colour, same layout
      * slot, and the same delta-classification path — no second code path. */
     if (!cands || cands->count == 0) {
-        preedit = popup->status_text;
+        preedit = panel->status_text;
     }
 
-    char *mode_label = build_mode_label(popup);
-    bool ok = popup_render(popup, cands, preedit, mode_label);
+    char *mode_label = build_mode_label(panel);
+    bool ok = panel_render(panel, cands, preedit, mode_label);
     free(mode_label);
     return ok;
 }
@@ -1065,36 +1065,36 @@ bool typio_wl_candidate_panel_present_retry_pending(TypioWlTextUiBackend *backen
 
 void typio_wl_candidate_panel_invalidate_config(TypioWlTextUiBackend *backend) {
     if (!backend || !backend->candidate_panel) return;
-    TypioWlCandidatePanel *popup = backend->candidate_panel;
-    popup->config_valid = false;
-    memset(&popup->theme_cache, 0, sizeof(popup->theme_cache));
+    TypioWlCandidatePanel *panel = backend->candidate_panel;
+    panel->config_valid = false;
+    memset(&panel->theme_cache, 0, sizeof(panel->theme_cache));
     /* Invalidating the LRU directly frees its layouts' flux_image resources
-     * (TypioTextLayout::image is released by typio_flux_layout_free). Those
+     * (TypioTextShape::image is released by typio_text_shape_free). Those
      * images may be referenced by an in-flight frame, so the LRU drain has
      * to happen behind a fence. Config changes are user-driven and rare,
      * so paying a device-idle wait here is acceptable; the per-keystroke
      * path goes through the retire ring instead. */
-    if (popup->fx_ready) {
-        flux_device *dev = typio_flux_device_get();
+    if (panel->fx_ready) {
+        flux_device *dev = typio_render_device_get();
         if (dev) flux_device_wait_idle(dev);
         /* The wait drained every in-flight frame, so any geometry parked
          * in the retire ring is also safe to free now — pull it out before
          * the LRU drop invalidates layouts those geometries reference. */
-        for (size_t i = 0; i < POPUP_RETIRE_DEPTH; ++i) {
-            retire_slot_drain(&popup->retire[i]);
+        for (size_t i = 0; i < PANEL_RETIRE_DEPTH; ++i) {
+            retire_slot_drain(&panel->retire[i]);
         }
     }
-    popup_render_ctx_invalidate(&popup->render);
-    popup_geometry_free(popup->geom);
-    popup->geom = nullptr;
+    panel_render_ctx_invalidate(&panel->render);
+    panel_geometry_free(panel->geom);
+    panel->geom = nullptr;
 }
 
 void typio_wl_candidate_panel_handle_output_change(TypioWlTextUiBackend *backend, struct wl_output *output) {
     if (!backend || !output || !backend->candidate_panel) return;
-    TypioWlCandidatePanel *popup = backend->candidate_panel;
-    if (!tracks_output(popup, output)) return;
-    if (!find_frontend_output(popup, output)) untrack_output(popup, output);
-    else refresh_visible(popup);
+    TypioWlCandidatePanel *panel = backend->candidate_panel;
+    if (!tracks_output(panel, output)) return;
+    if (!find_frontend_output(panel, output)) untrack_output(panel, output);
+    else refresh_visible(panel);
 }
 
 /* ── Status indicator (unified panel backend) ───────────────────────── */

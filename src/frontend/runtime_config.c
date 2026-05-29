@@ -60,7 +60,7 @@ static void runtime_config_refresh(TypioWlFrontend *frontend) {
      * whenever the user explicitly reloads config so memory use stays bounded
      * and any font installation changes are picked up. */
 #ifdef HAVE_FLUX
-    typio_flux_engine_purge_font_caches();
+    typio_text_shaper_purge_font_caches();
 #endif
 
     typio_wl_text_ui_backend_invalidate_config(frontend->text_ui_backend);

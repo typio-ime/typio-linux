@@ -3,7 +3,7 @@
  * @brief Record the candidate panel into a flux canvas (GPU).
  *
  * Rectangles are solid premultiplied fills; glyphs are filled outlines via
- * typio_flux_fill_layout. All coordinates are converted from logical layout
+ * typio_text_shape_fill. All coordinates are converted from logical layout
  * pixels to physical surface pixels with the output scale factor.
  */
 
@@ -41,8 +41,8 @@ static inline TypioColor tcol(double r, double g, double b)
 }
 
 static void record_row(flux_canvas *cv, flux_arena *ar,
-                       const PopupRow *row, bool selected,
-                       const TypioCandidatePanelPalette *p, float s)
+                       const PanelRow *row, bool selected,
+                       const TypioPanelPalette *p, float s)
 {
     /* One colour-independent coverage layout per row; the colour is the
      * tint applied here, so selecting a row only adds the highlight rect
@@ -59,16 +59,16 @@ static void record_row(flux_canvas *cv, flux_arena *ar,
             pcol(p->selection_r, p->selection_g, p->selection_b, p->selection_a));
     }
 
-    typio_flux_fill_layout(cv, ar, row->label_layout, row->label_x * s, row->label_y * s, label_tint);
-    typio_flux_fill_layout(cv, ar, row->layout,       row->text_x  * s, row->text_y  * s, text_tint);
+    typio_text_shape_fill(cv, ar, row->label_layout, row->label_x * s, row->label_y * s, label_tint);
+    typio_text_shape_fill(cv, ar, row->layout,       row->text_x  * s, row->text_y  * s, text_tint);
 }
 
-static void record_border(flux_canvas *cv, const PopupGeometry *g, float s)
+static void record_border(flux_canvas *cv, const PanelGeometry *g, float s)
 {
-    const TypioCandidatePanelPalette *p = g->palette;
+    const TypioPanelPalette *p = g->palette;
     flux_color bc = pcol(p->border_r, p->border_g, p->border_b, p->border_a);
-    float W = (float)g->popup_w;
-    float H = (float)g->popup_h;
+    float W = (float)g->panel_w;
+    float H = (float)g->panel_h;
 
     flux_canvas_fill_rect_color(cv, rect_px(0,     0,     W, 1, s), bc);  /* top    */
     flux_canvas_fill_rect_color(cv, rect_px(0,     H - 1, W, 1, s), bc);  /* bottom */
@@ -77,25 +77,25 @@ static void record_border(flux_canvas *cv, const PopupGeometry *g, float s)
 }
 
 static void record_mode_label(flux_canvas *cv, flux_arena *ar,
-                              const PopupGeometry *g, float s)
+                              const PanelGeometry *g, float s)
 {
-    const TypioCandidatePanelPalette *p = g->palette;
+    const TypioPanelPalette *p = g->palette;
     if (!g->mode_layout || g->mode_h <= 0) return;
 
     if (g->mode_divider_y >= 0) {
         flux_canvas_fill_rect_color(
-            cv, rect_px((float)POPUP_PAD_X, (float)g->mode_divider_y + 0.5f,
-                        (float)(g->popup_w - 2 * POPUP_PAD_X), 1, s),
+            cv, rect_px((float)PANEL_PAD_X, (float)g->mode_divider_y + 0.5f,
+                        (float)(g->panel_w - 2 * PANEL_PAD_X), 1, s),
             pcol(p->border_r, p->border_g, p->border_b, p->border_a * 0.5));
     }
-    typio_flux_fill_layout(cv, ar, g->mode_layout, g->mode_x * s, g->mode_y * s,
+    typio_text_shape_fill(cv, ar, g->mode_layout, g->mode_x * s, g->mode_y * s,
                            tcol(p->muted_r, p->muted_g, p->muted_b));
 }
 
 /* ── Public API ─────────────────────────────────────────────────────── */
 
-void popup_record(const PopupPaintTarget *target,
-                  const PopupGeometry *geom,
+void panel_record(const PanelPaintTarget *target,
+                  const PanelGeometry *geom,
                   int selected)
 {
     if (!target || !target->canvas || !geom || !geom->palette) return;
@@ -107,8 +107,8 @@ void popup_record(const PopupPaintTarget *target,
     record_border(cv, geom, s);
 
     if (geom->preedit_layout) {
-        const TypioCandidatePanelPalette *p = geom->palette;
-        typio_flux_fill_layout(cv, ar, geom->preedit_layout,
+        const TypioPanelPalette *p = geom->palette;
+        typio_text_shape_fill(cv, ar, geom->preedit_layout,
                                geom->pre_x * s, geom->pre_y * s,
                                tcol(p->preedit_r, p->preedit_g, p->preedit_b));
     }

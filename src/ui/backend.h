@@ -32,7 +32,7 @@ bool typio_wl_text_ui_backend_update_content(TypioWlTextUiBackend *backend,
                                              const TypioPanelContent *content);
 
 /* Status indicator (Phase 1 of unified panel backend).
- * These functions show or hide a transient status banner in the popup
+ * These functions show or hide a transient status banner in the panel
  * surface, replacing the previous preedit-string hack for voice state.
  * Internally they build a TypioPanelContent and call update_content(). */
 bool typio_wl_text_ui_backend_show_status(TypioWlTextUiBackend *backend,

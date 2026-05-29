@@ -76,26 +76,26 @@ static void format_candidate_parts(const TypioCandidate *c, size_t idx,
 
 /* ── Flux context management ────────────────────────────────────────── */
 
-void popup_render_ctx_init(PopupRenderCtx *pc) {
+void panel_render_ctx_init(PanelRenderCtx *pc) {
     if (!pc) return;
     memset(pc, 0, sizeof(*pc));
-    pc->engine = typio_flux_engine_create();
+    pc->engine = typio_text_shaper_create();
 }
 
-void popup_render_ctx_set_evict(PopupRenderCtx *pc,
-                                PopupLayoutEvictFn cb, void *user) {
+void panel_render_ctx_set_evict(PanelRenderCtx *pc,
+                                PanelLayoutEvictFn cb, void *user) {
     if (!pc) return;
     pc->evict_cb   = cb;
     pc->evict_user = user;
 }
 
 /* The cleanup paths (free, invalidate) are only called when the caller has
- * already drained in-flight GPU work (popup_destroy via fx_teardown,
+ * already drained in-flight GPU work (panel_destroy via fx_teardown,
  * invalidate_config via flux_device_wait_idle), so eager free is safe and
  * the evict callback is intentionally bypassed. */
-void popup_render_ctx_free(PopupRenderCtx *pc) {
+void panel_render_ctx_free(PanelRenderCtx *pc) {
     if (!pc) return;
-    for (size_t i = 0; i < POPUP_LAYOUT_CACHE_CAP; ++i) {
+    for (size_t i = 0; i < PANEL_LAYOUT_CACHE_CAP; ++i) {
         if (pc->entries[i].layout) {
             pc->engine->vtable->free_layout(pc->entries[i].layout);
         }
@@ -104,14 +104,14 @@ void popup_render_ctx_free(PopupRenderCtx *pc) {
         }
     }
     if (pc->engine) {
-        typio_flux_engine_destroy(pc->engine);
+        typio_text_shaper_destroy(pc->engine);
     }
     memset(pc, 0, sizeof(*pc));
 }
 
-void popup_render_ctx_invalidate(PopupRenderCtx *pc) {
+void panel_render_ctx_invalidate(PanelRenderCtx *pc) {
     if (!pc) return;
-    for (size_t i = 0; i < POPUP_LAYOUT_CACHE_CAP; ++i) {
+    for (size_t i = 0; i < PANEL_LAYOUT_CACHE_CAP; ++i) {
         if (pc->entries[i].layout) {
             pc->engine->vtable->free_layout(pc->entries[i].layout);
         }
@@ -125,7 +125,7 @@ void popup_render_ctx_invalidate(PopupRenderCtx *pc) {
 
 /* ── LRU cache lookup / insert ──────────────────────────────────────── */
 
-static PopupLayoutEntry *lru_get_or_create(PopupRenderCtx *pc,
+static PanelLayoutEntry *lru_get_or_create(PanelRenderCtx *pc,
                                             const char *label,
                                             const char *text,
                                             const char *label_font_desc,
@@ -136,8 +136,8 @@ static PopupLayoutEntry *lru_get_or_create(PopupRenderCtx *pc,
 
     pc->tick++;
 
-    for (size_t i = 0; i < POPUP_LAYOUT_CACHE_CAP; ++i) {
-        PopupLayoutEntry *e = &pc->entries[i];
+    for (size_t i = 0; i < PANEL_LAYOUT_CACHE_CAP; ++i) {
+        PanelLayoutEntry *e = &pc->entries[i];
         if (e->layout && e->key == key &&
             strcmp(e->label, label) == 0 &&
             strcmp(e->text, text) == 0 &&
@@ -152,7 +152,7 @@ static PopupLayoutEntry *lru_get_or_create(PopupRenderCtx *pc,
         }
     }
 
-    PopupLayoutEntry *victim = &pc->entries[lru_idx];
+    PanelLayoutEntry *victim = &pc->entries[lru_idx];
     /* An eviction here happens on the per-keystroke hot path. Layouts are now
      * pure CPU structures — their glyph pixels live in the shared persistent
      * atlas (ADR-0012), not on the layout — so an evicted layout is no longer
@@ -188,7 +188,7 @@ static PopupLayoutEntry *lru_get_or_create(PopupRenderCtx *pc,
 
 static void scaled_font_desc(char *out, size_t out_size, const char *font_desc, float scale) {
     char family[128] = "Sans";
-    int size = POPUP_DEFAULT_FONT_SIZE;
+    int size = PANEL_DEFAULT_FONT_SIZE;
     const char *last_space;
 
     if (!out || out_size == 0) return;
@@ -202,7 +202,7 @@ static void scaled_font_desc(char *out, size_t out_size, const char *font_desc, 
             memcpy(family, font_desc, len);
             family[len] = '\0';
             size = atoi(last_space + 1);
-            if (size <= 0) size = POPUP_DEFAULT_FONT_SIZE;
+            if (size <= 0) size = PANEL_DEFAULT_FONT_SIZE;
         } else {
             snprintf(family, sizeof(family), "%s", font_desc);
         }
@@ -225,7 +225,7 @@ static float logical_float(float physical_px, float scale) {
 
 /* ── Geometry helpers ───────────────────────────────────────────────── */
 
-static void compute_positions_vertical(PopupGeometry *g, int pre_h_used) {
+static void compute_positions_vertical(PanelGeometry *g, int pre_h_used) {
     int content_w = g->pre_w;
     int content_h = pre_h_used ? g->pre_h : 0;
     int max_label_w = 0;
@@ -235,118 +235,118 @@ static void compute_positions_vertical(PopupGeometry *g, int pre_h_used) {
     }
 
     for (size_t i = 0; i < g->row_count; ++i) {
-        int rw = max_label_w + POPUP_LABEL_GAP + g->rows[i].text_w + POPUP_ROW_PAD_X * 2;
+        int rw = max_label_w + PANEL_LABEL_GAP + g->rows[i].text_w + PANEL_ROW_PAD_X * 2;
         if (rw > content_w) content_w = rw;
         content_h += g->rows[i].h;
-        if (i + 1 < g->row_count) content_h += POPUP_ROW_GAP;
+        if (i + 1 < g->row_count) content_h += PANEL_ROW_GAP;
     }
 
-    if (pre_h_used && g->row_count > 0) content_h += POPUP_SECTION_GAP;
+    if (pre_h_used && g->row_count > 0) content_h += PANEL_SECTION_GAP;
 
     if (g->mode_layout && g->mode_h > 0) {
-        content_h += POPUP_SECTION_GAP + g->mode_h;
+        content_h += PANEL_SECTION_GAP + g->mode_h;
         if (g->mode_w > content_w) content_w = g->mode_w;
     }
 
-    g->popup_w = content_w + POPUP_PAD_X * 2;
-    if (g->popup_w < POPUP_MIN_WIDTH) g->popup_w = POPUP_MIN_WIDTH;
-    g->popup_h = content_h + POPUP_PAD_Y * 2;
+    g->panel_w = content_w + PANEL_PAD_X * 2;
+    if (g->panel_w < PANEL_MIN_WIDTH) g->panel_w = PANEL_MIN_WIDTH;
+    g->panel_h = content_h + PANEL_PAD_Y * 2;
 
-    int y = POPUP_PAD_Y;
-    if (pre_h_used) y += g->pre_h + POPUP_SECTION_GAP;
+    int y = PANEL_PAD_Y;
+    if (pre_h_used) y += g->pre_h + PANEL_SECTION_GAP;
 
-    /* Horizontal centering offset for the entire candidate block if popup is wider than needed. */
-    int h_offset = (g->popup_w - POPUP_PAD_X * 2 - (content_w - POPUP_ROW_PAD_X * 2)) / 2;
+    /* Horizontal centering offset for the entire candidate block if panel is wider than needed. */
+    int h_offset = (g->panel_w - PANEL_PAD_X * 2 - (content_w - PANEL_ROW_PAD_X * 2)) / 2;
     if (h_offset < 0) h_offset = 0;
 
     for (size_t i = 0; i < g->row_count; ++i) {
-        int row_content_h = g->rows[i].h - POPUP_ROW_PAD_Y * 2;
+        int row_content_h = g->rows[i].h - PANEL_ROW_PAD_Y * 2;
         /* Center text vertically within the row content area, and baseline-align the label to it. */
-        float text_top = (float)(y + POPUP_ROW_PAD_Y)
+        float text_top = (float)(y + PANEL_ROW_PAD_Y)
                          + ((float)row_content_h - (float)g->rows[i].text_h) * 0.5f;
         float baseline_y = text_top + g->rows[i].text_ink_y_offset;
         float label_top = baseline_y - g->rows[i].label_ink_y_offset;
 
-        g->rows[i].x = POPUP_PAD_X;
+        g->rows[i].x = PANEL_PAD_X;
         g->rows[i].y = y;
-        g->rows[i].w = g->popup_w - POPUP_PAD_X * 2;
-        g->rows[i].label_x = (float)(g->rows[i].x + POPUP_ROW_PAD_X + h_offset);
+        g->rows[i].w = g->panel_w - PANEL_PAD_X * 2;
+        g->rows[i].label_x = (float)(g->rows[i].x + PANEL_ROW_PAD_X + h_offset);
         g->rows[i].label_y = label_top;
-        g->rows[i].text_x  = (float)(g->rows[i].x + POPUP_ROW_PAD_X + max_label_w + POPUP_LABEL_GAP + h_offset);
+        g->rows[i].text_x  = (float)(g->rows[i].x + PANEL_ROW_PAD_X + max_label_w + PANEL_LABEL_GAP + h_offset);
         g->rows[i].text_y  = text_top;
         y += g->rows[i].h;
-        if (i + 1 < g->row_count) y += POPUP_ROW_GAP;
+        if (i + 1 < g->row_count) y += PANEL_ROW_GAP;
     }
 
-    g->pre_x = (float)POPUP_PAD_X;
-    g->pre_y = (float)POPUP_PAD_Y;
+    g->pre_x = (float)PANEL_PAD_X;
+    g->pre_y = (float)PANEL_PAD_Y;
 
     if (g->mode_layout && g->mode_h > 0) {
-        g->mode_x = (float)(g->popup_w - POPUP_PAD_X - g->mode_w);
-        g->mode_divider_y = g->popup_h - POPUP_PAD_Y - g->mode_h - POPUP_ROW_PAD_Y;
-        g->mode_y = (float)(g->popup_h - POPUP_PAD_Y - g->mode_h);
+        g->mode_x = (float)(g->panel_w - PANEL_PAD_X - g->mode_w);
+        g->mode_divider_y = g->panel_h - PANEL_PAD_Y - g->mode_h - PANEL_ROW_PAD_Y;
+        g->mode_y = (float)(g->panel_h - PANEL_PAD_Y - g->mode_h);
     } else {
         g->mode_divider_y = -1;
     }
 }
 
-static void compute_positions_horizontal(PopupGeometry *g, int pre_h_used) {
+static void compute_positions_horizontal(PanelGeometry *g, int pre_h_used) {
     int content_w = g->pre_w;
     int content_h = pre_h_used ? g->pre_h : 0;
     int row_w = 0;
     int row_h = 0;
 
     for (size_t i = 0; i < g->row_count; ++i) {
-        if (row_w > 0) row_w += POPUP_COL_GAP;
+        if (row_w > 0) row_w += PANEL_COL_GAP;
         row_w += g->rows[i].w;
         if (g->rows[i].h > row_h) row_h = g->rows[i].h;
     }
     content_h += row_h;
     int total_row = row_w;
-    if (g->mode_layout && g->mode_w > 0) total_row += POPUP_COL_GAP + g->mode_w;
+    if (g->mode_layout && g->mode_w > 0) total_row += PANEL_COL_GAP + g->mode_w;
     content_w = total_row > g->pre_w ? total_row : g->pre_w;
 
-    if (pre_h_used && g->row_count > 0) content_h += POPUP_SECTION_GAP;
+    if (pre_h_used && g->row_count > 0) content_h += PANEL_SECTION_GAP;
 
-    g->popup_w = content_w + POPUP_PAD_X * 2;
-    if (g->popup_w < POPUP_MIN_WIDTH) g->popup_w = POPUP_MIN_WIDTH;
-    g->popup_h = content_h + POPUP_PAD_Y * 2;
+    g->panel_w = content_w + PANEL_PAD_X * 2;
+    if (g->panel_w < PANEL_MIN_WIDTH) g->panel_w = PANEL_MIN_WIDTH;
+    g->panel_h = content_h + PANEL_PAD_Y * 2;
 
-    int y = POPUP_PAD_Y;
-    if (pre_h_used) y += g->pre_h + POPUP_SECTION_GAP;
+    int y = PANEL_PAD_Y;
+    if (pre_h_used) y += g->pre_h + PANEL_SECTION_GAP;
 
-    int x = POPUP_PAD_X;
+    int x = PANEL_PAD_X;
     for (size_t i = 0; i < g->row_count; ++i) {
-        int row_content_h = g->rows[i].h - POPUP_ROW_PAD_Y * 2;
+        int row_content_h = g->rows[i].h - PANEL_ROW_PAD_Y * 2;
         /* Center text vertically within the row content area, and baseline-align the label to it. */
-        float text_top = (float)(y + POPUP_ROW_PAD_Y)
+        float text_top = (float)(y + PANEL_ROW_PAD_Y)
                          + ((float)row_content_h - (float)g->rows[i].text_h) * 0.5f;
         float baseline_y = text_top + g->rows[i].text_ink_y_offset;
         float label_top = baseline_y - g->rows[i].label_ink_y_offset;
 
         g->rows[i].x = x;
         g->rows[i].y = y;
-        g->rows[i].label_x = (float)(x + POPUP_ROW_PAD_X);
+        g->rows[i].label_x = (float)(x + PANEL_ROW_PAD_X);
         g->rows[i].label_y = label_top;
-        g->rows[i].text_x  = (float)(x + POPUP_ROW_PAD_X + g->rows[i].label_w + POPUP_LABEL_GAP);
+        g->rows[i].text_x  = (float)(x + PANEL_ROW_PAD_X + g->rows[i].label_w + PANEL_LABEL_GAP);
         g->rows[i].text_y  = text_top;
-        x += g->rows[i].w + POPUP_COL_GAP;
+        x += g->rows[i].w + PANEL_COL_GAP;
     }
 
-    g->pre_x = (float)POPUP_PAD_X;
-    g->pre_y = (float)POPUP_PAD_Y;
+    g->pre_x = (float)PANEL_PAD_X;
+    g->pre_y = (float)PANEL_PAD_Y;
 
     if (g->mode_layout && g->mode_h > 0) {
-        g->mode_x = (float)(g->popup_w - POPUP_PAD_X - g->mode_w);
-        g->mode_y = (float)(y + POPUP_ROW_PAD_Y);
+        g->mode_x = (float)(g->panel_w - PANEL_PAD_X - g->mode_w);
+        g->mode_y = (float)(y + PANEL_ROW_PAD_Y);
         g->mode_divider_y = -1;
     } else {
         g->mode_divider_y = -1;
     }
 }
 
-static void compute_positions(PopupGeometry *g, const PopupConfig *cfg, int pre_h_used) {
-    if (cfg->layout_mode == POPUP_LAYOUT_VERTICAL) {
+static void compute_positions(PanelGeometry *g, const PanelConfig *cfg, int pre_h_used) {
+    if (cfg->layout_mode == PANEL_LAYOUT_VERTICAL) {
         compute_positions_vertical(g, pre_h_used);
     } else {
         compute_positions_horizontal(g, pre_h_used);
@@ -355,18 +355,18 @@ static void compute_positions(PopupGeometry *g, const PopupConfig *cfg, int pre_
 
 /* ── Public API ─────────────────────────────────────────────────────── */
 
-PopupGeometry *popup_geometry_compute(PopupRenderCtx *pc,
+PanelGeometry *panel_geometry_compute(PanelRenderCtx *pc,
                                       const TypioCandidateList *candidates,
                                       const char *preedit_text,
                                       const char *mode_label,
-                                      const PopupConfig *cfg,
-                                      const TypioCandidatePanelPalette *palette,
+                                      const PanelConfig *cfg,
+                                      const TypioPanelPalette *palette,
                                       float scale) {
     if (!pc || !candidates || !cfg || !palette) return nullptr;
-    if (candidates->count > POPUP_MAX_ROWS) return nullptr;
+    if (candidates->count > PANEL_MAX_ROWS) return nullptr;
     if (!(scale > 0.0f)) scale = 1.0f;
 
-    PopupGeometry *g = (PopupGeometry *)calloc(1, sizeof(*g));
+    PanelGeometry *g = (PanelGeometry *)calloc(1, sizeof(*g));
     if (!g) return nullptr;
 
     g->row_count = candidates->count;
@@ -375,7 +375,7 @@ PopupGeometry *popup_geometry_compute(PopupRenderCtx *pc,
     g->config = *cfg;
     g->resolved_palette = *palette;
     g->palette = &g->resolved_palette;
-    g->palette_sig = typio_candidate_panel_palette_hash(palette);
+    g->palette_sig = typio_panel_palette_hash(palette);
     snprintf(g->preedit_text, sizeof(g->preedit_text), "%s", preedit_text ? preedit_text : "");
     snprintf(g->mode_label, sizeof(g->mode_label), "%s", mode_label ? mode_label : "");
 
@@ -397,7 +397,7 @@ PopupGeometry *popup_geometry_compute(PopupRenderCtx *pc,
 
         /* One colour-independent entry serves both the selected and
          * unselected states (the highlight + tint differ at draw time). */
-        PopupLayoutEntry *entry = lru_get_or_create(pc, label_buf, text_buf,
+        PanelLayoutEntry *entry = lru_get_or_create(pc, label_buf, text_buf,
                                                      scaled_label_font, scaled_font);
 
         g->rows[i].label_layout = entry->label_layout;
@@ -409,9 +409,9 @@ PopupGeometry *popup_geometry_compute(PopupRenderCtx *pc,
         g->rows[i].text_h  = logical_px(entry->pixel_h, scale);
         g->rows[i].label_ink_y_offset = logical_float(entry->label_pixel_baseline, scale);
         g->rows[i].text_ink_y_offset  = logical_float(entry->pixel_baseline, scale);
-        g->rows[i].w = g->rows[i].label_w + POPUP_LABEL_GAP + g->rows[i].text_w + POPUP_ROW_PAD_X * 2;
+        g->rows[i].w = g->rows[i].label_w + PANEL_LABEL_GAP + g->rows[i].text_w + PANEL_ROW_PAD_X * 2;
         g->rows[i].h = (g->rows[i].label_h > g->rows[i].text_h
-                        ? g->rows[i].label_h : g->rows[i].text_h) + POPUP_ROW_PAD_Y * 2;
+                        ? g->rows[i].label_h : g->rows[i].text_h) + PANEL_ROW_PAD_Y * 2;
     }
 
     if (preedit_text && preedit_text[0]) {
@@ -432,16 +432,16 @@ PopupGeometry *popup_geometry_compute(PopupRenderCtx *pc,
     return g;
 }
 
-PopupGeometry *popup_geometry_update_aux(PopupRenderCtx *pc,
-                                         const PopupGeometry *base,
+PanelGeometry *panel_geometry_update_aux(PanelRenderCtx *pc,
+                                         const PanelGeometry *base,
                                          const char *preedit_text,
                                          const char *mode_label) {
     if (!pc || !base) return nullptr;
 
     float new_pre_w = 0, new_pre_h = 0;
     float new_mode_w = 0, new_mode_h = 0;
-    TypioTextLayout *new_preedit_layout = nullptr;
-    TypioTextLayout *new_mode_layout = nullptr;
+    TypioTextShape *new_preedit_layout = nullptr;
+    TypioTextShape *new_mode_layout = nullptr;
 
     char scaled_aux_font[96];
 
@@ -465,7 +465,7 @@ PopupGeometry *popup_geometry_update_aux(PopupRenderCtx *pc,
         return nullptr;
     }
 
-    PopupGeometry *g = (PopupGeometry *)malloc(sizeof(*g));
+    PanelGeometry *g = (PanelGeometry *)malloc(sizeof(*g));
     if (!g) {
         if (new_preedit_layout) pc->engine->vtable->free_layout(new_preedit_layout);
         if (new_mode_layout) pc->engine->vtable->free_layout(new_mode_layout);
@@ -480,14 +480,14 @@ PopupGeometry *popup_geometry_update_aux(PopupRenderCtx *pc,
     return g;
 }
 
-void popup_geometry_free(PopupGeometry *g) {
+void panel_geometry_free(PanelGeometry *g) {
     if (!g) return;
-    typio_flux_layout_free(g->preedit_layout);
-    typio_flux_layout_free(g->mode_layout);
+    typio_text_shape_free(g->preedit_layout);
+    typio_text_shape_free(g->mode_layout);
     free(g);
 }
 
-void popup_config_load(PopupConfig *cfg, TypioInstance *instance) {
+void panel_config_load(PanelConfig *cfg, TypioInstance *instance) {
     TypioConfig *display_cfg = nullptr;
     const char  *theme;
     const char  *layout;
@@ -497,9 +497,9 @@ void popup_config_load(PopupConfig *cfg, TypioInstance *instance) {
 
     if (!cfg) return;
 
-    cfg->theme_mode     = TYPIO_CANDIDATE_POPUP_THEME_AUTO;
-    cfg->layout_mode    = POPUP_LAYOUT_VERTICAL;
-    cfg->font_size      = POPUP_DEFAULT_FONT_SIZE;
+    cfg->theme_mode     = TYPIO_PANEL_THEME_AUTO;
+    cfg->layout_mode    = PANEL_LAYOUT_VERTICAL;
+    cfg->font_size      = PANEL_DEFAULT_FONT_SIZE;
     cfg->mode_indicator = false;
     memset(&cfg->light_custom, 0, sizeof(cfg->light_custom));
     memset(&cfg->dark_custom,  0, sizeof(cfg->dark_custom));
@@ -507,7 +507,7 @@ void popup_config_load(PopupConfig *cfg, TypioInstance *instance) {
 
     /*
      * Display settings live in `wayland.toml` next to libtypio's `core.toml`
-     * — the frontend, not the framework, owns popup styling. Load it on demand
+     * — the frontend, not the framework, owns panel styling. Load it on demand
      * from the instance's config dir. Missing file is fine: defaults above
      * remain in effect.
      */
@@ -526,15 +526,15 @@ void popup_config_load(PopupConfig *cfg, TypioInstance *instance) {
     theme  = typio_config_get_string(global_cfg, "display.popup_theme",      nullptr);
     layout = typio_config_get_string(global_cfg, "display.candidate_layout", nullptr);
     font_size = typio_config_get_int(global_cfg, "display.font_size",
-                                      POPUP_DEFAULT_FONT_SIZE);
+                                      PANEL_DEFAULT_FONT_SIZE);
 
     if (theme) {
-        if      (strcmp(theme, "dark")  == 0) cfg->theme_mode = TYPIO_CANDIDATE_POPUP_THEME_DARK;
-        else if (strcmp(theme, "light") == 0) cfg->theme_mode = TYPIO_CANDIDATE_POPUP_THEME_LIGHT;
+        if      (strcmp(theme, "dark")  == 0) cfg->theme_mode = TYPIO_PANEL_THEME_DARK;
+        else if (strcmp(theme, "light") == 0) cfg->theme_mode = TYPIO_PANEL_THEME_LIGHT;
     }
 
     if (layout && strcmp(layout, "horizontal") == 0) {
-        cfg->layout_mode = POPUP_LAYOUT_HORIZONTAL;
+        cfg->layout_mode = PANEL_LAYOUT_HORIZONTAL;
     }
 
     if (font_size < 6)  font_size = 6;
@@ -578,10 +578,10 @@ void popup_config_load(PopupConfig *cfg, TypioInstance *instance) {
     }
 }
 
-void popup_config_build_palette(const PopupConfig *cfg, TypioCandidatePanelThemeCache *cache, TypioCandidatePanelPalette *out) {
-    const TypioCandidatePanelPalette *base = typio_candidate_panel_theme_resolve(cache, cfg->theme_mode);
+void panel_config_build_palette(const PanelConfig *cfg, TypioPanelThemeCache *cache, TypioPanelPalette *out) {
+    const TypioPanelPalette *base = typio_panel_theme_resolve(cache, cfg->theme_mode);
     *out = *base;
-    const PopupThemeVariant *custom = (base == typio_candidate_panel_palette_dark()) ? &cfg->dark_custom : &cfg->light_custom;
+    const PanelThemeVariant *custom = (base == typio_panel_palette_dark()) ? &cfg->dark_custom : &cfg->light_custom;
     if (custom->has_bg) { out->bg_r = custom->bg_r; out->bg_g = custom->bg_g; out->bg_b = custom->bg_b; out->bg_a = custom->bg_a; }
     if (custom->has_border) { out->border_r = custom->border_r; out->border_g = custom->border_g; out->border_b = custom->border_b; out->border_a = custom->border_a; }
     if (custom->has_text) { out->text_r = custom->text_r; out->text_g = custom->text_g; out->text_b = custom->text_b; }
