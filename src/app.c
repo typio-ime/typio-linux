@@ -195,10 +195,29 @@ static void typiod_update_tray_tooltip(TypiodApp *app) {
         voice_label = "Disabled";
     }
 
-    snprintf(description, sizeof(description),
-             "Keyboard: %s\nVoice: %s",
-             keyboard_label,
-             voice_label);
+    /* Surface the active profile (e.g. Rime schema name) on the keyboard line
+     * so the schema is visible even though the tray icon is engagement-only. */
+    const char *profile_label = nullptr;
+    if (app->state_controller) {
+        const TypioEngineStatus *mode =
+            typio_state_controller_get_current_status(app->state_controller);
+        if (mode && mode->profile_label && mode->profile_label[0]) {
+            profile_label = mode->profile_label;
+        }
+    }
+
+    if (profile_label) {
+        snprintf(description, sizeof(description),
+                 "Keyboard: %s (%s)\nVoice: %s",
+                 keyboard_label,
+                 profile_label,
+                 voice_label);
+    } else {
+        snprintf(description, sizeof(description),
+                 "Keyboard: %s\nVoice: %s",
+                 keyboard_label,
+                 voice_label);
+    }
     typio_tray_set_tooltip(app->tray, "Typio", description);
 
     if (keyboard_label_owned) {
@@ -285,7 +304,7 @@ static void typiod_update_tray_engine_status(TypiodApp *app) {
 #endif
 
 static void typiod_on_mode_change(TypioInstance *instance,
-                                        const TypioEngineMode *mode,
+                                        const TypioEngineStatus *mode,
                                         void *user_data) {
     TypiodApp *app = user_data;
     TypioRegistry *registry;
@@ -295,10 +314,10 @@ static void typiod_on_mode_change(TypioInstance *instance,
         registry = typio_instance_get_registry(app->instance);
         name = registry ? typio_registry_get_active_keyboard(registry) : nullptr;
 #ifdef HAVE_WAYLAND
-        if (app->wl_frontend && name && mode && mode->mode_id && mode->mode_id[0]) {
+        if (app->wl_frontend && name && mode && mode->profile_id && mode->profile_id[0]) {
             typio_wl_frontend_remember_active_mode(app->wl_frontend,
                                                    name,
-                                                   mode->mode_id);
+                                                   mode->profile_id);
         }
 #endif
         typio_free_string(name);
@@ -307,7 +326,9 @@ static void typiod_on_mode_change(TypioInstance *instance,
     (void) instance;
 
     if (app && app->state_controller) {
-        typio_state_controller_notify_mode_changed(app->state_controller, mode);
+        /* The tray bus (sole owner of state-driven tray updates) refreshes the
+         * icon and tooltip — including the active profile name — from this. */
+        typio_state_controller_notify_status_changed(app->state_controller, mode);
     } else {
         typiod_sync_runtime_surfaces(app);
     }
@@ -757,7 +778,7 @@ static int typiod_run_wayland(TypiodApp *app) {
     typio_instance_set_status_icon_changed_callback(app->instance,
                                                     typiod_on_status_icon_change,
                                                     app);
-    typio_instance_set_mode_changed_callback(app->instance,
+    typio_instance_set_status_changed_callback(app->instance,
                                               typiod_on_mode_change,
                                               app);
 

@@ -335,7 +335,7 @@ static void identity_restore_mode(TypioWlFrontend *frontend) {
     char *active_name = nullptr;
     char *engine_name = nullptr;
     char *mode_id = nullptr;
-    const TypioEngineMode *current_mode;
+    const TypioEngineStatus *current_mode;
 
     if (!frontend || !frontend->instance || !frontend->session ||
         !frontend->session->ctx || !frontend->current_identity.provider_name ||
@@ -359,20 +359,22 @@ static void identity_restore_mode(TypioWlFrontend *frontend) {
         goto cleanup;
     }
 
-    current_mode = typio_instance_get_last_mode(frontend->instance);
-    if (current_mode && current_mode->mode_id &&
-        typio_str_equals(current_mode->mode_id, mode_id)) {
+    current_mode = typio_instance_get_last_status(frontend->instance);
+    if (current_mode && current_mode->profile_id &&
+        typio_str_equals(current_mode->profile_id, mode_id)) {
         goto cleanup;
     }
 
-    /* The current TypioRegistry C surface does not expose a host-callable
-     * `set_mode` on the active engine — engines manage modes internally and
-     * report them via `typio_instance_notify_mode`. We can no longer push a
-     * stored mode_id back into the engine from here. Persisted mode is still
-     * remembered; restoring it will require a libtypio API addition. */
-    typio_log_debug("Mode-restore requested (%s) for %s, but registry API "
-                    "lacks a set_mode helper — skipping",
-                    mode_id, frontend->current_identity.stable_key);
+    /* Push the remembered profile back into the active engine. The engine's
+     * own "schema"/option notification then drives the status reflection. */
+    if (typio_input_context_set_status(frontend->session->ctx, mode_id) == TYPIO_OK) {
+        typio_log_debug("Restored mode '%s' for %s",
+                        mode_id, frontend->current_identity.stable_key);
+    } else {
+        typio_log_debug("Mode-restore '%s' for %s not applied "
+                        "(engine has no set_mode or rejected it)",
+                        mode_id, frontend->current_identity.stable_key);
+    }
 
 cleanup:
     typio_free_string(active_name);

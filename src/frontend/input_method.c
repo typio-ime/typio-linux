@@ -28,6 +28,9 @@ static void on_commit_callback(TypioInputContext *ctx, const char *text,
 static void on_composition_callback(TypioInputContext *ctx,
                                     const TypioComposition *composition,
                                     void *user_data);
+static void on_delete_surrounding_callback(TypioInputContext *ctx,
+                                           uint32_t before, uint32_t after,
+                                           void *user_data);
 static void update_wayland_text_ui(TypioWlSession *session, TypioInputContext *ctx);
 
 static char *typio_dup_or_null(const char *s) {
@@ -270,6 +273,9 @@ TypioWlSession *typio_wl_session_create(TypioWlFrontend *frontend) {
     /* Set up callbacks */
     typio_input_context_set_commit_callback(session->ctx, on_commit_callback, session);
     typio_input_context_set_composition_callback(session->ctx, on_composition_callback, session);
+    typio_input_context_set_delete_surrounding_callback(session->ctx,
+                                                        on_delete_surrounding_callback,
+                                                        session);
     typio_input_context_set_user_data(session->ctx, session);
 
     return session;
@@ -345,6 +351,15 @@ void typio_wl_commit_string(TypioWlFrontend *frontend, const char *text) {
         return;
     }
     zwp_input_method_v2_commit_string(frontend->input_method, text);
+}
+
+void typio_wl_delete_surrounding(TypioWlFrontend *frontend,
+                                 uint32_t before, uint32_t after) {
+    if (!frontend || !frontend->input_method || (before == 0 && after == 0)) {
+        return;
+    }
+    zwp_input_method_v2_delete_surrounding_text(frontend->input_method,
+                                                before, after);
 }
 
 void typio_wl_set_preedit(TypioWlFrontend *frontend, const char *text,
@@ -698,6 +713,23 @@ static void on_commit_callback([[maybe_unused]] TypioInputContext *ctx, const ch
      * so the recent-engine pair used for slow-switch toggling stays current. */
     typio_registry_notify_keyboard_commit(
         typio_instance_get_registry(session->frontend->instance));
+}
+
+static void on_delete_surrounding_callback([[maybe_unused]] TypioInputContext *ctx,
+                                           uint32_t before, uint32_t after,
+                                           void *user_data) {
+    TypioWlSession *session = user_data;
+
+    if (!session || !session->frontend || (before == 0 && after == 0)) {
+        return;
+    }
+
+    typio_log_debug("Delete surrounding: before=%u after=%u", before, after);
+
+    /* delete_surrounding_text + commit, mirroring the commit-string path: the
+     * deletion is staged on the input-method object and applied by commit(). */
+    typio_wl_delete_surrounding(session->frontend, before, after);
+    typio_wl_commit(session->frontend);
 }
 
 static void on_composition_callback([[maybe_unused]] TypioInputContext *ctx,

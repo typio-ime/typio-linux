@@ -256,6 +256,43 @@ int typio_tray_dispatch(TypioTray *tray) {
     return 0;
 }
 
+/* Assemble the tray tooltip from controller state. The active profile (e.g.
+ * Rime schema name) rides on the keyboard line, since the icon is engagement-
+ * only (ADR-0009). The tray bus is the single owner of all state-driven tray
+ * mutations (icon, engine, tooltip). */
+static void tray_refresh_tooltip(TypioTray *tray, TypioStateController *ctrl) {
+    const char *kb =
+        typio_state_controller_get_active_engine_display_name(ctrl);
+    const char *voice =
+        typio_state_controller_get_active_voice_engine_display_name(ctrl);
+    const TypioEngineStatus *mode =
+        typio_state_controller_get_current_status(ctrl);
+    const char *profile = (mode && mode->profile_label && mode->profile_label[0])
+                          ? mode->profile_label : nullptr;
+    char desc[256];
+
+    if (!kb || !*kb) {
+        kb = typio_state_controller_get_active_engine_name(ctrl);
+    }
+    if (!kb || !*kb) {
+        kb = "Unavailable";
+    }
+    if (!voice || !*voice) {
+        voice = typio_state_controller_get_active_voice_engine_name(ctrl);
+    }
+    if (!voice || !*voice) {
+        voice = "Disabled";
+    }
+
+    if (profile) {
+        snprintf(desc, sizeof(desc), "Keyboard: %s (%s)\nVoice: %s",
+                 kb, profile, voice);
+    } else {
+        snprintf(desc, sizeof(desc), "Keyboard: %s\nVoice: %s", kb, voice);
+    }
+    typio_tray_set_tooltip(tray, "Typio", desc);
+}
+
 static void tray_state_change_callback(void *user_data,
                                        TypioStateChangeType change_type) {
     TypioTray *tray = user_data;
@@ -276,14 +313,16 @@ static void tray_state_change_callback(void *user_data,
                 typio_state_controller_get_engine_active(ctrl);
             typio_tray_set_icon(tray, icon_name);
             typio_tray_update_engine(tray, engine_name, is_active);
+            tray_refresh_tooltip(tray, ctrl);
             break;
         }
-        case TYPIO_STATE_CHANGE_MODE: {
-            const TypioEngineMode *mode =
-                typio_state_controller_get_current_mode(ctrl);
+        case TYPIO_STATE_CHANGE_STATUS: {
+            const TypioEngineStatus *mode =
+                typio_state_controller_get_current_status(ctrl);
             if (mode && mode->icon_name) {
                 typio_tray_set_icon(tray, mode->icon_name);
             }
+            tray_refresh_tooltip(tray, ctrl);
             break;
         }
     }

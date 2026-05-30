@@ -120,7 +120,7 @@ Subscribes the calling connection to one or more topics. Omitting `topics` (or s
 | Topic | Payload |
 |---|---|
 | `engine.changed` | `{ activeKeyboardEngine, activeVoiceEngine }` |
-| `engine.modeChanged` | `{ modeClass, modeId, displayLabel, iconName }` |
+| `engine.statusChanged` | `{ engagement, profileId, profileLabel, displayLabel, iconName }` |
 | `config.changed` | (reserved — emitted on config writes; payload TBD) |
 | `runtime.changed` | (reserved — emitted on runtime-state edges) |
 | `daemon.shuttingDown` | `{}` |

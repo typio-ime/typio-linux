@@ -26,11 +26,12 @@ struct TypioStateController {
 
     bool engine_active;
 
-    bool has_mode;
-    TypioEngineMode mode;
-    char *mode_mode_id;
-    char *mode_display_label;
-    char *mode_icon_name;
+    bool has_status;
+    TypioEngineStatus status;
+    char *status_profile_id;
+    char *status_profile_label;
+    char *status_display_label;
+    char *status_icon_name;
 
     /* -- listeners -------------------------------------------------------- */
     TypioStateListener *listeners;
@@ -75,28 +76,32 @@ static void typio_state_controller_update_engine_active(
 }
 
 static void typio_state_controller_clear_mode(TypioStateController *ctrl) {
-    free(ctrl->mode_mode_id);
-    free(ctrl->mode_display_label);
-    free(ctrl->mode_icon_name);
-    ctrl->mode_mode_id = nullptr;
-    ctrl->mode_display_label = nullptr;
-    ctrl->mode_icon_name = nullptr;
-    ctrl->has_mode = false;
-    memset(&ctrl->mode, 0, sizeof(ctrl->mode));
+    free(ctrl->status_profile_id);
+    free(ctrl->status_profile_label);
+    free(ctrl->status_display_label);
+    free(ctrl->status_icon_name);
+    ctrl->status_profile_id = nullptr;
+    ctrl->status_profile_label = nullptr;
+    ctrl->status_display_label = nullptr;
+    ctrl->status_icon_name = nullptr;
+    ctrl->has_status = false;
+    memset(&ctrl->status, 0, sizeof(ctrl->status));
 }
 
 static void typio_state_controller_set_mode(TypioStateController *ctrl,
-                                            const TypioEngineMode *mode) {
+                                            const TypioEngineStatus *mode) {
     typio_state_controller_clear_mode(ctrl);
     if (!mode) {
         return;
     }
-    ctrl->has_mode = true;
-    ctrl->mode.mode_class = mode->mode_class;
-    ctrl->mode.mode_id = ctrl->mode_mode_id = typio_state_strdup(mode->mode_id);
-    ctrl->mode.display_label =
-        ctrl->mode_display_label = typio_state_strdup(mode->display_label);
-    ctrl->mode.icon_name = ctrl->mode_icon_name = typio_state_strdup(mode->icon_name);
+    ctrl->has_status = true;
+    ctrl->status.engagement = mode->engagement;
+    ctrl->status.profile_id = ctrl->status_profile_id = typio_state_strdup(mode->profile_id);
+    ctrl->status.profile_label =
+        ctrl->status_profile_label = typio_state_strdup(mode->profile_label);
+    ctrl->status.display_label =
+        ctrl->status_display_label = typio_state_strdup(mode->display_label);
+    ctrl->status.icon_name = ctrl->status_icon_name = typio_state_strdup(mode->icon_name);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -212,12 +217,12 @@ bool typio_state_controller_get_engine_active(
     return ctrl ? ctrl->engine_active : false;
 }
 
-const TypioEngineMode *typio_state_controller_get_current_mode(
+const TypioEngineStatus *typio_state_controller_get_current_status(
     TypioStateController *ctrl) {
-    if (!ctrl || !ctrl->has_mode) {
+    if (!ctrl || !ctrl->has_status) {
         return nullptr;
     }
-    return &ctrl->mode;
+    return &ctrl->status;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -272,14 +277,14 @@ void typio_state_controller_notify_voice_engine_changed(
     typio_state_controller_broadcast(ctrl, TYPIO_STATE_CHANGE_VOICE_ENGINE);
 }
 
-void typio_state_controller_notify_mode_changed(
+void typio_state_controller_notify_status_changed(
     TypioStateController *ctrl,
-    const TypioEngineMode *mode) {
+    const TypioEngineStatus *mode) {
     if (!ctrl) {
         return;
     }
     typio_state_controller_set_mode(ctrl, mode);
-    typio_state_controller_broadcast(ctrl, TYPIO_STATE_CHANGE_MODE);
+    typio_state_controller_broadcast(ctrl, TYPIO_STATE_CHANGE_STATUS);
 }
 
 void typio_state_controller_notify_status_icon_changed(

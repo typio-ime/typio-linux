@@ -370,6 +370,8 @@ void typio_wl_keyboard_process_key_release(TypioWlKeyboard *keyboard,
 
 /* Commit helpers */
 void typio_wl_commit_string(TypioWlFrontend *frontend, const char *text);
+void typio_wl_delete_surrounding(TypioWlFrontend *frontend,
+                                 uint32_t before, uint32_t after);
 void typio_wl_set_preedit(TypioWlFrontend *frontend, const char *text,
                           int cursor_begin, int cursor_end);
 void typio_wl_commit(TypioWlFrontend *frontend);

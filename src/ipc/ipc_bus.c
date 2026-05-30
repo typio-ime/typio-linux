@@ -8,7 +8,7 @@
  *   2. Owns subscription state by passing through to `uds_server_subscribe`.
  *   3. Listens on the state controller and pushes events to subscribed
  *      clients as JSON-RPC notifications on dotted topics (engine.changed,
- *      engine.modeChanged, config.changed, runtime.changed,
+ *      engine.statusChanged, config.changed, runtime.changed,
  *      daemon.shuttingDown).
  */
 
@@ -109,19 +109,25 @@ static char *build_engine_changed_payload(TypioInstance *inst)
     return tip_json_builder_steal(b);
 }
 
-static char *build_mode_changed_payload(TypioStateController *ctrl)
+static char *build_status_changed_payload(TypioStateController *ctrl)
 {
-    const TypioEngineMode *mode = ctrl
-        ? typio_state_controller_get_current_mode(ctrl) : NULL;
+    const TypioEngineStatus *mode = ctrl
+        ? typio_state_controller_get_current_status(ctrl) : NULL;
     TipJsonBuilder *b = tip_json_builder_new();
     TIP_JSON_OBJ_START(b);
     if (mode) {
-        TIP_JSON_KEY(b, "modeClass");
-        tip_json_builder_append_string(b,
-            mode->mode_class == TYPIO_MODE_CLASS_LATIN ? "latin" : "native");
+        const char *engagement =
+            mode->engagement == TYPIO_ENGAGE_PASSTHROUGH ? "passthrough" :
+            mode->engagement == TYPIO_ENGAGE_OFF ? "off" : "active";
+        TIP_JSON_KEY(b, "engagement");
+        tip_json_builder_append_string(b, engagement);
         TIP_JSON_COMMA(b);
-        TIP_JSON_KEY(b, "modeId");
-        tip_json_builder_append_string(b, mode->mode_id ? mode->mode_id : "");
+        TIP_JSON_KEY(b, "profileId");
+        tip_json_builder_append_string(b, mode->profile_id ? mode->profile_id : "");
+        TIP_JSON_COMMA(b);
+        TIP_JSON_KEY(b, "profileLabel");
+        tip_json_builder_append_string(b,
+            mode->profile_label ? mode->profile_label : "");
         TIP_JSON_COMMA(b);
         TIP_JSON_KEY(b, "displayLabel");
         tip_json_builder_append_string(b,
@@ -149,9 +155,9 @@ static void ipc_bus_state_listener(void *user_data,
         free(payload);
         break;
     }
-    case TYPIO_STATE_CHANGE_MODE: {
-        char *payload = build_mode_changed_payload(bus->state_controller);
-        typio_uds_server_emit(bus->uds, TYPIO_IPC_TOPIC_ENGINE_MODE_CHANGED, payload);
+    case TYPIO_STATE_CHANGE_STATUS: {
+        char *payload = build_status_changed_payload(bus->state_controller);
+        typio_uds_server_emit(bus->uds, TYPIO_IPC_TOPIC_ENGINE_STATUS_CHANGED, payload);
         free(payload);
         break;
     }

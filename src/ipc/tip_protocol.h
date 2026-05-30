@@ -53,7 +53,7 @@ char *typio_ipc_socket_path(void);
 
 /* ---------- Event topics (server -> client notification.method) ---------- */
 #define TYPIO_IPC_TOPIC_ENGINE_CHANGED      "engine.changed"
-#define TYPIO_IPC_TOPIC_ENGINE_MODE_CHANGED "engine.modeChanged"
+#define TYPIO_IPC_TOPIC_ENGINE_STATUS_CHANGED "engine.statusChanged"
 #define TYPIO_IPC_TOPIC_CONFIG_CHANGED      "config.changed"
 #define TYPIO_IPC_TOPIC_RUNTIME_CHANGED     "runtime.changed"
 #define TYPIO_IPC_TOPIC_DAEMON_SHUTDOWN     "daemon.shuttingDown"

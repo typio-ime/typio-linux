@@ -8,7 +8,6 @@
 const TypioEngineInfo *typio_engine_info_placeholder(void)
 {
     static const TypioEngineInfo placeholder = {
-        .struct_size = sizeof(TypioEngineInfo),
         .name = "",
         .display_name = "No engine loaded",
         .description = "No input engine is currently active",

@@ -55,7 +55,7 @@ events.subscribe { topics?: [...] }      -> stream of { topic, payload }
 
 ### Events
 
-Push-based. Topic strings are dotted: `engine.changed`, `engine.mode_changed`, `config.changed`, `daemon.shutting_down`, `runtime.state_changed`. `events.subscribe` with no topics subscribes to everything. The reply opens a stream; each subsequent server-initiated message on the connection is a `{ topic, payload }` notification framed identically to a JSON-RPC notification.
+Push-based. Topic strings are dotted: `engine.changed`, `engine.statusChanged`, `config.changed`, `daemon.shutting_down`, `runtime.state_changed`. `events.subscribe` with no topics subscribes to everything. The reply opens a stream; each subsequent server-initiated message on the connection is a `{ topic, payload }` notification framed identically to a JSON-RPC notification.
 
 ### Config keys
 

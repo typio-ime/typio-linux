@@ -29,7 +29,7 @@ typedef struct TypioStateController TypioStateController;
 typedef enum {
     TYPIO_STATE_CHANGE_ENGINE,
     TYPIO_STATE_CHANGE_VOICE_ENGINE,
-    TYPIO_STATE_CHANGE_MODE,
+    TYPIO_STATE_CHANGE_STATUS,
     TYPIO_STATE_CHANGE_STATUS_ICON,
 } TypioStateChangeType;
 
@@ -73,7 +73,7 @@ const char *typio_state_controller_get_status_icon(
     TypioStateController *ctrl);
 bool typio_state_controller_get_engine_active(
     TypioStateController *ctrl);
-const TypioEngineMode *typio_state_controller_get_current_mode(
+const TypioEngineStatus *typio_state_controller_get_current_status(
     TypioStateController *ctrl);
 
 /* -------------------------------------------------------------------------- */
@@ -86,9 +86,9 @@ void typio_state_controller_notify_engine_changed(
 void typio_state_controller_notify_voice_engine_changed(
     TypioStateController *ctrl,
     const TypioEngineInfo *info);
-void typio_state_controller_notify_mode_changed(
+void typio_state_controller_notify_status_changed(
     TypioStateController *ctrl,
-    const TypioEngineMode *mode);
+    const TypioEngineStatus *mode);
 void typio_state_controller_notify_status_icon_changed(
     TypioStateController *ctrl,
     const char *icon_name);
