@@ -14,15 +14,15 @@
 #define TYPIO_ENGINE_PREFIX "libtypio-engine-"
 #define TYPIO_ENGINE_SUFFIX ".so"
 
-static char *typiod_discovered_icon_theme_path = NULL;
+static char *typio_discovered_icon_theme_path = NULL;
 
-static void typiod_plugin_close(void *handle) {
+static void typio_plugin_close(void *handle) {
     if (handle) {
         dlclose(handle);
     }
 }
 
-static bool typiod_is_engine_filename(const char *name) {
+static bool typio_is_engine_filename(const char *name) {
     size_t len = strlen(name);
     size_t pfx = strlen(TYPIO_ENGINE_PREFIX);
     size_t sfx = strlen(TYPIO_ENGINE_SUFFIX);
@@ -56,7 +56,7 @@ static const char *const TYPIOD_HOST_CAPABILITIES[] = {
     NULL,
 };
 
-static bool typiod_host_supports(const char *capability) {
+static bool typio_host_supports(const char *capability) {
     for (size_t i = 0; TYPIOD_HOST_CAPABILITIES[i] != NULL; i++) {
         if (strcmp(TYPIOD_HOST_CAPABILITIES[i], capability) == 0) {
             return true;
@@ -65,12 +65,12 @@ static bool typiod_host_supports(const char *capability) {
     return false;
 }
 
-static bool typiod_negotiate_capabilities(const char *path,
+static bool typio_negotiate_capabilities(const char *path,
                                           const TypioEngineInfo *info) {
     if (info->required_capabilities) {
         for (size_t i = 0; info->required_capabilities[i] != NULL; i++) {
             const char *cap = info->required_capabilities[i];
-            if (!typiod_host_supports(cap)) {
+            if (!typio_host_supports(cap)) {
                 typio_log_error(
                     "Engine %s requires capability '%s' which the host does "
                     "not provide — refusing to load",
@@ -82,7 +82,7 @@ static bool typiod_negotiate_capabilities(const char *path,
     if (info->optional_capabilities) {
         for (size_t i = 0; info->optional_capabilities[i] != NULL; i++) {
             const char *cap = info->optional_capabilities[i];
-            if (!typiod_host_supports(cap)) {
+            if (!typio_host_supports(cap)) {
                 typio_log_info(
                     "Engine %s optional capability '%s' is unavailable; "
                     "loading anyway",
@@ -93,7 +93,7 @@ static bool typiod_negotiate_capabilities(const char *path,
     return true;
 }
 
-static bool typiod_register_one(TypioRegistry *registry, const char *path) {
+static bool typio_register_one(TypioRegistry *registry, const char *path) {
     void *handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
         typio_log_error("Failed to dlopen engine: %s (%s)", path, dlerror());
@@ -115,7 +115,7 @@ static bool typiod_register_one(TypioRegistry *registry, const char *path) {
         return false;
     }
 
-    if (!typiod_negotiate_capabilities(path, info)) {
+    if (!typio_negotiate_capabilities(path, info)) {
         dlclose(handle);
         return false;
     }
@@ -130,7 +130,7 @@ static bool typiod_register_one(TypioRegistry *registry, const char *path) {
             return false;
         }
         result = typio_registry_register_plugin_voice(
-            registry, factory, info_func, handle, typiod_plugin_close);
+            registry, factory, info_func, handle, typio_plugin_close);
     } else {
         TypioKeyboardEngineFactory factory =
             (TypioKeyboardEngineFactory)dlsym(handle, "typio_keyboard_engine_create");
@@ -140,7 +140,7 @@ static bool typiod_register_one(TypioRegistry *registry, const char *path) {
             return false;
         }
         result = typio_registry_register_plugin_keyboard(
-            registry, factory, info_func, handle, typiod_plugin_close);
+            registry, factory, info_func, handle, typio_plugin_close);
     }
 
     if (result != TYPIO_OK) {
@@ -151,7 +151,7 @@ static bool typiod_register_one(TypioRegistry *registry, const char *path) {
     return true;
 }
 
-int typiod_plugin_load_dir(TypioRegistry *registry,
+int typio_plugin_load_dir(TypioRegistry *registry,
                            const char *dir,
                            void *user_data) {
     (void)user_data;
@@ -168,7 +168,7 @@ int typiod_plugin_load_dir(TypioRegistry *registry,
     int count = 0;
     struct dirent *ent;
     while ((ent = readdir(d)) != nullptr) {
-        if (!typiod_is_engine_filename(ent->d_name)) {
+        if (!typio_is_engine_filename(ent->d_name)) {
             continue;
         }
         char path[4096];
@@ -176,18 +176,18 @@ int typiod_plugin_load_dir(TypioRegistry *registry,
         if (n <= 0 || (size_t)n >= sizeof(path)) {
             continue;
         }
-        if (typiod_register_one(registry, path)) {
+        if (typio_register_one(registry, path)) {
             count++;
         }
     }
     closedir(d);
 
     /* Discover bundled engine icons: <dir>/icons/ */
-    if (!typiod_discovered_icon_theme_path) {
+    if (!typio_discovered_icon_theme_path) {
         char icon_path[4096];
         int n = snprintf(icon_path, sizeof(icon_path), "%s/icons", dir);
         if (n > 0 && (size_t)n < sizeof(icon_path) && access(icon_path, R_OK) == 0) {
-            typiod_discovered_icon_theme_path = strdup(icon_path);
+            typio_discovered_icon_theme_path = strdup(icon_path);
             typio_log_info("Discovered engine icon theme path: %s", icon_path);
         }
     }
@@ -197,7 +197,7 @@ int typiod_plugin_load_dir(TypioRegistry *registry,
 
 /* ── Engine directory resolution ──────────────────────────────────────── */
 
-static char *typiod_user_engine_dir(void) {
+static char *typio_user_engine_dir(void) {
     const char *xdg = getenv("XDG_DATA_HOME");
     const char *suffix = "/typio/engines";
     char *result = nullptr;
@@ -221,7 +221,7 @@ static char *typiod_user_engine_dir(void) {
     return result;
 }
 
-const char *const *typiod_engine_dirs_build(const char *cli_override) {
+const char *const *typio_engine_dirs_build(const char *cli_override) {
     /* At most 4 entries + NULL terminator. */
     char **dirs = calloc(5, sizeof(char *));
     if (!dirs) {
@@ -238,7 +238,7 @@ const char *const *typiod_engine_dirs_build(const char *cli_override) {
         dirs[n++] = strdup(env_dir);
     }
 
-    char *user_dir = typiod_user_engine_dir();
+    char *user_dir = typio_user_engine_dir();
     if (user_dir) {
         dirs[n++] = user_dir;
     }
@@ -251,7 +251,7 @@ const char *const *typiod_engine_dirs_build(const char *cli_override) {
     return (const char *const *)dirs;
 }
 
-void typiod_engine_dirs_free(const char *const *dirs) {
+void typio_engine_dirs_free(const char *const *dirs) {
     if (!dirs) {
         return;
     }
@@ -261,6 +261,6 @@ void typiod_engine_dirs_free(const char *const *dirs) {
     free((void *)dirs);
 }
 
-const char *typiod_plugin_discovered_icon_theme_path(void) {
-    return typiod_discovered_icon_theme_path;
+const char *typio_plugin_discovered_icon_theme_path(void) {
+    return typio_discovered_icon_theme_path;
 }

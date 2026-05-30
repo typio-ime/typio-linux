@@ -5,13 +5,13 @@
 #include <stdio.h>
 
 int main(int argc, char *argv[]) {
-    TypiodOptions options;
-    TypiodApp app;
+    TypioOptions options;
+    TypioApp app;
     int parse_result;
     int exit_code;
 
-    typiod_options_init(&options);
-    parse_result = typiod_parse_args(&options, argc, argv);
+    typio_options_init(&options);
+    parse_result = typio_parse_args(&options, argc, argv);
     if (parse_result >= 0) {
         return parse_result;
     }
@@ -19,24 +19,24 @@ int main(int argc, char *argv[]) {
     /* The host owns plugin discovery: resolve the directory search list
      * and wire in the dlopen-based loader. Core stays platform-neutral. */
     const char *const *engine_dirs =
-        typiod_engine_dirs_build(options.engine_dir_override);
+        typio_engine_dirs_build(options.engine_dir_override);
     options.instance_config.engine_dirs = engine_dirs;
-    options.instance_config.plugin_loader = typiod_plugin_load_dir;
+    options.instance_config.plugin_loader = typio_plugin_load_dir;
 
-    bool ok = typiod_app_init(&app, &options.instance_config, options.verbose, argv);
+    bool ok = typio_app_init(&app, &options.instance_config, options.verbose, argv);
     /* new_with_config copied the dir strings into the instance; safe to free. */
-    typiod_engine_dirs_free(engine_dirs);
+    typio_engine_dirs_free(engine_dirs);
     if (!ok) {
         return 1;
     }
 
     if (options.list_only) {
-        typiod_app_list_engines(&app);
-        typiod_app_shutdown(&app);
+        typio_app_list_engines(&app);
+        typio_app_shutdown(&app);
         return 0;
     }
 
-    exit_code = typiod_app_run(&app);
-    typiod_app_shutdown(&app);
-    return typiod_app_finish(&app, exit_code);
+    exit_code = typio_app_run(&app);
+    typio_app_shutdown(&app);
+    return typio_app_finish(&app, exit_code);
 }

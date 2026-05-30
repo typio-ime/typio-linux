@@ -1,6 +1,6 @@
 # Memory Budget
 
-Expected process memory footprint for `typiod` under typical usage. All values are approximate upper bounds for a steady-state session (panel active, atlas warmed, RIME engine loaded).
+Expected process memory footprint for `typio` under typical usage. All values are approximate upper bounds for a steady-state session (panel active, atlas warmed, RIME engine loaded).
 
 ## Quick reference
 
@@ -21,13 +21,13 @@ Combined RSS (CPU + mapped GPU) as reported by `/proc/<pid>/smaps_rollup` or `to
 
 ```bash
 # RSS (CPU-side resident memory)
-cat /proc/$(pidof typiod)/smaps_rollup | grep Rss
+cat /proc/$(pidof typio)/smaps_rollup | grep Rss
 
 # GPU (DRM) memory — requires kernel 5.19+
-cat /proc/$(pidof typiod)/fdinfo/* 2>/dev/null | grep drm-total
+cat /proc/$(pidof typio)/fdinfo/* 2>/dev/null | grep drm-total
 
 # Quick combined view
-ps -o pid,rss,vsz -p $(pidof typiod)
+ps -o pid,rss,vsz -p $(pidof typio)
 ```
 
 ## Leak vs plateau

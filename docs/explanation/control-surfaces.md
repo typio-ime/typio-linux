@@ -58,7 +58,8 @@ This class of bug is easy to reintroduce:
 4. the user edits one unrelated setting
 5. the whole polluted staged config overwrites unrelated daemon config
 
-This is how a Rime-schema edit can accidentally reset `default_engine` or other top-level keys.
+This is how a Rime-schema edit can accidentally overwrite unrelated engine
+settings or runtime state.
 
 ## Information Architecture
 

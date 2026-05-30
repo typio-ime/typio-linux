@@ -282,7 +282,7 @@ static void typio_wl_vk_trigger_fail_safe(TypioWlFrontend *frontend,
               last_forward_age_ms,
               typio_wl_lifecycle_phase_name(frontend->lifecycle_phase),
               frontend->pending_reactivation ? "yes" : "no");
-    typiod_dump_recent_log();
+    typio_dump_recent_log();
     if (frontend->keyboard) {
         typio_wl_keyboard_release_grab(frontend->keyboard);
     }

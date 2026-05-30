@@ -201,7 +201,7 @@ TEST(engine_change_preserves_dynamic_status_icon_for_tray) {
     TypioInstanceConfig config = {};
     TypioInstance *instance = create_temp_instance(root, &config);
     TypioEngineManager *manager;
-    TypiodApp app = {};
+    TypioApp app = {};
     FakeTray tray = {};
 
     ASSERT(instance != NULL);
@@ -218,7 +218,7 @@ TEST(engine_change_preserves_dynamic_status_icon_for_tray) {
     app.tray = (TypioTray *)&tray;
 
     typio_instance_notify_status_icon(instance, "typio-rime-latin");
-    typiod_test_on_engine_change(instance, &mock_rime_info, &app);
+    typio_test_on_engine_change(instance, &mock_rime_info, &app);
 
     ASSERT_STR_EQ(tray.icon, "typio-rime-latin");
     ASSERT_STR_EQ(tray.keyboard_engine, "rime");
@@ -233,7 +233,7 @@ TEST(engine_change_uses_static_icon_after_dynamic_engine) {
     TypioInstanceConfig config = {};
     TypioInstance *instance = create_temp_instance(root, &config);
     TypioEngineManager *manager;
-    TypiodApp app = {};
+    TypioApp app = {};
     FakeTray tray = {};
 
     ASSERT(instance != NULL);
@@ -255,7 +255,7 @@ TEST(engine_change_uses_static_icon_after_dynamic_engine) {
     typio_instance_notify_status_icon(instance, "typio-rime-latin");
     ASSERT(typio_engine_manager_set_active_keyboard(manager, "basic") == TYPIO_OK);
     typio_instance_clear_status_icon(instance);
-    typiod_test_on_engine_change(instance, NULL, &app);
+    typio_test_on_engine_change(instance, NULL, &app);
 
     ASSERT_STR_EQ(tray.icon, "typio-keyboard");
     ASSERT_STR_EQ(tray.keyboard_engine, "basic");
@@ -269,7 +269,7 @@ TEST(voice_engine_change_updates_tray_tooltip) {
     TypioInstanceConfig config = {};
     TypioInstance *instance = create_temp_instance(root, &config);
     TypioEngineManager *manager;
-    TypiodApp app = {};
+    TypioApp app = {};
     FakeTray tray = {};
 
     ASSERT(instance != NULL);
@@ -284,11 +284,11 @@ TEST(voice_engine_change_updates_tray_tooltip) {
     app.instance = instance;
     app.tray = (TypioTray *)&tray;
 
-    typiod_test_update_tray_engine_status(&app);
+    typio_test_update_tray_engine_status(&app);
     ASSERT(strstr(tray.tooltip_description, "Voice: Disabled") != NULL);
 
     ASSERT(typio_engine_manager_set_active_voice(manager, "mock-voice") == TYPIO_OK);
-    typiod_test_on_voice_engine_change(instance, &mock_voice_info, &app);
+    typio_test_on_voice_engine_change(instance, &mock_voice_info, &app);
     ASSERT(strstr(tray.tooltip_description, "Voice: Mock Voice Engine") != NULL);
 
     typio_instance_free(instance);
@@ -306,7 +306,7 @@ TEST(app_init_removes_legacy_top_level_recent_logs) {
     char legacy_archive[1024];
     char engine_state[1024];
     TypioInstanceConfig config = {};
-    TypiodApp app = {};
+    TypioApp app = {};
     char *argv[] = {(char *)"test_server_app", NULL};
 
     ASSERT(mkdtemp(root) != NULL);
@@ -340,14 +340,14 @@ TEST(app_init_removes_legacy_top_level_recent_logs) {
     config.state_dir = state_dir;
     (void)engine_dir;
 
-    ASSERT(typiod_app_init(&app, &config, false, argv));
+    ASSERT(typio_app_init(&app, &config, false, argv));
     ASSERT(access(legacy_latest, F_OK) != 0);
     ASSERT(access(legacy_archive, F_OK) != 0);
     ASSERT(access(latest_log, F_OK) == 0);
     ASSERT(access(engine_state, F_OK) == 0);
     ASSERT_STR_EQ(app.recent_log_dump_path, latest_log);
 
-    typiod_app_shutdown(&app);
+    typio_app_shutdown(&app);
 }
 
 int main(void) {

@@ -88,7 +88,7 @@ static void guard_trigger_failsafe(TypioWlKeyboard *kb, const char *reason,
         "; releasing grab and stopping",
         reason, typio_wl_lifecycle_phase_name(fe->lifecycle_phase),
         key, keysym, modifiers, fe->guard_reject_press_streak);
-    typiod_dump_recent_log();
+    typio_dump_recent_log();
     typio_wl_keyboard_release_grab(kb);
     typio_wl_frontend_stop(fe);
 }
@@ -327,7 +327,7 @@ static void on_key(void *data,
             "Emergency exit: key=%u keysym=0x%x mods=0x%x phase=%s",
             key, keysym, modifiers,
             typio_wl_lifecycle_phase_name(frontend->lifecycle_phase));
-        typiod_dump_recent_log();
+        typio_dump_recent_log();
         typio_wl_keyboard_release_grab(keyboard);
         typio_wl_frontend_stop(frontend);
         return;

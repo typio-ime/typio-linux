@@ -4,40 +4,60 @@ This document is for contributors who will modify `typio-wayland` source code.
 
 ## Requirements
 
+### Install these yourself
+
+Build tools:
+
 - Meson 1.0+ (primary build system)
 - Ninja 1.10+
 - C23 compiler
 - `pkg-config`
-- Wayland client development files
-- `xkbcommon` development files
 - `wayland-scanner`
-- Vulkan, FreeType, HarfBuzz, and fontconfig development files
 - `glslangValidator`
-- [libtypio](https://github.com/ming2k/libtypio) — installed system-wide, or resolved via the meson wrap (see below)
+
+Development libraries:
+
+- Wayland client
+- `xkbcommon`
+- Vulkan, FreeType, HarfBuzz, and fontconfig
 
 Optional:
 
-- `dbus-1` for `enable_status_bus=true` or `enable_systray=true`
-- `libpipewire-0.3` for `-Dbuild_voice=true`
+- `dbus-1` — for `enable_status_bus=true` or `enable_systray=true`
+- `libpipewire-0.3` — for `-Dbuild_voice=true`
 
-Engines (rime, mozc, …) are separate projects; their dependencies are documented in those repositories.
+These are discovered via `pkg-config`. Meson does not enforce upper-bound
+versions; the project is regularly tested against the packages shipped in
+the latest Arch Linux and Fedora releases.
 
-## External dependencies
+### Resolved automatically (no install needed)
 
-| Dependency | Source | Resolved version | You need to install it? |
-|---|---|---|---|
-| **libtypio** | pkg-config (preferred), or `subprojects/libtypio.wrap` fallback | matching version | **No** — system install or auto-fetched by the wrap |
-| **flux** (rendering framework) | `subprojects/flux.wrap` (git fallback) or sibling checkout | latest | **No** — resolved automatically |
+Two dependencies are built or fetched for you — you never install them
+system-wide:
 
-libtypio is resolved by pkg-config first.  Point `PKG_CONFIG_PATH` at a
-local `cargo build` (`/path/to/libtypio/target/release`) for active
-development, or rely on a system install.  If pkg-config can't find it,
-Meson falls back to `subprojects/libtypio.wrap`, which clones libtypio and
-builds it via cargo.
+| Dependency | How it's resolved | Linkage |
+|---|---|---|
+| **libtypio** | `pkg-config` first — point `PKG_CONFIG_PATH` at a local `../libtypio/target/release` cargo build; else `subprojects/libtypio.wrap` clones and builds it via cargo | shared `.so` → needs `LD_LIBRARY_PATH` at runtime |
+| **flux** (candidate popup renderer) | sibling `../flux` checkout (auto-symlinked into `subprojects/flux`); else `subprojects/flux.wrap` clones it from git | static, built by Meson → linked into the binary, nothing to find at runtime |
 
-flux is resolved as a Meson subproject when `subprojects/flux.wrap` (or a local `subprojects/flux/` checkout) is present. If the subproject is unavailable, the build continues with candidate popup rendering disabled (stubs are used).
+If the flux subproject can't be resolved at all, the build continues with
+candidate-popup rendering disabled (stubs are used).
 
-System libraries are discovered via `pkg-config`. Meson does not enforce upper-bound versions, but the project is regularly tested against the packages shipped in the latest Arch Linux and Fedora releases.
+**Stale flux symlink?** `subprojects/flux` is a git-ignored convenience
+symlink that Meson creates *automatically* when a sibling `../flux` exists,
+so a fresh clone never ships it and the `.wrap` clones flux when no sibling
+is present. The only thing that breaks is a *leftover* symlink pointing at a
+checkout you've since moved or deleted — Meson then finds a dangling
+`subprojects/flux` and won't fall back to the wrap. Delete it and
+reconfigure:
+
+```bash
+rm -f subprojects/flux
+meson setup --reconfigure build
+```
+
+Engines (rime, mozc, …) are separate projects; their dependencies are
+documented in those repositories.
 
 ## Local development workflow
 
@@ -48,15 +68,26 @@ or a system install is enough.
 
 | Checkout | Purpose | Build system |
 |---|---|---|
-| `libtypio` (anywhere on disk) | Core framework library (C ABI) | `cargo` |
-| `typio-engine-basic` (anywhere) | Fallback keyboard engine plugin | `cargo` |
+| `libtypio` | Core framework library (C ABI) | `cargo` |
+| `typio-engine-basic` | Fallback keyboard engine plugin | `cargo` |
 | `flux` | Candidate popup renderer | Meson subproject (auto) |
+
+The commands below assume **sibling checkouts** and that you run every
+command from the `typio-wayland` directory:
+
+```
+parent/
+├── libtypio/
+├── typio-engine-basic/
+└── typio-wayland/   ← run all commands from here
+```
+
+If your layout differs, adjust the `../libtypio` paths accordingly.
 
 ### 1. Build libtypio
 
 ```bash
-cd /path/to/libtypio
-cargo build --release
+( cd ../libtypio && cargo build --release )
 ```
 
 This produces `target/release/libtypio.so` and the public C headers under
@@ -66,17 +97,60 @@ discover the library via `pkg-config`.
 
 You do **not** need to install these files system-wide for local
 development. The rest of this guide points `PKG_CONFIG_PATH` and
-`LD_LIBRARY_PATH` directly at `target/release/`. System installation
-(like `make install`) is only needed when packaging for distribution.
+`LD_LIBRARY_PATH` directly at `../libtypio/target/release`. System
+installation (like `make install`) is only needed when packaging for
+distribution.
 
-### 2. Build typio-engine-basic
+### 2. Build typio-wayland
 
-`typio` needs at least one keyboard engine plugin to function.
-The `typio-engine-basic` repository provides the zero-dependency fallback.
+Point `PKG_CONFIG_PATH` at libtypio's `target/release` (where the `.pc`
+files were generated) before running Meson.  If the variable is not set
+and the package is not installed system-wide, Meson falls back to the
+`subprojects/libtypio.wrap` and clones+builds libtypio automatically.
 
 ```bash
-cd ../typio-engine-basic
-cargo build --release
+export PKG_CONFIG_PATH="../libtypio/target/release:${PKG_CONFIG_PATH}"
+meson setup build --buildtype=debug -Denable_systray=true
+ninja -C build
+```
+
+### 3. Run the daemon while iterating
+
+The built binary links against libtypio's `target/release/libtypio.so`, so
+you must add that **same** directory to the dynamic linker path at runtime:
+
+```bash
+export LD_LIBRARY_PATH=../libtypio/target/release:${LD_LIBRARY_PATH}
+./build/src/typio --list
+./build/src/typio --verbose
+```
+
+For plugin engine work, point the daemon at a specific engine directory
+(overriding the default scan list). Once you've installed an engine (see
+below), this runs it directly:
+
+```bash
+export TYPIO_ENGINE_DIR=~/.local/share/typio/engines
+./build/src/typio --engine-dir ~/.local/share/typio/engines --engine basic --verbose
+```
+
+Both `TYPIO_ENGINE_DIR` and `--engine-dir` accept a single path. If you
+need to test multiple engine directories at once, symlink them into a
+single directory and point the daemon there.
+
+## Install a keyboard engine (optional)
+
+`typio` starts and runs without any keyboard engine — it just has nothing
+to convert keystrokes with, so it logs a "No keyboard engine is active"
+startup warning and falls back to a "No engine loaded" placeholder. To
+actually exercise input conversion (and to verify your build wires up the
+engine ABI correctly), install at least one engine.
+
+Any engine works; this uses `typio-engine-basic`, the zero-dependency
+fallback, as the concrete example:
+
+```bash
+( cd ../typio-engine-basic && cargo build --release )
 ```
 
 This produces `../typio-engine-basic/target/release/libtypio_engine_basic.so`.
@@ -94,20 +168,6 @@ cp ../typio-engine-basic/target/release/libtypio_engine_basic.so \
 
 The file name suffix (`basic`) becomes the engine identifier exposed to
 users and configuration files.
-
-### 3. Build typio-wayland
-
-Point `PKG_CONFIG_PATH` at libtypio's `target/release` (where the `.pc`
-files were generated) before running Meson.  If the variable is not set
-and the package is not installed system-wide, Meson falls back to the
-`subprojects/libtypio.wrap` and clones+builds libtypio automatically.
-
-```bash
-cd typio-wayland
-export PKG_CONFIG_PATH="/path/to/libtypio/target/release:${PKG_CONFIG_PATH}"
-meson setup build --buildtype=debug -Denable_systray=true
-ninja -C build
-```
 
 ## Optional features
 
@@ -179,28 +239,6 @@ prefix is `/usr` or `/usr/local`):
 ```bash
 meson install -C build
 ```
-
-## Run the daemon while iterating
-
-The built binary links against `../libtypio/target/release/libtypio.so`,
-so you must add that directory to the dynamic linker path at runtime:
-
-```bash
-export LD_LIBRARY_PATH=/absolute/path/to/libtypio/target/release:${LD_LIBRARY_PATH}
-./build/src/typio --list
-./build/src/typio --verbose
-```
-
-For plugin engine work, point the daemon at a custom engine directory:
-
-```bash
-export TYPIO_ENGINE_DIR=/absolute/path/to/engines
-./build/src/typio --engine-dir /absolute/path/to/engines --engine rime --verbose
-```
-
-Both `TYPIO_ENGINE_DIR` and `--engine-dir` accept a single path. If you
-need to test multiple engine directories at once, symlink them into a
-single directory and point the daemon there.
 
 ## Meson options
 

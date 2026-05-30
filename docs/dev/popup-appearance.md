@@ -74,7 +74,7 @@ while the on-screen highlight is briefly behind.
 
 > Requires the matching flux change that maps an acquire `VK_TIMEOUT` to
 > `FLUX_ERROR_TIMEOUT`. flux is built from a local sibling checkout; rebuild it
-> (`ninja -C build/_flux_build install`) before rebuilding typiod-wayland.
+> (`ninja -C build/_flux_build install`) before rebuilding typio-wayland.
 
 ---
 

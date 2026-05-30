@@ -3,9 +3,9 @@
 # Location: $XDG_CONFIG_HOME/typio/wayland.toml
 #          (defaults to ~/.config/typio/wayland.toml)
 #
-# This file owns popup styling for the Wayland frontend. Framework-level
-# settings (engine selection, shortcuts, voice runtime) live in core.toml
-# next to it.
+# This file owns popup styling for the Wayland frontend. Framework policy,
+# shortcuts, voice runtime, and per-engine settings live in core.toml next
+# to it. Last-used engine selection is runtime state, not config.
 
 [display]
 # Theme: "auto" (follow desktop), "light", or "dark"  (default: "auto")

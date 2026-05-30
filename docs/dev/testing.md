@@ -45,17 +45,15 @@ export LD_LIBRARY_PATH=/absolute/path/to/libtypio/target/release:${LD_LIBRARY_PA
 
 ## Known test failures
 
-A small number of tests assume the **basic** keyboard engine is available
-inside the test process. Because `typio-wayland` loads engines as host-side
-plugins (via `dlopen` of `libtypio-engine-*.so`), unit tests that do not
-explicitly register a mock engine or set `TYPIO_ENGINE_DIR` will not see
-**basic** and may fail or time out. This is a test-harness limitation, not
-a product bug. The affected tests are:
+A small number of legacy host tests assume the **basic** keyboard engine is
+available inside the test process. Because `typio-wayland` loads engines as
+host-side plugins (via `dlopen` of `libtypio-engine-*.so`), unit tests that
+do not explicitly register a mock engine or set `TYPIO_ENGINE_DIR` will not
+see **basic** and may fail or time out. This is a test-harness limitation,
+not a product bug.
 
-- `startup_health` — `missing_default_engine_warns`
-- `uds_ipc` — `uds_methods_work`
-- `server_app` — `engine_change_uses_static_icon_after_dynamic_engine`
-- `status_bus` — `exports_basic_engine_state_and_emits_change_signal`
+The legacy tests are disabled in `tests/meson.build` until they are ported
+to the registry-based plugin path.
 
 If you need these tests to pass locally, set `TYPIO_ENGINE_DIR` to a
 directory containing `libtypio-engine-basic.so` before running the suite.

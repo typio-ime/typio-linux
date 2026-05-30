@@ -235,6 +235,13 @@ void typio_state_controller_notify_engine_changed(
     if (!ctrl) {
         return;
     }
+
+    /* Determine if the engine actually changed before freeing old name. */
+    bool engine_changed = true;
+    if (ctrl->active_engine_name && info && info->name) {
+        engine_changed = strcmp(ctrl->active_engine_name, info->name) != 0;
+    }
+
     free(ctrl->active_engine_name);
     free(ctrl->active_engine_display_name);
     ctrl->active_engine_name =
@@ -242,19 +249,36 @@ void typio_state_controller_notify_engine_changed(
     ctrl->active_engine_display_name =
         (info && info->display_name) ? strdup(info->display_name) : nullptr;
 
-    /* Re-evaluate status icon: dynamic icon takes precedence, then the
-     * engine's static icon, then the default fallback. */
+    /* Re-evaluate status icon.
+     *
+     * For the SAME engine the dynamic icon (last_status_icon) takes
+     * precedence so that schema/mode switches inside one engine keep the
+     * correct tray icon.
+     *
+     * When the engine CHANGES we must NOT reuse the previous engine's
+     * dynamic icon because typio_instance_get_last_status_icon is global
+     * and would be stale.  Fall back to the new engine's static icon. */
     {
         free(ctrl->status_icon);
-        const char *icon = typio_instance_get_last_status_icon(ctrl->instance);
-        if (icon && *icon) {
-            ctrl->status_icon = strdup(icon);
-        } else if (info && info->icon && info->icon[0]) {
-            ctrl->status_icon = strdup(info->icon);
-        } else if (info) {
-            ctrl->status_icon = strdup("typio-keyboard-symbolic");
+        if (!engine_changed) {
+            const char *icon = typio_instance_get_last_status_icon(ctrl->instance);
+            if (icon && *icon) {
+                ctrl->status_icon = strdup(icon);
+            } else if (info && info->icon && info->icon[0]) {
+                ctrl->status_icon = strdup(info->icon);
+            } else if (info) {
+                ctrl->status_icon = strdup("typio-keyboard-symbolic");
+            } else {
+                ctrl->status_icon = strdup("typio-keyboard-off-symbolic");
+            }
         } else {
-            ctrl->status_icon = strdup("typio-keyboard-off-symbolic");
+            if (info && info->icon && info->icon[0]) {
+                ctrl->status_icon = strdup(info->icon);
+            } else if (info) {
+                ctrl->status_icon = strdup("typio-keyboard-symbolic");
+            } else {
+                ctrl->status_icon = strdup("typio-keyboard-off-symbolic");
+            }
         }
     }
 

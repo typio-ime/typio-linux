@@ -1,4 +1,4 @@
-# ── Typio Wayland host (typiod) ───────────────────────────────────────────
+# ── Typio Wayland host ───────────────────────────────────────────
 
 # ── Wayland protocol generation ───────────────────────────────────────────
 protocols = []
@@ -26,7 +26,7 @@ if enable_wayland
 endif
 
 # ── Source files ──────────────────────────────────────────────────────────
-daemon_sources = files(
+host_sources = files(
     'main.c',
     'app.c',
     'plugin_loader.c',
@@ -42,7 +42,7 @@ daemon_sources = files(
 )
 
 if enable_wayland
-    daemon_sources += files(
+    host_sources += files(
         'bridge/boundary.c',
         'bridge/candidate_guard.c',
         'frontend/frontend_aux.c',
@@ -78,7 +78,7 @@ if enable_wayland
     )
 
     if flux_dep.found()
-        daemon_sources += files(
+        host_sources += files(
             'ui/panel/panel.c',
             'ui/panel/surface.c',
             'ui/panel/layout.c',
@@ -90,51 +90,51 @@ if enable_wayland
             'ui/panel/theme.c',
         )
     else
-        daemon_sources += files(
+        host_sources += files(
             'ui/panel/stub.c',
         )
     endif
 endif
 
 if enable_systray
-    daemon_sources += files(
+    host_sources += files(
         'tray/bus.c',
         'tray/sni.c',
     )
 endif
 
 if build_voice
-    daemon_sources += files(
+    host_sources += files(
         'voice/pw_capture.c',
     )
 endif
 
 # ── Dependencies ──────────────────────────────────────────────────────────
-daemon_deps = [libtypio_dep, dl_dep, vulkan_dep]
+host_deps = [libtypio_dep, dl_dep, vulkan_dep]
 
 if enable_wayland
-    daemon_deps += [wayland_client_dep, xkbcommon_dep]
+    host_deps += [wayland_client_dep, xkbcommon_dep]
     if flux_dep.found()
-        daemon_deps += flux_dep
+        host_deps += flux_dep
     endif
     fontconfig_dep = dependency('fontconfig', required: true)
     harfbuzz_dep = dependency('harfbuzz', required: true)
     freetype_dep = dependency('freetype2', required: true)
-    daemon_deps += [fontconfig_dep, harfbuzz_dep, freetype_dep]
+    host_deps += [fontconfig_dep, harfbuzz_dep, freetype_dep]
 endif
 
 if have_libdbus
-    daemon_deps += dbus_dep
+    host_deps += dbus_dep
 endif
 
 if build_voice
-    daemon_deps += pipewire_dep
+    host_deps += pipewire_dep
 endif
 
 # ── Include directories ───────────────────────────────────────────────────
 # The typio/ headers come from libtypio_dep; top_inc is for the generated
 # typio_build_config.h at the project root.
-daemon_inc = [
+host_inc = [
     top_inc,
     include_directories('.'),
     include_directories('notify'),
@@ -142,7 +142,7 @@ daemon_inc = [
 ]
 
 if enable_wayland
-    daemon_inc += [
+    host_inc += [
         include_directories('frontend'),
         include_directories('input'),
         include_directories('ui'),
@@ -154,18 +154,18 @@ if enable_wayland
 endif
 
 if enable_systray
-    daemon_inc += include_directories('tray')
+    host_inc += include_directories('tray')
 endif
 
 if build_voice
-    daemon_inc += include_directories('voice')
+    host_inc += include_directories('voice')
 endif
 
 # ── Executable ────────────────────────────────────────────────────────────
 typio_exe = executable('typio',
-    daemon_sources, protocols,
-    dependencies: daemon_deps,
-    include_directories: daemon_inc,
+    host_sources, protocols,
+    dependencies: host_deps,
+    include_directories: host_inc,
     install: true,
     install_dir: libexecdir,
 )

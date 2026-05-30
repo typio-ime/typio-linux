@@ -1,5 +1,5 @@
-#ifndef TYPIO_DAEMON_APP_H
-#define TYPIO_DAEMON_APP_H
+#ifndef TYPIO_APP_H
+#define TYPIO_APP_H
 
 #include "typio_build_config.h"
 #include "typio/runtime/instance.h"
@@ -20,7 +20,7 @@
 extern "C" {
 #endif
 
-typedef struct TypiodApp {
+typedef struct TypioApp {
     TypioInstance *instance;
     TypioStateController *state_controller;
     char **argv;
@@ -35,27 +35,27 @@ typedef struct TypiodApp {
 #ifdef HAVE_SYSTRAY
     TypioTray *tray;
 #endif
-} TypiodApp;
+} TypioApp;
 
-bool typiod_app_init(TypiodApp *app,
+bool typio_app_init(TypioApp *app,
                            const TypioInstanceConfig *config,
                            bool verbose,
                            char *argv[]);
-void typiod_app_list_engines(TypiodApp *app);
-int typiod_app_run(TypiodApp *app);
-void typiod_app_shutdown(TypiodApp *app);
-int typiod_app_finish(TypiodApp *app, int exit_code);
+void typio_app_list_engines(TypioApp *app);
+int typio_app_run(TypioApp *app);
+void typio_app_shutdown(TypioApp *app);
+int typio_app_finish(TypioApp *app, int exit_code);
 
 
 #ifdef TYPIO_DAEMON_TEST
-void typiod_test_update_tray_engine_status(TypiodApp *app);
-void typiod_test_on_engine_change(TypioInstance *instance,
+void typio_test_update_tray_engine_status(TypioApp *app);
+void typio_test_on_engine_change(TypioInstance *instance,
                                         const TypioEngineInfo *engine,
                                         void *user_data);
-void typiod_test_on_voice_engine_change(TypioInstance *instance,
+void typio_test_on_voice_engine_change(TypioInstance *instance,
                                               const TypioEngineInfo *engine,
                                               void *user_data);
-void typiod_test_on_status_icon_change(TypioInstance *instance,
+void typio_test_on_status_icon_change(TypioInstance *instance,
                                              const char *icon_name,
                                              void *user_data);
 #endif
@@ -64,4 +64,4 @@ void typiod_test_on_status_icon_change(TypioInstance *instance,
 }
 #endif
 
-#endif /* TYPIO_DAEMON_APP_H */
+#endif /* TYPIO_APP_H */

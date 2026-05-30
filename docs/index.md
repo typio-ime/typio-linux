@@ -1,4 +1,4 @@
-# Typiod-Wayland Documentation
+# Typio Wayland Documentation
 
 The Linux/Wayland host for the [Typio](../typio) input method framework. This repository contains the `typio` binary and its supporting code: the Wayland input-method frontend, candidate popup renderer, UDS control surface (TIP v1), system tray, and voice capture plumbing.
 

@@ -3,13 +3,13 @@
 # Location: $XDG_CONFIG_HOME/typio/core.toml
 #          (defaults to ~/.config/typio/core.toml)
 #
-# This file owns framework-level settings: engine selection, keyboard
-# policy, notifications, shortcuts, and voice runtime. Frontend styling
-# (popup theme, fonts, colours) lives in a separate file per frontend —
-# the Wayland frontend reads wayland.toml next to this file.
-
-default_keyboard_engine = "basic"
-# default_voice_engine = "whisper"
+# This file owns persistent framework policy, notifications, shortcuts,
+# voice runtime, and per-engine settings. Last-used engine selection is
+# runtime state under $XDG_STATE_HOME/typio, so an installation may start
+# with no configured engine and resume the last active one later.
+#
+# Frontend styling (popup theme, fonts, colours) lives in a separate file
+# per frontend. The Wayland frontend reads wayland.toml next to this file.
 
 [keyboard]
 # Remember and restore the keyboard engine and engine mode per application.

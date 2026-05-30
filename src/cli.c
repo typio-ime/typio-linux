@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static const char *typiod_build_display_string(void) {
+static const char *typio_build_display_string(void) {
     static char buf[128];
     if (buf[0])
         return buf;
@@ -20,7 +20,7 @@ static const char *typiod_build_display_string(void) {
     return buf;
 }
 
-void typiod_options_init(TypiodOptions *options) {
+void typio_options_init(TypioOptions *options) {
     if (!options) {
         return;
     }
@@ -28,12 +28,12 @@ void typiod_options_init(TypiodOptions *options) {
     memset(options, 0, sizeof(*options));
 }
 
-void typiod_print_version(void) {
-    printf("%s\n", typiod_build_display_string());
+void typio_print_version(void) {
+    printf("%s\n", typio_build_display_string());
     printf("An extensible input method framework supporting multiple engines\n");
 }
 
-void typiod_print_help(const char *prog) {
+void typio_print_help(const char *prog) {
     printf("Usage: %s [OPTIONS]\n\n", prog);
     printf("Options:\n");
     printf("  -c, --config DIR    Configuration directory\n");
@@ -45,7 +45,7 @@ void typiod_print_help(const char *prog) {
     printf("  --version           Show version information\n");
 }
 
-int typiod_parse_args(TypiodOptions *options, int argc, char *argv[]) {
+int typio_parse_args(TypioOptions *options, int argc, char *argv[]) {
     static struct option long_options[] = {
         {"config", required_argument, 0, 'c'},
         {"data", required_argument, 0, 'd'},
@@ -81,13 +81,13 @@ int typiod_parse_args(TypiodOptions *options, int argc, char *argv[]) {
                 options->verbose = true;
                 break;
             case 'h':
-                typiod_print_help(argv[0]);
+                typio_print_help(argv[0]);
                 return 0;
             case 'V':
-                typiod_print_version();
+                typio_print_version();
                 return 0;
             default:
-                typiod_print_help(argv[0]);
+                typio_print_help(argv[0]);
                 return 1;
         }
     }

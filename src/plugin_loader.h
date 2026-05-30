@@ -14,7 +14,7 @@
  *
  * @return Number of engines successfully registered.
  */
-int typiod_plugin_load_dir(TypioRegistry *registry,
+int typio_plugin_load_dir(TypioRegistry *registry,
                            const char *dir,
                            void *user_data);
 
@@ -27,10 +27,10 @@ int typiod_plugin_load_dir(TypioRegistry *registry,
  *
  * Returns a NULL-terminated, heap-allocated array of heap-allocated
  * strings suitable for TypioInstanceConfig.engine_dirs. Free with
- * typiod_engine_dirs_free.
+ * typio_engine_dirs_free.
  */
-const char *const *typiod_engine_dirs_build(const char *cli_override);
-void typiod_engine_dirs_free(const char *const *dirs);
+const char *const *typio_engine_dirs_build(const char *cli_override);
+void typio_engine_dirs_free(const char *const *dirs);
 
 /**
  * @brief Return the first discovered engine icon theme path.
@@ -43,6 +43,6 @@ void typiod_engine_dirs_free(const char *const *dirs);
  * @return Absolute path to an icon theme directory, or nullptr if none
  *         was discovered.
  */
-const char *typiod_plugin_discovered_icon_theme_path(void);
+const char *typio_plugin_discovered_icon_theme_path(void);
 
 #endif /* TYPIOD_PLUGIN_LOADER_H */

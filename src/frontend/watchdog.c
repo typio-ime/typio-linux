@@ -87,7 +87,7 @@ static void *watchdog_thread(void *data) {
                     typio_wl_vk_state_name(frontend->virtual_keyboard_state),
                     deadline_remaining,
                     runtime_age_ms(now, frontend->virtual_keyboard_state_since_ms));
-                typiod_dump_recent_log();
+                typio_dump_recent_log();
                 kill(getpid(), SIGKILL);
                 break;
             }

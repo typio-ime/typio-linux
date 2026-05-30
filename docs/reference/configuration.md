@@ -4,9 +4,9 @@ The Typio Wayland frontend reads its own configuration from
 `$XDG_CONFIG_HOME/typio/wayland.toml` (default
 `~/.config/typio/wayland.toml`), separately from libtypio's `core.toml`.
 
-This file owns popup styling. Engine selection, shortcuts, voice runtime
-and other framework-level settings live in `core.toml`; see libtypio's
-`docs/reference/configuration.md` for those.
+This file owns popup styling. Framework policy, shortcuts, voice runtime,
+and per-engine settings live in `core.toml`; last-used engine selection
+lives in state. See libtypio's `docs/reference/configuration.md` for those.
 
 ## `[display]` section
 
