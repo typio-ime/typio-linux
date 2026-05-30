@@ -123,17 +123,27 @@ and voice-session plumbing that those external engines plug into.
 
 ## Engine discovery
 
-At startup `typio` searches for engine plugins in the following order:
+At startup `typio` scans a fixed, ordered list of directories and registers
+the **first** engine of each name it finds — so earlier directories win: a
+user-installed engine shadows a system one of the same name.
 
-1. `TYPIO_ENGINE_DIR` environment variable (if set)
-2. `--engine-dir <path>` command-line flag (if given)
-3. `~/.local/share/typio/engines`
-4. The compile-time `TYPIO_ENGINE_DIR` (usually `/usr/local/lib/typio/engines`)
+| Order | Source | Path |
+|---|---|---|
+| 1 | `-E` / `--engine-dir DIR` | directory passed on the command line |
+| 2 | `$TYPIO_ENGINE_DIR` | value of that environment variable |
+| 3 | **User** | `$XDG_DATA_HOME/typio/engines`, else `~/.local/share/typio/engines` |
+| 4 | **System** | compile-time `<prefix>/<libdir>/typio/engines` (typically `/usr/lib/typio/engines`) |
 
-In each directory it looks for files matching `libtypio-engine-*.so`,
-`dlopen`s each one, and registers it with libtypio via the engine ABI.
-The file name prefix is mandatory; the suffix becomes the engine name
-exposed to users (`basic`, `rime`, `whisper`, …).
+In each directory it loads only files named `libtypio-engine-<name>.so`,
+`dlopen`s each, and registers it with libtypio via the engine ABI. The
+`libtypio-engine-` prefix is mandatory; `<name>` (the part before `.so`)
+becomes the engine identifier exposed in config and the CLI (`basic`, `rime`,
+`whisper`, …). A sibling `icons/` directory (`<engine-dir>/icons/`,
+freedesktop hicolor layout) is added to the tray's icon search path, so an
+engine can ship its own symbolic icons.
+
+Canonical rules (precedence, naming, icons) live in the
+[Engine Discovery Reference](../reference/engine-discovery.md).
 
 ## Run tests
 

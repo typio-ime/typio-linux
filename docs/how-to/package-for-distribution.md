@@ -70,6 +70,9 @@ Common engines:
 
 Package each engine as a separate package so users choose only the ones they need.
 
+See the [Engine Discovery Reference](../reference/engine-discovery.md) for the
+search-path order, file-name rules, and bundled-icon layout.
+
 ## Configuration
 
 Copy the example files to the system or user config directory and edit them:

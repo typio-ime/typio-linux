@@ -2,21 +2,30 @@
 
 ## `typio --list` shows no engines
 
-The daemon discovers engines by scanning `~/.local/share/typio/engines` and
-`/usr/local/lib/typio/engines` for files matching `libtypio-engine-*.so`.
-If no engines are listed, either no engine plugins are installed or the
-daemon cannot read the engine directories.
+Most often the plugin is installed but its file name does not match
+`libtypio-engine-<name>.so` (hyphens). Cargo emits underscores
+(`libtypio_engine_basic.so`), which the scanner silently ignores. Rename it:
 
-Check the engine directories:
+```bash
+cd ~/.local/share/typio/engines
+mv libtypio_engine_basic.so libtypio-engine-basic.so
+```
+
+Then re-run `typio --list`.
+
+If the name is already correct, confirm the plugin sits in a scanned directory
+and is readable:
 
 ```bash
 ls ~/.local/share/typio/engines
 ls /usr/local/lib/typio/engines
 ```
 
-The [basic engine](../../typio-engine-basic) is a separate repository.
-Build it with `cargo build --release`, then copy the `.so` (renamed to
-`libtypio-engine-basic.so`) into one of the directories above.
+The [basic engine](../../typio-engine-basic) is a separate repository: build it
+with `cargo build --release`, then install the `.so` under its hyphenated name.
+
+See the [Engine Discovery Reference](../reference/engine-discovery.md) for the
+full search-path order and naming rules.
 
 ## `Failed to connect to Wayland display`
 

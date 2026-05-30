@@ -10,6 +10,7 @@ The Linux/Wayland host for the [Typio](../typio) input method framework. This re
 - **[Reference](reference/)** — Lookup-oriented API, config, and protocol documentation.
   - [IPC Protocol Reference](reference/ipc-protocol.md) — TIP v1 (UDS + JSON-RPC)
   - [Configuration Reference](reference/configuration.md)
+  - [Engine Discovery Reference](reference/engine-discovery.md) — search path, file-name rules, icons
 - **[Explanation](explanation/)** — Understanding-oriented design documents.
   - [Wayland Input Method Protocol](explanation/wayland-input-method.md)
   - [Frontend Graphics](explanation/frontend-graphics.md)
