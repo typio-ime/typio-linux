@@ -102,7 +102,21 @@ static void font_file_cache_insert(const char *family, int32_t weight, const cha
 }
 
 /* ── Font object cache (FT_Face + hb_font_t) ────────────────────────── */
-#define FONT_OBJ_CACHE_CAP 64
+/*
+ * A font object (FT_Face + hb_font_t) must outlive every TypioTextShape and
+ * every glyph-atlas entry that references it: layouts hold a raw FT_Face* and
+ * the atlas is keyed by font_id and re-rasterises on miss. Freeing a face that
+ * is still referenced is a use-after-free that renders glyphs blank.
+ *
+ * Distinct (path, size, weight) tuples are a bounded resource in practice
+ * (a handful of system fonts × a few sizes × a few weights), so this cache
+ * GROWS on demand and never frees a face at runtime — entries are released
+ * only by font_obj_cache_clear() at shutdown. This deliberately replaces an
+ * earlier fixed 64-slot LRU that FT_Done_Face'd the evicted slot 0, which —
+ * since the primary font sat permanently at slot 0 — freed the in-use primary
+ * face the moment a fallback font pushed the cache over capacity.
+ */
+#define FONT_OBJ_CACHE_INIT_CAP 64
 
 typedef struct {
     char      *path;
@@ -113,9 +127,10 @@ typedef struct {
     uint32_t   font_id;
 } FontObjEntry;
 
-static FontObjEntry font_obj_cache[FONT_OBJ_CACHE_CAP];
-static size_t       font_obj_cache_count = 0;
-static uint32_t     next_font_id = 1;
+static FontObjEntry *font_obj_cache = NULL;
+static size_t        font_obj_cache_count = 0;
+static size_t        font_obj_cache_cap = 0;
+static uint32_t      next_font_id = 1;
 
 static void font_obj_cache_clear(void)
 {
@@ -126,7 +141,10 @@ static void font_obj_cache_clear(void)
             FT_Done_Face(font_obj_cache[i].face);
         free(font_obj_cache[i].path);
     }
+    free(font_obj_cache);
+    font_obj_cache = NULL;
     font_obj_cache_count = 0;
+    font_obj_cache_cap = 0;
 }
 
 static FontObjEntry *font_obj_cache_lookup(const char *path, float size, int32_t weight)
@@ -141,33 +159,30 @@ static FontObjEntry *font_obj_cache_lookup(const char *path, float size, int32_t
     return NULL;
 }
 
-static void font_obj_cache_insert(const char *path, float size, int32_t weight,
+/* Returns false only on allocation failure (caller then disposes the face). */
+static bool font_obj_cache_insert(const char *path, float size, int32_t weight,
                                   FT_Face face, hb_font_t *hb_font, uint32_t font_id)
 {
-    if (font_obj_cache_count < FONT_OBJ_CACHE_CAP) {
-        FontObjEntry *e = &font_obj_cache[font_obj_cache_count++];
-        e->path = strdup(path);
-        e->size = size;
-        e->weight = weight;
-        e->face = face;
-        e->hb_font = hb_font;
-        e->font_id = font_id;
-    } else {
-        free(font_obj_cache[0].path);
-        if (font_obj_cache[0].hb_font)
-            hb_font_destroy(font_obj_cache[0].hb_font);
-        if (font_obj_cache[0].face)
-            FT_Done_Face(font_obj_cache[0].face);
-        for (size_t i = 1; i < FONT_OBJ_CACHE_CAP; ++i)
-            font_obj_cache[i - 1] = font_obj_cache[i];
-        FontObjEntry *e = &font_obj_cache[FONT_OBJ_CACHE_CAP - 1];
-        e->path = strdup(path);
-        e->size = size;
-        e->weight = weight;
-        e->face = face;
-        e->hb_font = hb_font;
-        e->font_id = font_id;
+    if (font_obj_cache_count == font_obj_cache_cap) {
+        size_t newcap = font_obj_cache_cap ? font_obj_cache_cap * 2
+                                           : FONT_OBJ_CACHE_INIT_CAP;
+        FontObjEntry *grown =
+            realloc(font_obj_cache, newcap * sizeof(*grown));
+        if (!grown) {
+            return false;
+        }
+        font_obj_cache = grown;
+        font_obj_cache_cap = newcap;
     }
+
+    FontObjEntry *e = &font_obj_cache[font_obj_cache_count++];
+    e->path = strdup(path);
+    e->size = size;
+    e->weight = weight;
+    e->face = face;
+    e->hb_font = hb_font;
+    e->font_id = font_id;
+    return true;
 }
 
 /* Forward declarations — defined later in this file. */
@@ -277,7 +292,11 @@ static FontObjEntry *get_or_create_font(const char *path, float size, int32_t we
     }
 
     uint32_t font_id = next_font_id++;
-    font_obj_cache_insert(path, size, weight, face, hb_font, font_id);
+    if (!font_obj_cache_insert(path, size, weight, face, hb_font, font_id)) {
+        hb_font_destroy(hb_font);
+        FT_Done_Face(face);
+        return NULL;
+    }
     return font_obj_cache_lookup(path, size, weight);
 }
 
