@@ -3,22 +3,23 @@
 # Location: $XDG_CONFIG_HOME/typio/core.toml
 #          (defaults to ~/.config/typio/core.toml)
 #
-# This file owns persistent framework policy, notifications, shortcuts,
+# This file owns persistent framework policy, shortcuts, notifications,
 # voice runtime, and per-engine settings. Last-used engine selection is
 # runtime state under $XDG_STATE_HOME/typio, so an installation may start
 # with no configured engine and resume the last active one later.
 #
-# Frontend styling (popup theme, fonts, colours) lives in a separate file
-# per frontend. The Wayland frontend reads wayland.toml next to this file.
+# Frontend styling (popup theme, fonts, colours) lives in wayland.toml next
+# to this file.
+#
+# For the full reference of every key, see docs/reference/configuration.md.
 
 [keyboard]
 # Remember and restore the keyboard engine and engine mode per application.
 # per_app_preferences = true
 
-# ── Engine-owned sections ────────────────────────────────────────────
-# Each engine plugin registers its own `engines.<name>.*` schema. The
-# entries below are illustrative; consult the plugin's documentation for
-# the authoritative list of keys and defaults.
+# ── Engine routing (consumed by typio-wayland) ───────────────────────
+# These keys change how the Wayland frontend routes keys when the basic
+# engine is active.  They are NOT owned by the engine plugin itself.
 
 [engines.basic]
 # "forward" sends printable keys through virtual keyboard forwarding.
@@ -30,6 +31,12 @@
 # Default: false
 # compose = true
 
+# ── Engine-owned sections ────────────────────────────────────────────
+# Each engine plugin registers its own `engines.<name>.*` schema.  The
+# host does not interpret these keys; they are passed to the engine via
+# the engine ABI.  Consult the plugin's documentation for authoritative
+# defaults.
+
 [engines.rime]
 # shared_data_dir = "/usr/share/rime-data"
 # user_data_dir = "~/.local/share/typio/rime"
@@ -38,11 +45,17 @@
 [engines.mozc]
 # server_path = "/usr/lib/mozc/mozc_server"
 
-# Voice input configuration (unified engine format)
-# For whisper: model is ggml model name (base, small, medium, large)
-#   place model at ~/.local/share/typio/whisper/ggml-<model>.bin
-# For sherpa-onnx: model is the directory name under ~/.local/share/typio/sherpa-onnx/
-#   supports transducer (Zipformer), paraformer, whisper ONNX, nemo-ctc, SenseVoice
+# ── Voice input ──────────────────────────────────────────────────────
+# default_voice_engine selects which voice backend to activate on startup.
+# It must match the file name prefix: libtypio-engine-<name>.so.
+# default_voice_engine = "whisper"
+
+# Voice engine plugin settings (illustrative):
+#   - whisper:    model is ggml model name (base, small, medium, large)
+#                 place model at ~/.local/share/typio/whisper/ggml-<model>.bin
+#   - sherpa-onnx: model is the directory name under ~/.local/share/typio/sherpa-onnx/
+#                  supports transducer (Zipformer), paraformer, whisper ONNX,
+#                  nemo-ctc, SenseVoice
 
 # [engines.whisper]
 # language = "zh"
@@ -52,7 +65,25 @@
 # language = "auto"
 # model = "sensevoice-small"
 
-# Keyboard shortcuts
+# Session timeout: idle milliseconds before the voice session is torn down.
+# Set to 0 to disable auto-unload.  (default: 480000)
+# voice.unload_after_ms = 480000
+
+# ── Notifications ────────────────────────────────────────────────────
+# Consumed by typio-wayland.  Controls startup health notifications and
+# runtime toast behaviour.
+
+# [notifications]
+# enable = true
+# startup_checks = true
+# runtime = true
+# voice = true
+# cooldown_ms = 5000
+
+# ── Keyboard shortcuts ───────────────────────────────────────────────
+# Parsed by libtypio.  Values are shortcut strings such as Ctrl+Shift
+# or Super+v.
+
 [shortcuts]
 # switch_keyboard_engine = "Ctrl+Shift"
 # exit = "Ctrl+Shift+Escape"

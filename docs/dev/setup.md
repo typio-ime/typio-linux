@@ -2,62 +2,66 @@
 
 This document is for contributors who will modify `typio-wayland` source code.
 
-## Requirements
+## Quick start
 
-### Install these yourself
+```bash
+export PKG_CONFIG_PATH="../libtypio/target/release:${PKG_CONFIG_PATH}"
+meson setup build --buildtype=debug -Denable_systray=true
+ninja -C build
+```
 
-Build tools:
+If `libtypio` is not built locally, Meson clones and builds it automatically
+via `subprojects/libtypio.wrap`.  `flux` is handled similarly (see below).
 
-- Meson 1.0+ (primary build system)
-- Ninja 1.10+
-- C23 compiler
-- `pkg-config`
-- `wayland-scanner`
-- `glslangValidator`
+Run:
 
-Development libraries:
+```bash
+export LD_LIBRARY_PATH=../libtypio/target/release:${LD_LIBRARY_PATH}
+./build/src/typio --verbose
+```
 
-- Wayland client
-- `xkbcommon`
-- Vulkan, FreeType, HarfBuzz, and fontconfig
+## Prerequisites
 
-Optional:
+Install these from your system package manager:
 
-- `dbus-1` — for `enable_status_bus=true` or `enable_systray=true`
-- `libpipewire-0.3` — for `-Dbuild_voice=true`
+- Meson 1.0+, Ninja 1.10+
+- C23 compiler, `pkg-config`
+- `wayland-scanner`, `glslangValidator`
+- Wayland client libraries, `xkbcommon`
+- Vulkan, FreeType, HarfBuzz, fontconfig
+- `dbus-1` (if `-Denable_systray=true`)
+- `libpipewire-0.3` (if `-Dbuild_voice=true`)
 
-These are discovered via `pkg-config`. Meson does not enforce upper-bound
-versions; the project is regularly tested against the packages shipped in
-the latest Arch Linux and Fedora releases.
+Versions are not capped; the project is tested against latest Arch Linux and
+Fedora releases.
 
-### Resolved automatically (no install needed)
+## Project dependencies
 
-Two dependencies are built or fetched for you — you never install them
-system-wide:
+Two repositories are resolved automatically.  You do **not** need to install
+them system-wide.
 
-| Dependency | How it's resolved | Linkage |
+| Dependency | Resolution | Notes |
 |---|---|---|
-| **libtypio** | `pkg-config` first — point `PKG_CONFIG_PATH` at a local `../libtypio/target/release` cargo build; else `subprojects/libtypio.wrap` clones and builds it via cargo | shared `.so` → needs `LD_LIBRARY_PATH` at runtime |
-| **flux** (candidate popup renderer) | sibling `../flux` checkout (auto-symlinked into `subprojects/flux`); else `subprojects/flux.wrap` clones it from git | static, built by Meson → linked into the binary, nothing to find at runtime |
+| **libtypio** | `pkg-config` first, else subproject wrap | Point `PKG_CONFIG_PATH` to a local `../libtypio/target/release` build, or let Meson clone and build it via cargo.  Runtime requires `LD_LIBRARY_PATH` to find the shared library. |
+| **flux** | sibling `../flux` or subproject wrap | Always built as **static** and linked into the binary.  If unresolved, candidate-popup rendering is disabled (stubs are used). |
 
-If the flux subproject can't be resolved at all, the build continues with
-candidate-popup rendering disabled (stubs are used).
+**Recommended layout** for active development:
 
-**Stale flux symlink?** `subprojects/flux` is a git-ignored convenience
-symlink that Meson creates *automatically* when a sibling `../flux` exists,
-so a fresh clone never ships it and the `.wrap` clones flux when no sibling
-is present. The only thing that breaks is a *leftover* symlink pointing at a
-checkout you've since moved or deleted — Meson then finds a dangling
-`subprojects/flux` and won't fall back to the wrap. Delete it and
-reconfigure:
+```
+parent/
+├── libtypio/          ← cargo build --release
+├── flux/              ← optional; auto-symlinked as subprojects/flux
+└── typio-wayland/     ← run all commands from here
+```
+
+**Stale `subprojects/flux` symlink?**  If a sibling `../flux` checkout was
+moved or deleted, Meson may find a dangling symlink and refuse to fall back
+to the wrap.  Fix it:
 
 ```bash
 rm -f subprojects/flux
 meson setup --reconfigure build
 ```
-
-Engines (rime, mozc, …) are separate projects; their dependencies are
-documented in those repositories.
 
 ## Local development workflow
 
