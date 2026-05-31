@@ -98,6 +98,16 @@ deliberately tiny. It has two parts:
   (`typio/abi/renderer.h`) precisely so a host could plug in cairo, skia, or
   flux — the seam predates the current single backend.
 
+  Font resolution uses Fontconfig for discovery, HarfBuzz for shaping, and
+  FreeType for rasterisation. When the primary font produces `.notdef` (glyph
+  ID 0) for a codepoint, the shaper performs **per-glyph fallback**: it queries
+  `FcFontSort` for fonts covering that specific codepoint and verifies each
+  candidate with `FT_Get_Char_Index`. Up to four fallback fonts are stored per
+  text shape and shared across all glyphs. Font loading also selects a
+  format-12 charmap when available, enabling correct lookup of supplementary-
+  plane characters (emoji, rare CJK). See
+  [ADR-0016](../adr/0016-per-glyph-font-fallback.md).
+
 - **Canvas / device / surface calls** confined to `text_shaper.c`, `device.c`,
   and `surface.c`: get a lazily-created shared device (`typio_render_device_get`,
   `device.c`), create a surface bound to the input-popup `wl_surface`, run the

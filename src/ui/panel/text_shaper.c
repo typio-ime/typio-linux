@@ -3,6 +3,8 @@
 #include "fallback_cache.h"
 #include "glyph_pack.h"
 
+#include <typio/abi/log.h>
+
 #include <flux/flux.h>
 #include <flux/vulkan.h>
 
@@ -12,6 +14,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 #include FT_MULTIPLE_MASTERS_H
+#include FT_TRUETYPE_TABLES_H
 
 #include <flux/canvas.h>
 
@@ -21,20 +24,29 @@
 #include <string.h>
 #include <strings.h>
 
+#define MAX_FALLBACK_FONTS 4
+
 typedef struct {
-    uint32_t glyph_id;   /* FreeType face glyph index */
-    float    x;          /* pen x at layout creation */
-    float    y_offset;   /* y offset from HarfBuzz positioning */
+    uint32_t glyph_id;     /* FreeType face glyph index */
+    uint32_t fb_glyph_id;  /* fallback face glyph index (0 = no fallback) */
+    uint8_t  fb_idx;       /* index into fallback_fonts[] (0-based) */
+    uint32_t cluster;      /* HarfBuzz cluster index (byte offset in UTF-8 text) */
+    float    x;            /* pen x at layout creation */
+    float    y_offset;     /* y offset from HarfBuzz positioning */
 } GlyphEntry;
 
 struct TypioTextShape {
     GlyphEntry *glyphs;
     size_t      count;
-    FT_Face     face;     /* borrowed; valid while font cache holds it */
-    uint32_t    font_id;  /* identity of (face, size, weight) for atlas keys */
+    FT_Face     face;       /* borrowed; valid while font cache holds it */
+    uint32_t    font_id;    /* identity of (face, size, weight) for atlas keys */
+    FT_Face     fallback_faces[MAX_FALLBACK_FONTS];
+    uint32_t    fallback_font_ids[MAX_FALLBACK_FONTS];
+    uint8_t     fallback_count;
     float       width;
     float       height;
     float       baseline;
+    char       *text;       /* owned copy for per-glyph fallback */
 };
 
 static FT_Library   ft_library;
@@ -217,6 +229,7 @@ static void fallback_font_cache_clear(void)
     }
 }
 
+__attribute__((unused))
 static char *find_fallback_font_cached(const char *text, int32_t weight)
 {
     if (!text || !text[0]) return NULL;
@@ -277,6 +290,13 @@ static FontObjEntry *get_or_create_font(const char *path, float size, int32_t we
 
     FT_Face face = NULL;
     if (FT_New_Face(ft_library, path, 0, &face) != 0) return NULL;
+
+    for (int i = 0; i < face->num_charmaps; i++) {
+        if (FT_Get_CMap_Format(face->charmaps[i]) == 12) {
+            FT_Set_Charmap(face, face->charmaps[i]);
+            break;
+        }
+    }
 
     set_face_weight(face, weight);
 
@@ -378,32 +398,29 @@ static bool parse_font_desc(const char *font_desc,
     return true;
 }
 
-static char *match_font_file(const char *family, int32_t weight)
+static int weight_to_fc(int32_t weight)
 {
-    char *cached = font_file_cache_lookup(family, weight);
-    if (cached) return cached;
+    if (weight >= 900) return FC_WEIGHT_BLACK;
+    if (weight >= 800) return FC_WEIGHT_EXTRABOLD;
+    if (weight >= 700) return FC_WEIGHT_BOLD;
+    if (weight >= 600) return FC_WEIGHT_DEMIBOLD;
+    if (weight >= 500) return FC_WEIGHT_MEDIUM;
+    if (weight >= 400) return FC_WEIGHT_REGULAR;
+    if (weight >= 300) return FC_WEIGHT_LIGHT;
+    if (weight >= 200) return FC_WEIGHT_EXTRALIGHT;
+    return FC_WEIGHT_THIN;
+}
 
-    if (!FcInit()) return NULL;
+static bool fc_font_covers_cjk(FcPattern *font)
+{
+    FcCharSet *cs = NULL;
+    if (FcPatternGetCharSet(font, FC_CHARSET, 0, &cs) != FcResultMatch || !cs)
+        return false;
+    return FcCharSetHasChar(cs, 0x4E2D) == FcTrue;
+}
 
-    FcPattern *pat = FcPatternCreate();
-    if (!pat) return NULL;
-
-    FcPatternAddString(pat, FC_FAMILY,
-                       (const FcChar8 *)(family && family[0] ? family : "Sans"));
-    int fc_weight = FC_WEIGHT_REGULAR;
-    if (weight >= 900)      fc_weight = FC_WEIGHT_BLACK;
-    else if (weight >= 800) fc_weight = FC_WEIGHT_EXTRABOLD;
-    else if (weight >= 700) fc_weight = FC_WEIGHT_BOLD;
-    else if (weight >= 600) fc_weight = FC_WEIGHT_DEMIBOLD;
-    else if (weight >= 500) fc_weight = FC_WEIGHT_MEDIUM;
-    else if (weight >= 400) fc_weight = FC_WEIGHT_REGULAR;
-    else if (weight >= 300) fc_weight = FC_WEIGHT_LIGHT;
-    else if (weight >= 200) fc_weight = FC_WEIGHT_EXTRALIGHT;
-    else                    fc_weight = FC_WEIGHT_THIN;
-    FcPatternAddInteger(pat, FC_WEIGHT, fc_weight);
-    FcConfigSubstitute(NULL, pat, FcMatchPattern);
-    FcDefaultSubstitute(pat);
-
+static char *fc_match_extract(FcPattern *pat)
+{
     FcResult fc_result;
     FcPattern *match = FcFontMatch(NULL, pat, &fc_result);
     char *result = NULL;
@@ -414,7 +431,67 @@ static char *match_font_file(const char *family, int32_t weight)
         }
         FcPatternDestroy(match);
     }
+    return result;
+}
+
+static char *match_font_file(const char *family, int32_t weight)
+{
+    char *cached = font_file_cache_lookup(family, weight);
+    if (cached) return cached;
+
+    if (!FcInit()) return NULL;
+
+    const char *fam = (family && family[0]) ? family : "Sans";
+    int fc_weight = weight_to_fc(weight);
+
+    FcPattern *pat = FcPatternCreate();
+    if (!pat) return NULL;
+
+    FcPatternAddString(pat, FC_FAMILY, (const FcChar8 *)fam);
+    FcPatternAddInteger(pat, FC_WEIGHT, fc_weight);
+    FcConfigSubstitute(NULL, pat, FcMatchPattern);
+    FcDefaultSubstitute(pat);
+
+    char *result = fc_match_extract(pat);
     FcPatternDestroy(pat);
+
+    if (result) {
+        FcPattern *check = FcPatternCreate();
+        if (check) {
+            FcPatternAddString(check, FC_FILE, (const FcChar8 *)result);
+            FcConfigSubstitute(NULL, check, FcMatchPattern);
+            FcDefaultSubstitute(check);
+            FcResult cr;
+            FcPattern *cm = FcFontMatch(NULL, check, &cr);
+            bool has_cjk = cm && fc_font_covers_cjk(cm);
+            if (cm) FcPatternDestroy(cm);
+            FcPatternDestroy(check);
+
+            if (!has_cjk) {
+                FcPattern *cjk_pat = FcPatternCreate();
+                if (cjk_pat) {
+                    FcPatternAddString(cjk_pat, FC_FAMILY, (const FcChar8 *)fam);
+                    FcPatternAddInteger(cjk_pat, FC_WEIGHT, fc_weight);
+                    FcCharSet *cs = FcCharSetCreate();
+                    if (cs) {
+                        FcCharSetAddChar(cs, 0x4E2D);
+                        FcPatternAddCharSet(cjk_pat, FC_CHARSET, cs);
+                        FcCharSetDestroy(cs);
+                    }
+                    FcConfigSubstitute(NULL, cjk_pat, FcMatchPattern);
+                    FcDefaultSubstitute(cjk_pat);
+
+                    char *cjk_result = fc_match_extract(cjk_pat);
+                    FcPatternDestroy(cjk_pat);
+
+                    if (cjk_result) {
+                        free(result);
+                        result = cjk_result;
+                    }
+                }
+            }
+        }
+    }
 
     if (result) {
         font_file_cache_insert(family, weight, result);
@@ -463,6 +540,7 @@ static char *find_fallback_font(const char *text, int32_t weight,
     else if (weight >= 300) fc_weight = FC_WEIGHT_LIGHT;
     else if (weight >= 200) fc_weight = FC_WEIGHT_EXTRALIGHT;
     else                    fc_weight = FC_WEIGHT_THIN;
+    FcPatternAddCharSet(pat, FC_CHARSET, cs);
     FcPatternAddInteger(pat, FC_WEIGHT, fc_weight);
     FcConfigSubstitute(NULL, pat, FcMatchPattern);
     FcDefaultSubstitute(pat);
@@ -506,6 +584,87 @@ static char *find_fallback_font(const char *text, int32_t weight,
     return result;
 }
 
+typedef struct {
+    char            *paths[8];
+    FontObjEntry    *objs[8];
+    size_t           count;
+} FontCandidateList;
+
+static void font_candidate_list_init(FontCandidateList *list)
+{
+    memset(list, 0, sizeof(*list));
+}
+
+static void font_candidate_list_clear(FontCandidateList *list)
+{
+    for (size_t i = 0; i < list->count; i++) {
+        free(list->paths[i]);
+    }
+    list->count = 0;
+}
+
+static bool font_candidate_list_add(FontCandidateList *list, const char *path,
+                                     FontObjEntry *obj)
+{
+    if (list->count >= 8) return false;
+    for (size_t i = 0; i < list->count; i++) {
+        if (strcmp(list->paths[i], path) == 0) return true;
+    }
+    list->paths[list->count] = strdup(path);
+    list->objs[list->count] = obj;
+    list->count++;
+    return true;
+}
+
+static void find_sorted_fonts_for_codepoint(FcChar32 ch, int32_t weight,
+                                              float size_px,
+                                              FontCandidateList *list,
+                                              const char *primary_path)
+{
+    font_candidate_list_init(list);
+    if (!FcInit()) return;
+
+    FcPattern *pat = FcPatternCreate();
+    if (!pat) return;
+
+    FcCharSet *cs = FcCharSetCreate();
+    if (!cs) { FcPatternDestroy(pat); return; }
+    FcCharSetAddChar(cs, ch);
+
+    FcPatternAddCharSet(pat, FC_CHARSET, cs);
+    FcPatternAddInteger(pat, FC_WEIGHT, weight_to_fc(weight));
+    FcConfigSubstitute(NULL, pat, FcMatchPattern);
+    FcDefaultSubstitute(pat);
+
+    FcResult fc_result;
+    FcFontSet *set = FcFontSort(NULL, pat, FcTrue, NULL, &fc_result);
+
+    if (set) {
+        for (int i = 0; i < set->nfont && list->count < 8; i++) {
+            FcCharSet *font_cs = NULL;
+            if (FcPatternGetCharSet(set->fonts[i], FC_CHARSET, 0, &font_cs) == FcResultMatch && font_cs) {
+                if (!FcCharSetHasChar(font_cs, ch)) continue;
+            }
+
+            FcChar8 *file = NULL;
+            if (FcPatternGetString(set->fonts[i], FC_FILE, 0, &file) != FcResultMatch || !file)
+                continue;
+
+            const char *path = (const char *)file;
+            if (primary_path && strcmp(path, primary_path) == 0) continue;
+
+            FontObjEntry *obj = get_or_create_font(path, size_px, weight);
+            if (obj) {
+                font_candidate_list_add(list, path, obj);
+            }
+        }
+        FcFontSetDestroy(set);
+    }
+
+    FcCharSetDestroy(cs);
+    FcPatternDestroy(pat);
+}
+
 static bool layout_has_missing_glyphs(const TypioTextShape *layout)
 {
     if (!layout || !layout->glyphs) return false;
@@ -522,6 +681,7 @@ static void flux_free_layout_internal(TypioTextShape *layout)
     /* Layouts own no GPU resource — glyph pixels live in the shared, persistent
      * glyph atlas, not per-layout. Freeing one is a pure CPU free. */
     free(layout->glyphs);
+    free(layout->text);
     free(layout);
 }
 
@@ -533,6 +693,8 @@ static TypioTextShape *flux_shape_text(FontObjEntry *font,
 
     layout->face    = font->face;
     layout->font_id = font->font_id;
+    layout->fallback_count = 0;
+    layout->text    = text ? strdup(text) : NULL;
 
     {
         float ascender  = (float)font->face->size->metrics.ascender  / 64.0f;
@@ -559,9 +721,11 @@ static TypioTextShape *flux_shape_text(FontObjEntry *font,
 
     float pen_x = 0.0f;
     for (unsigned int i = 0; i < count; ++i) {
-        layout->glyphs[i].glyph_id = infos[i].codepoint;
-        layout->glyphs[i].x        = pen_x + (float)positions[i].x_offset / 64.0f;
-        layout->glyphs[i].y_offset = -(float)positions[i].y_offset / 64.0f;
+        layout->glyphs[i].glyph_id    = infos[i].codepoint;
+        layout->glyphs[i].fb_glyph_id = 0;
+        layout->glyphs[i].cluster     = infos[i].cluster;
+        layout->glyphs[i].x           = pen_x + (float)positions[i].x_offset / 64.0f;
+        layout->glyphs[i].y_offset    = -(float)positions[i].y_offset / 64.0f;
         pen_x += (float)positions[i].x_advance / 64.0f;
     }
     layout->width = pen_x;
@@ -579,11 +743,9 @@ static TypioTextShape *flux_create_layout(void *engine,
 {
     char family[128];
     char *font_file = NULL;
-    char *fb_file   = NULL;
     float size_px;
     FontObjEntry *font = NULL;
     TypioTextShape *layout    = NULL;
-    TypioTextShape *fb_layout = NULL;
     int32_t weight = 400;
 
     (void)engine;
@@ -598,23 +760,66 @@ static TypioTextShape *flux_create_layout(void *engine,
     layout = flux_shape_text(font, text);
     if (!layout) goto fail;
 
-    if (layout_has_missing_glyphs(layout)) {
-        fb_file = find_fallback_font_cached(text, weight);
-        if (fb_file && strcmp(fb_file, font_file) != 0) {
-            FontObjEntry *fb_font = get_or_create_font(fb_file, size_px, weight);
-            if (fb_font) {
-                fb_layout = flux_shape_text(fb_font, text);
-                if (fb_layout && !layout_has_missing_glyphs(fb_layout)) {
-                    flux_free_layout_internal(layout);
-                    layout    = fb_layout;
-                    fb_layout = NULL;
-                } else {
-                    flux_free_layout_internal(fb_layout);
-                    fb_layout = NULL;
+    if (layout_has_missing_glyphs(layout) && layout->text) {
+        typedef struct {
+            char *path;
+            FontObjEntry *font_obj;
+        } FbCandidate;
+        FbCandidate fb_candidates[MAX_FALLBACK_FONTS];
+        size_t fb_count = 0;
+
+        for (size_t i = 0; i < layout->count; i++) {
+            if (layout->glyphs[i].glyph_id != 0) continue;
+
+            const char *p = layout->text + layout->glyphs[i].cluster;
+            if (!*p) continue;
+            FcChar32 ch;
+            int len = FcUtf8ToUcs4((const FcChar8 *)p, &ch, (int)strlen(p));
+            if (len <= 0) continue;
+
+            FontCandidateList candidates;
+            find_sorted_fonts_for_codepoint(ch, weight, size_px, &candidates, font_file);
+
+            for (size_t k = 0; k < candidates.count; k++) {
+                FontObjEntry *fb_obj = candidates.objs[k];
+                if (!fb_obj || !fb_obj->face) continue;
+
+                FT_UInt fb_gid = FT_Get_Char_Index(fb_obj->face, ch);
+                if (fb_gid == 0) continue;
+
+                uint8_t fb_idx = UINT8_MAX;
+                for (size_t j = 0; j < fb_count; j++) {
+                    if (fb_candidates[j].font_obj == fb_obj) {
+                        fb_idx = (uint8_t)j;
+                        break;
+                    }
+                }
+
+                if (fb_idx == UINT8_MAX && fb_count < MAX_FALLBACK_FONTS) {
+                    fb_idx = (uint8_t)fb_count;
+                    fb_candidates[fb_count].path = NULL;
+                    fb_candidates[fb_count].font_obj = fb_obj;
+                    layout->fallback_faces[fb_count] = fb_obj->face;
+                    layout->fallback_font_ids[fb_count] = fb_obj->font_id;
+                    fb_count++;
+                }
+
+                if (fb_idx != UINT8_MAX) {
+                    layout->glyphs[i].fb_glyph_id = fb_gid;
+                    layout->glyphs[i].fb_idx = fb_idx;
+                    typio_log_debug("text_shaper: fallback U+%04X -> font[%u] glyph=%u via %s",
+                                   ch, fb_idx, fb_gid, candidates.paths[k]);
+                    break;
                 }
             }
+
+            font_candidate_list_clear(&candidates);
         }
-        free(fb_file);
+
+        layout->fallback_count = (uint8_t)fb_count;
+        for (size_t j = 0; j < fb_count; j++) {
+            free(fb_candidates[j].path);
+        }
     }
 
     free(font_file);
@@ -623,7 +828,6 @@ static TypioTextShape *flux_create_layout(void *engine,
 fail:
     free(font_file);
     flux_free_layout_internal(layout);
-    flux_free_layout_internal(fb_layout);
     return NULL;
 }
 
@@ -1097,8 +1301,20 @@ bool typio_text_shape_fill(flux_canvas *canvas, flux_arena *arena,
     const float inv_dim = 1.0f / (float)GLYPH_ATLAS_DIM;
 
     for (size_t i = 0; i < layout->count; ++i) {
-        const GlyphSlot *g = glyph_atlas_get(layout->font_id, layout->face,
-                                             layout->glyphs[i].glyph_id);
+        uint32_t glyph_id = layout->glyphs[i].glyph_id;
+        uint32_t font_id  = layout->font_id;
+        FT_Face  face     = layout->face;
+
+        if (glyph_id == 0 && layout->glyphs[i].fb_glyph_id != 0) {
+            uint8_t fb_idx = layout->glyphs[i].fb_idx;
+            if (fb_idx < layout->fallback_count) {
+                glyph_id = layout->glyphs[i].fb_glyph_id;
+                font_id  = layout->fallback_font_ids[fb_idx];
+                face     = layout->fallback_faces[fb_idx];
+            }
+        }
+
+        const GlyphSlot *g = glyph_atlas_get(font_id, face, glyph_id);
         if (!g || !g->drawable) continue;
 
         /* Integer glyph placement relative to the (fractional) draw origin,
