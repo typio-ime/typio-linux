@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7] — 2026-05-31
+
+### Added
+- Add voice push-to-talk (PTT) support via PipeWire capture and sherpa-onnx engine integration.
+- Add `voice_ptt` shortcut (default Super+V) and voice session lifecycle (recording → inference → commit).
+- Add `typio-engine-sherpa` plugin option to meson for building the sherpa-onnx voice engine.
+- Add runtime config reload for voice engine changes without restart.
+- Add `engines.sherpa-onnx.model` config key to `core.toml.example` with upstream model directory name.
+
+### Fixed
+- Fix voice session double-free: result text was freed by both libtypio `fire_event` and host callback.
+- Fix `typio_free_string` used instead of `free()` for Rust-allocated voice result text in host callback.
+- Fix tray status icon logic to avoid carrying stale dynamic icons across engine switches.
+- Fix plugin loader to correctly handle engine discovery paths.
+- Fix controller state handling for voice PTT key tracking.
+
+### Changed
+- Refactor app initialization to streamline engine loading and voice session setup.
+- Rename meson build options for consistency.
+- Unify and refresh configuration, setup, and troubleshooting documentation.
+- Update `core.toml.example` with voice engine and sherpa-onnx model configuration.
+
 ## [0.0.6] — 2026-05-30
 
 ### Added
