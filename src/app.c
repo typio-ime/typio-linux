@@ -11,6 +11,10 @@
 #include "typio_build_config.h"
 #include "typio/abi/log.h"
 
+#ifdef HAVE_WAYLAND
+#include "frontend/internal.h"
+#endif
+
 #include <dirent.h>
 #include <errno.h>
 #include <signal.h>
@@ -297,8 +301,8 @@ static void typio_update_tray_engine_status(TypioApp *app) {
 #endif
 
 static void typio_on_mode_change(TypioInstance *instance,
-                                         const TypioEngineStatus *mode,
-                                         void *user_data) {
+                                          const TypioEngineStatus *mode,
+                                          void *user_data) {
     TypioApp *app = user_data;
     TypioRegistry *registry;
 
@@ -311,6 +315,9 @@ static void typio_on_mode_change(TypioInstance *instance,
             typio_wl_frontend_remember_active_mode(app->wl_frontend,
                                                    name,
                                                    mode->profile_id);
+        }
+        if (app->wl_frontend && mode && mode->display_label && mode->display_label[0]) {
+            typio_wl_frontend_show_indicator(app->wl_frontend, mode->display_label);
         }
 #endif
         typio_free_string(name);
@@ -360,6 +367,7 @@ static void typio_on_engine_change(TypioInstance *instance,
         if (app && app->wl_frontend) {
             typio_wl_frontend_remember_active_engine(app->wl_frontend,
                                                      active_name);
+            typio_wl_frontend_show_indicator(app->wl_frontend, active_name);
         }
 #endif
         typio_log_info("Engine changed to: %s", active_name);

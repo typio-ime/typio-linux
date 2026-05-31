@@ -440,6 +440,7 @@ TypioWlFrontend *typio_wl_frontend_new(TypioInstance *instance,
     typio_log_info("Wayland input method frontend initialized");
     frontend_setup_config_watch(frontend);
     frontend_init_resume_signal(frontend);
+    typio_wl_frontend_init_indicator(frontend);
 #ifdef HAVE_VOICE
     frontend_init_voice(frontend, instance);
 #endif
@@ -630,6 +631,7 @@ void typio_wl_frontend_destroy(TypioWlFrontend *frontend) {
         close(frontend->config_reload_timer_fd);
         frontend->config_reload_timer_fd = -1;
     }
+    typio_wl_frontend_destroy_indicator(frontend);
 
     /* Clean up optional subsystems */
 #ifdef HAVE_VOICE

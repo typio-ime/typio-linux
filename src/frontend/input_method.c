@@ -522,6 +522,14 @@ static void transition_to_active(TypioWlFrontend *frontend) {
     typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_ACTIVE, "focus in complete");
     set_pending_reactivation(frontend, false);
 
+    {
+        const TypioEngineStatus *mode =
+            typio_instance_get_last_status(frontend->instance);
+        if (mode && mode->display_label && mode->display_label[0]) {
+            typio_wl_frontend_show_indicator(frontend, mode->display_label);
+        }
+    }
+
     trace_session_state(frontend, "done_focus_in_complete");
 }
 

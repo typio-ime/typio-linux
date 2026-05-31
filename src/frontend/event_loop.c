@@ -102,6 +102,7 @@ static int event_loop_poll(TypioWlFrontend *frontend,
                            int *idx_repeat,
                            int *idx_config,
                            int *idx_config_reload,
+                           int *idx_indicator,
                            int *aux_indices,
                            size_t aux_indices_capacity) {
     int nfds = 0;
@@ -142,6 +143,15 @@ static int event_loop_poll(TypioWlFrontend *frontend,
         if (config_reload_fd >= 0) {
             *idx_config_reload = nfds;
             fds[nfds++] = (struct pollfd){ .fd = config_reload_fd, .events = POLLIN };
+        }
+    }
+
+    *idx_indicator = -1;
+    {
+        int indicator_fd = typio_wl_frontend_get_indicator_fd(frontend);
+        if (indicator_fd >= 0) {
+            *idx_indicator = nfds;
+            fds[nfds++] = (struct pollfd){ .fd = indicator_fd, .events = POLLIN };
         }
     }
 
@@ -248,6 +258,7 @@ int typio_wl_frontend_run(TypioWlFrontend *frontend) {
         int idx_repeat;
         int idx_config;
         int idx_config_reload;
+        int idx_indicator;
         int ret;
 
         typio_wl_frontend_watchdog_heartbeat(frontend);
@@ -272,7 +283,7 @@ int typio_wl_frontend_run(TypioWlFrontend *frontend) {
         }
 
         ret = event_loop_poll(frontend, &aux, fds, &idx_display, &idx_repeat,
-                              &idx_config, &idx_config_reload,
+                              &idx_config, &idx_config_reload, &idx_indicator,
                               aux_indices,
                               sizeof(aux_indices) / sizeof(aux_indices[0]));
 
@@ -322,6 +333,10 @@ int typio_wl_frontend_run(TypioWlFrontend *frontend) {
             typio_wl_frontend_dispatch_config_reload(frontend);
             typio_wl_frontend_watchdog_heartbeat(frontend);
             typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_IDLE);
+        }
+
+        if (idx_indicator >= 0 && (fds[idx_indicator].revents & POLLIN)) {
+            typio_wl_frontend_dispatch_indicator_timer(frontend);
         }
 
         typio_wl_vk_health_check(frontend);

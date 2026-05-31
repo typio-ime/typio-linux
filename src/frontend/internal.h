@@ -303,6 +303,9 @@ struct TypioWlFrontend {
     int config_reload_timer_fd;
     bool config_reload_pending;
 
+    int indicator_timer_fd;
+    bool indicator_active;
+
     /* Configurable shortcut bindings */
     TypioShortcutConfig shortcuts;
 
@@ -329,6 +332,14 @@ void typio_wl_frontend_log_shortcuts(TypioWlFrontend *frontend,
 void typio_wl_frontend_handle_config_watch(TypioWlFrontend *frontend);
 int typio_wl_frontend_get_config_reload_fd(TypioWlFrontend *frontend);
 void typio_wl_frontend_dispatch_config_reload(TypioWlFrontend *frontend);
+
+bool typio_wl_frontend_init_indicator(TypioWlFrontend *frontend);
+void typio_wl_frontend_show_indicator(TypioWlFrontend *frontend,
+                                       const char *text);
+void typio_wl_frontend_hide_indicator(TypioWlFrontend *frontend);
+int typio_wl_frontend_get_indicator_fd(TypioWlFrontend *frontend);
+void typio_wl_frontend_dispatch_indicator_timer(TypioWlFrontend *frontend);
+void typio_wl_frontend_destroy_indicator(TypioWlFrontend *frontend);
 
 /* Input method functions (wl_input_method.c) */
 void typio_wl_input_method_setup(TypioWlFrontend *frontend);

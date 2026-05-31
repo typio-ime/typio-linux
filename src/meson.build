@@ -70,6 +70,7 @@ if enable_wayland
         'engine/startup.c',
         'input/bridge.c',
         'frontend/frontend.c',
+        'frontend/indicator.c',
         'ui/preedit.c',
         'frontend/input_method.c',
         'frontend/keyboard.c',
