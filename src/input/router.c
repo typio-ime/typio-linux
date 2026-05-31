@@ -424,6 +424,7 @@ void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
 
     if (decision.reason == TYPIO_WL_KEY_REASON_APPLICATION_SHORTCUT) {
         TypioKeyEvent event = {
+            .struct_size = sizeof(TypioKeyEvent),
             .type      = TYPIO_EVENT_KEY_PRESS,
             .keycode   = key,
             .keysym    = keysym,
@@ -434,6 +435,9 @@ void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
             .base_keysym = typio_wl_keyboard_base_keysym(keyboard, key),
         };
         bool handled = typio_input_context_process_key(session->ctx, &event);
+        typio_log_info("app-shortcut engine try: keysym=0x%x base=0x%x mods=0x%x handled=%s",
+                       keysym, event.base_keysym, modifiers,
+                       handled ? "yes" : "no");
         if (handled) {
             key_set_state(frontend, key, TYPIO_KEY_TRACK_IDLE);
             key_route_trace_decision(keyboard, "press-engine", key, keysym,
@@ -470,6 +474,7 @@ void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
 
     {
         TypioKeyEvent event = {
+            .struct_size = sizeof(TypioKeyEvent),
             .type      = TYPIO_EVENT_KEY_PRESS,
             .keycode   = key,
             .keysym    = keysym,
@@ -741,6 +746,7 @@ void typio_wl_key_route_process_release(TypioWlKeyboard *keyboard,
 
     {
         TypioKeyEvent event = {
+            .struct_size = sizeof(TypioKeyEvent),
             .type      = TYPIO_EVENT_KEY_RELEASE,
             .keycode   = key,
             .keysym    = keysym,

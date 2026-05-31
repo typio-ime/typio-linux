@@ -215,6 +215,7 @@ void typio_wl_keyboard_dispatch_repeat(TypioWlKeyboard *keyboard) {
 
     {
         TypioKeyEvent event = {
+            .struct_size = sizeof(TypioKeyEvent),
             .type      = TYPIO_EVENT_KEY_PRESS,
             .keycode   = keyboard->repeat_key,
             .keysym    = repeat_keysym,
