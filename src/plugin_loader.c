@@ -3,6 +3,7 @@
 #include "typio/abi/log.h"
 #include "typio/abi/engine.h"
 #include "typio/abi/types.h"
+#include "typio/schema/config_schema.h"
 #include "typio_build_config.h"
 
 #include <dirent.h>
@@ -118,6 +119,17 @@ static bool typio_register_one(TypioRegistry *registry, const char *path) {
     if (!typio_negotiate_capabilities(path, info)) {
         dlclose(handle);
         return false;
+    }
+
+    TypioEngineConfigSchemaFunc schema_func =
+        (TypioEngineConfigSchemaFunc)dlsym(handle,
+                                           "typio_engine_get_config_schema");
+    if (schema_func) {
+        size_t field_count = 0;
+        const TypioConfigField *fields = schema_func(&field_count);
+        if (fields && field_count > 0) {
+            typio_config_schema_register_many(fields, field_count);
+        }
     }
 
     TypioResult result;
