@@ -423,6 +423,26 @@ void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
 #endif
 
     if (decision.reason == TYPIO_WL_KEY_REASON_APPLICATION_SHORTCUT) {
+        TypioKeyEvent event = {
+            .type      = TYPIO_EVENT_KEY_PRESS,
+            .keycode   = key,
+            .keysym    = keysym,
+            .modifiers = modifiers,
+            .unicode   = unicode,
+            .time      = time,
+            .is_repeat = false,
+            .base_keysym = typio_wl_keyboard_base_keysym(keyboard, key),
+        };
+        bool handled = typio_input_context_process_key(session->ctx, &event);
+        if (handled) {
+            key_set_state(frontend, key, TYPIO_KEY_TRACK_IDLE);
+            key_route_trace_decision(keyboard, "press-engine", key, keysym,
+                                     modifiers, unicode, TYPIO_KEY_TRACK_IDLE,
+                                     decision, "app-shortcut-intercepted-by-engine");
+            typio_log_debug("Engine handled potential app shortcut: keycode=%u keysym=0x%x mods=0x%x",
+                      key, keysym, modifiers);
+            return;
+        }
         typio_wl_vk_forward_key(keyboard, time, key, WL_KEYBOARD_KEY_STATE_PRESSED, unicode);
         key_set_state(frontend, key, TYPIO_KEY_TRACK_APP_SHORTCUT);
         key_route_trace_decision(keyboard, "press-forward", key, keysym,
@@ -462,9 +482,10 @@ void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
         bool is_modifier = typio_key_event_is_modifier_only(&event);
         bool handled = typio_input_context_process_key(session->ctx, &event);
 
-        if (keysym == 0x60 && (modifiers & (TYPIO_MOD_CTRL | TYPIO_MOD_SHIFT))) {
-            typio_log_info("grave diagnostic: handled=%s mods=0x%x phys=0x%x",
+        if (keysym == 0x7e && (modifiers & (TYPIO_MOD_CTRL | TYPIO_MOD_SHIFT))) {
+            typio_log_info("grave diagnostic: handled=%s keysym=0x%x base=0x%x mods=0x%x phys=0x%x",
                       handled ? "yes" : "no",
+                      keysym, event.base_keysym,
                       modifiers, keyboard->physical_modifiers);
         }
 
