@@ -103,7 +103,7 @@ if enable_systray
     )
 endif
 
-if build_voice
+if enable_voice
     host_sources += files(
         'voice/pw_capture.c',
     )
@@ -127,7 +127,7 @@ if have_libdbus
     host_deps += dbus_dep
 endif
 
-if build_voice
+if enable_voice
     host_deps += pipewire_dep
 endif
 
@@ -157,7 +157,7 @@ if enable_systray
     host_inc += include_directories('tray')
 endif
 
-if build_voice
+if enable_voice
     host_inc += include_directories('voice')
 endif
 

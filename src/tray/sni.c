@@ -702,8 +702,14 @@ void typio_tray_set_icon(TypioTray *tray, const char *icon_name) {
         return;
     }
 
+    const char *proposed = icon_name && *icon_name
+        ? icon_name : "typio-keyboard-symbolic";
+    if (tray->icon_name && strcmp(tray->icon_name, proposed) == 0) {
+        return;
+    }
+
     free(tray->icon_name);
-    tray->icon_name = icon_name ? typio_strdup(icon_name) : typio_strdup("typio-keyboard-symbolic");
+    tray->icon_name = typio_strdup(proposed);
     typio_tray_sni_emit_signal(tray, "NewIcon");
 }
 

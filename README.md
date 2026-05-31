@@ -11,7 +11,7 @@ voice capture. It translates Wayland/D-Bus events into libtypio
 abstractions and drives libtypio's callbacks back onto the compositor.
 
 Plugin discovery is host-owned: at startup `typio` scans
-`<libdir>/typio/engines` for `libtypio-engine-*.so`, `dlopen`s each, and
+`<libdir>/typio/engines` for `libtypio_engine_*.so`, `dlopen`s each, and
 registers it with libtypio. Core itself contains no `dlopen` and no
 engine paths.
 
@@ -39,7 +39,7 @@ See [`docs/dev/setup.md`](docs/dev/setup.md) for the full setup steps and
 additional options.
 
 Options: `-Denable_systray=true`, `-Denable_status_bus=true` (default),
-`-Dbuild_voice=true` for voice input support. Voice engines (Whisper,
+`-Denable_voice=true` for voice input support. Voice engines (Whisper,
 Sherpa-ONNX, …) are loaded as plugin `.so` files at runtime; this option
 only enables the host-side PipeWire capture infrastructure.
 
@@ -51,10 +51,10 @@ typio --list                   # list discovered engines
 typio --verbose                # run with debug logging
 ```
 
-Engines are discovered from `~/.local/share/typio/engines` and
+Engines are discovered from `~/.local/lib/typio/engines` and
 `/usr/local/lib/typio/engines`. Build the [basic engine](../typio-engine-basic)
-with `cargo build --release` and copy the `.so` (renamed to
-`libtypio-engine-*.so`) into one of those directories.
+with `cargo build --release` and copy the `.so`
+(`libtypio_engine_*.so`) into one of those directories.
 
 Control it from a separate terminal with the [typio-cli](../typio-cli)
 client (`typio status`, `typio engine`, …).

@@ -6,7 +6,7 @@ This document is for contributors who will modify `typio-wayland` source code.
 
 ```bash
 export PKG_CONFIG_PATH="../libtypio/target/release:${PKG_CONFIG_PATH}"
-meson setup build --buildtype=debug -Denable_systray=true
+meson setup build --buildtype=debug -Denable_systray=true -Denable_voice=true
 ninja -C build
 ```
 
@@ -20,6 +20,10 @@ export LD_LIBRARY_PATH=../libtypio/target/release:${LD_LIBRARY_PATH}
 ./build/src/typio --verbose
 ```
 
+`-Denable_voice=true` enables PipeWire audio capture and the `voice_input`
+host capability so voice engine plugins (e.g. Sherpa-ONNX) can load.
+Without it, voice engines are rejected at startup.
+
 ## Prerequisites
 
 Install these from your system package manager:
@@ -30,7 +34,7 @@ Install these from your system package manager:
 - Wayland client libraries, `xkbcommon`
 - Vulkan, FreeType, HarfBuzz, fontconfig
 - `dbus-1` (if `-Denable_systray=true`)
-- `libpipewire-0.3` (if `-Dbuild_voice=true`)
+- `libpipewire-0.3` (if `-Denable_voice=true`)
 
 Versions are not capped; the project is tested against latest Arch Linux and
 Fedora releases.
@@ -114,7 +118,7 @@ and the package is not installed system-wide, Meson falls back to the
 
 ```bash
 export PKG_CONFIG_PATH="../libtypio/target/release:${PKG_CONFIG_PATH}"
-meson setup build --buildtype=debug -Denable_systray=true
+meson setup build --buildtype=debug -Denable_systray=true -Denable_voice=true
 ninja -C build
 ```
 
@@ -134,8 +138,8 @@ For plugin engine work, point the daemon at a specific engine directory
 below), this runs it directly:
 
 ```bash
-export TYPIO_ENGINE_DIR=~/.local/share/typio/engines
-./build/src/typio --engine-dir ~/.local/share/typio/engines --engine basic --verbose
+export TYPIO_ENGINE_DIR=~/.local/lib/typio/engines
+./build/src/typio --engine-dir ~/.local/lib/typio/engines --engine basic --verbose
 ```
 
 Both `TYPIO_ENGINE_DIR` and `--engine-dir` accept a single path. If you
@@ -159,15 +163,12 @@ fallback, as the concrete example:
 
 This produces `../typio-engine-basic/target/release/libtypio_engine_basic.so`.
 
-**File name convention:** Cargo uses the crate name (`typio_engine_basic`,
-with an underscore) as the library file name, but `typio` scans for files
-matching `libtypio-engine-*.so` (with a hyphen). You must rename the file
-when installing:
+Copy it into the user engine directory:
 
 ```bash
-mkdir -p ~/.local/share/typio/engines
+mkdir -p ~/.local/lib/typio/engines
 cp ../typio-engine-basic/target/release/libtypio_engine_basic.so \
-   ~/.local/share/typio/engines/libtypio-engine-basic.so
+   ~/.local/lib/typio/engines/
 ```
 
 The file name suffix (`basic`) becomes the engine identifier exposed to
@@ -178,12 +179,15 @@ users and configuration files.
 | Option | Default | When you need it |
 |---|---|---|
 | `-Denable_systray=true` | `false` | System tray icon |
-| `-Dbuild_voice=true` | `false` | PipeWire audio capture and voice session infrastructure |
+| `-Denable_voice=true` | `false` | PipeWire audio capture and voice session infrastructure |
 
-`-Dbuild_voice=true` does **not** compile any voice engine into the binary.
+`-Denable_voice=true` does **not** compile any voice engine into the binary.
 Voice engines (Whisper, Sherpa-ONNX, …) are separate plugin repositories
 loaded at runtime. This option only enables the host-side PipeWire capture
-and voice-session plumbing that those external engines plug into.
+and voice-session plumbing that those external engines plug into. Without
+this flag, voice engine plugins are rejected at load time with a
+`voice_input capability` error because the host does not advertise the
+required capability.
 
 ## Engine discovery
 
@@ -195,12 +199,12 @@ user-installed engine shadows a system one of the same name.
 |---|---|---|
 | 1 | `-E` / `--engine-dir DIR` | directory passed on the command line |
 | 2 | `$TYPIO_ENGINE_DIR` | value of that environment variable |
-| 3 | **User** | `$XDG_DATA_HOME/typio/engines`, else `~/.local/share/typio/engines` |
+| 3 | **User** | `~/.local/lib/typio/engines` |
 | 4 | **System** | compile-time `<prefix>/<libdir>/typio/engines` (typically `/usr/lib/typio/engines`) |
 
-In each directory it loads only files named `libtypio-engine-<name>.so`,
+In each directory it loads only files named `libtypio_engine_<name>.so`,
 `dlopen`s each, and registers it with libtypio via the engine ABI. The
-`libtypio-engine-` prefix is mandatory; `<name>` (the part before `.so`)
+`libtypio_engine_` prefix is mandatory; `<name>` (the part before `.so`)
 becomes the engine identifier exposed in config and the CLI (`basic`, `rime`,
 `whisper`, …). A sibling `icons/` directory (`<engine-dir>/icons/`,
 freedesktop hicolor layout) is added to the tray's icon search path, so an
@@ -252,7 +256,7 @@ meson install -C build
 | `enable_wayland` | `true` | Enable the Wayland frontend |
 | `enable_status_bus` | `true` | Enable the D-Bus runtime status/control interface |
 | `enable_systray` | `false` | Enable StatusNotifierItem support |
-| `build_voice` | `false` | Enable PipeWire audio capture and voice session infrastructure |
+| `enable_voice` | `false` | Enable PipeWire audio capture and voice session infrastructure |
 | `enable_asan` | `false` | Enable AddressSanitizer |
 | `enable_ubsan` | `false` | Enable UndefinedBehaviorSanitizer |
 

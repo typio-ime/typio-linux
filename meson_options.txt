@@ -4,8 +4,8 @@ option('enable_wayland', type: 'boolean', value: true,
     description: 'Build Wayland input method frontend')
 option('enable_systray', type: 'boolean', value: false,
     description: 'Enable StatusNotifierItem tray support')
-option('build_voice', type: 'boolean', value: false,
-    description: 'Build voice input support (PipeWire audio capture + voice session infrastructure)')
+option('enable_voice', type: 'boolean', value: false,
+    description: 'Enable voice input support (PipeWire audio capture + voice session infrastructure)')
 option('enable_asan', type: 'boolean', value: false,
     description: 'Enable AddressSanitizer')
 option('enable_ubsan', type: 'boolean', value: false,

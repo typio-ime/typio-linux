@@ -74,12 +74,18 @@ static void runtime_config_refresh(TypioWlFrontend *frontend) {
     {
         TypioRegistry *registry = typio_instance_get_registry(frontend->instance);
         const char *configured_voice = typio_config_get_string(config,
-                                                               "default_voice_engine",
-                                                               NULL);
+                                                                "voice.engine",
+                                                                NULL);
         if (registry && configured_voice && *configured_voice) {
             char *cur = typio_registry_get_active_voice(registry);
             if (!cur || strcmp(configured_voice, cur) != 0) {
-                typio_registry_set_active_voice(registry, configured_voice);
+                TypioResult r =
+                    typio_registry_set_active_voice(registry, configured_voice);
+                if (r != TYPIO_OK) {
+                    typio_log_warning(
+                        "Config reload: voice engine '%s' not found",
+                        configured_voice);
+                }
             }
             typio_free_string(cur);
         }

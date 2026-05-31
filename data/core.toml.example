@@ -17,6 +17,11 @@
 # Remember and restore the keyboard engine and engine mode per application.
 # per_app_preferences = true
 
+# Override the keyboard engine to activate on startup. When omitted,
+# the last-used engine is resumed from state; if no state exists the
+# first available keyboard engine is auto-selected.
+# keyboard.engine = "rime"
+
 # ── Engine routing (consumed by typio-wayland) ───────────────────────
 # These keys change how the Wayland frontend routes keys when the basic
 # engine is active.  They are NOT owned by the engine plugin itself.
@@ -46,9 +51,11 @@
 # server_path = "/usr/lib/mozc/mozc_server"
 
 # ── Voice input ──────────────────────────────────────────────────────
-# default_voice_engine selects which voice backend to activate on startup.
-# It must match the file name prefix: libtypio-engine-<name>.so.
-# default_voice_engine = "whisper"
+# voice.engine selects which voice backend to activate on startup.
+# It must match the file name prefix: libtypio_engine_<name>.so.
+# When omitted or the named engine is not installed, the first available
+# voice engine is auto-selected.
+# voice.engine = "whisper"
 
 # Voice engine plugin settings (illustrative):
 #   - whisper:    model is ggml model name (base, small, medium, large)
@@ -63,7 +70,7 @@
 
 # [engines.sherpa-onnx]
 # language = "auto"
-# model = "sensevoice-small"
+# model = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
 
 # Session timeout: idle milliseconds before the voice session is torn down.
 # Set to 0 to disable auto-unload.  (default: 480000)

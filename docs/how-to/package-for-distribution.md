@@ -8,7 +8,7 @@ Build and install `typio-wayland` for system-wide or package-manager distributio
 meson setup build --buildtype=release \
     -Denable_systray=true \
     -Denable_status_bus=true \
-    -Dbuild_voice=true
+    -Denable_voice=true
 ninja -C build
 ```
 
@@ -17,7 +17,7 @@ Disable features your target environment does not support:
 | Option | When to omit |
 |--------|--------------|
 | `-Denable_systray=true` | Target desktop has no StatusNotifierItem support |
-| `-Dbuild_voice=true` | Target does not ship PipeWire or voice engines |
+| `-Denable_voice=true` | Target does not ship PipeWire or voice engines |
 
 ## Install into a staging directory
 
@@ -59,14 +59,14 @@ The binary itself requires:
 ## Engine plugins
 
 `typio` does not ship with input engines. At minimum, install one engine plugin
-into `<libdir>/typio/engines/` (or `~/.local/share/typio/engines/` for per-user
-installs). The file must match `libtypio-engine-*.so`.
+into `<libdir>/typio/engines/` (or `~/.local/lib/typio/engines/` for per-user
+installs). The file must match `libtypio_engine_*.so`.
 
 Common engines:
 
-- `libtypio-engine-basic.so` — zero-dependency fallback keyboard
-- `libtypio-engine-rime.so` — RIME-based engine
-- `libtypio-engine-whisper.so` — Whisper voice engine
+- `libtypio_engine_basic.so` — zero-dependency fallback keyboard
+- `libtypio_engine_rime.so` — RIME-based engine
+- `libtypio_engine_whisper.so` — Whisper voice engine
 
 Package each engine as a separate package so users choose only the ones they need.
 

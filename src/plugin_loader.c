@@ -11,7 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define TYPIO_ENGINE_PREFIX "libtypio-engine-"
+#define TYPIO_ENGINE_PREFIX "libtypio_engine_"
 #define TYPIO_ENGINE_SUFFIX ".so"
 
 static char *typio_discovered_icon_theme_path = NULL;
@@ -198,25 +198,15 @@ int typio_plugin_load_dir(TypioRegistry *registry,
 /* ── Engine directory resolution ──────────────────────────────────────── */
 
 static char *typio_user_engine_dir(void) {
-    const char *xdg = getenv("XDG_DATA_HOME");
-    const char *suffix = "/typio/engines";
-    char *result = nullptr;
-    if (xdg && xdg[0]) {
-        size_t len = strlen(xdg) + strlen(suffix) + 1;
-        result = malloc(len);
-        if (result) {
-            snprintf(result, len, "%s%s", xdg, suffix);
-        }
-        return result;
-    }
     const char *home = getenv("HOME");
-    if (home && home[0]) {
-        const char *mid = "/.local/share/typio/engines";
-        size_t len = strlen(home) + strlen(mid) + 1;
-        result = malloc(len);
-        if (result) {
-            snprintf(result, len, "%s%s", home, mid);
-        }
+    if (!home || !home[0]) {
+        return nullptr;
+    }
+    const char *suffix = "/.local/lib/typio/engines";
+    size_t len = strlen(home) + strlen(suffix) + 1;
+    char *result = malloc(len);
+    if (result) {
+        snprintf(result, len, "%s%s", home, suffix);
     }
     return result;
 }

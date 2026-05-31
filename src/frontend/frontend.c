@@ -226,7 +226,7 @@ static void voice_event_cb(const TypioVoiceSessionEvent *event, void *user_data)
                     typio_input_context_commit(frontend->session->ctx, p);
                 }
             }
-            free(event->text);  /* ownership transferred to callback */
+            typio_free_string(event->text);
         }
         break;
     case TYPIO_VOICE_EVENT_ERROR:
@@ -475,14 +475,7 @@ static void frontend_init_resume_signal(TypioWlFrontend *frontend) {
 #ifdef HAVE_VOICE
 static void frontend_init_voice(TypioWlFrontend *frontend,
                                  TypioInstance *instance) {
-    TypioRegistry *registry = typio_instance_get_registry(instance);
     TypioConfig *inst_config = typio_instance_get_config(instance);
-
-    const char *voice_engine = typio_config_get_string(inst_config,
-                                                         "default_voice_engine",
-                                                         nullptr);
-    if (registry && voice_engine)
-        typio_registry_set_active_voice(registry, voice_engine);
 
     TypioVoiceSession *voice = typio_voice_session_new(instance);
     if (voice) {

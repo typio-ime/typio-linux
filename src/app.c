@@ -229,13 +229,6 @@ static void typio_update_tray_tooltip(TypioApp *app) {
 }
 #endif
 
-static void typio_sync_runtime_surfaces(TypioApp *app) {
-#ifdef HAVE_SYSTRAY
-    typio_update_tray_engine_status(app);
-#endif
-    /* IPC bus pushes events.* notifications via the state-controller listener. */
-}
-
 static void typio_print_startup_banner(TypioApp *app) {
     TypioRegistry *registry;
     char *kb_name;
@@ -304,8 +297,8 @@ static void typio_update_tray_engine_status(TypioApp *app) {
 #endif
 
 static void typio_on_mode_change(TypioInstance *instance,
-                                        const TypioEngineStatus *mode,
-                                        void *user_data) {
+                                         const TypioEngineStatus *mode,
+                                         void *user_data) {
     TypioApp *app = user_data;
     TypioRegistry *registry;
 
@@ -326,16 +319,13 @@ static void typio_on_mode_change(TypioInstance *instance,
     (void) instance;
 
     if (app && app->state_controller) {
-        /* The tray bus (sole owner of state-driven tray updates) refreshes the
-         * icon and tooltip — including the active profile name — from this. */
         typio_state_controller_notify_status_changed(app->state_controller, mode);
     }
-    typio_sync_runtime_surfaces(app);
 }
 
 static void typio_on_status_icon_change(TypioInstance *instance,
-                                               const char *icon_name,
-                                               void *user_data) {
+                                                const char *icon_name,
+                                                void *user_data) {
     TypioApp *app = user_data;
 
     (void) instance;
@@ -344,17 +334,11 @@ static void typio_on_status_icon_change(TypioInstance *instance,
         typio_state_controller_notify_status_icon_changed(app->state_controller,
                                                           icon_name);
     }
-#ifdef HAVE_SYSTRAY
-    if (app && app->tray && icon_name) {
-        typio_tray_set_icon(app->tray, icon_name);
-    }
-#endif
-    typio_sync_runtime_surfaces(app);
 }
 
 static void typio_on_engine_change(TypioInstance *instance,
-                                          const TypioEngineInfo *engine,
-                                          void *user_data) {
+                                           const TypioEngineInfo *engine,
+                                           void *user_data) {
     TypioApp *app = user_data;
     TypioRegistry *registry;
     char *active_name;
@@ -364,7 +348,6 @@ static void typio_on_engine_change(TypioInstance *instance,
     if (app && app->state_controller) {
         typio_state_controller_notify_engine_changed(app->state_controller, engine);
     }
-    typio_sync_runtime_surfaces(app);
 
     if (!app || !app->instance) {
         return;
@@ -385,8 +368,8 @@ static void typio_on_engine_change(TypioInstance *instance,
 }
 
 static void typio_on_voice_engine_change(TypioInstance *instance,
-                                                const TypioEngineInfo *engine,
-                                                void *user_data) {
+                                                 const TypioEngineInfo *engine,
+                                                 void *user_data) {
     TypioApp *app = user_data;
 
     (void) instance;
@@ -395,16 +378,9 @@ static void typio_on_voice_engine_change(TypioInstance *instance,
         typio_state_controller_notify_voice_engine_changed(app->state_controller,
                                                            engine);
     }
-    typio_sync_runtime_surfaces(app);
     if (engine && engine->name) {
         typio_log_info("Voice engine changed to: %s", engine->name);
     }
-}
-
-static void typio_on_state_changed(void *user_data,
-                                          [[maybe_unused]] TypioStateChangeType change_type) {
-    TypioApp *app = user_data;
-    typio_sync_runtime_surfaces(app);
 }
 
 #ifdef HAVE_SYSTRAY
@@ -733,6 +709,9 @@ static void typio_init_tray(TypioApp *app) {
     };
 
     app->tray = typio_tray_new(app->instance, &tray_config);
+    if (app->tray && app->state_controller) {
+        typio_tray_bind_state_controller(app->tray, app->state_controller);
+    }
     if (app->tray && typio_tray_is_registered(app->tray)) {
         typio_update_tray_engine_status(app);
         typio_log_info("System tray initialized");
@@ -779,10 +758,6 @@ static int typio_run_wayland(TypioApp *app) {
                                               app);
 
     if (app->state_controller) {
-        typio_state_controller_add_listener(
-            app->state_controller,
-            (TypioStateListener){ .user_data = app,
-                                  .callback = typio_on_state_changed });
         typio_state_controller_sync(app->state_controller);
     }
 

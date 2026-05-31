@@ -87,15 +87,18 @@ server_path = "/usr/lib/mozc/mozc_server"
 
 For authoritative schema and defaults, consult the individual engine repository.
 
-### Voice engine settings
+### Engine selection (keyboard and voice)
 
-Voice engines are loaded at runtime like keyboard engines.  The framework
-reads `default_voice_engine` to decide which voice backend to activate on
-startup.
+Both keyboard and voice engines follow the same activation priority:
+
+1. **Config override** — `keyboard.engine` / `voice.engine` in `core.toml`
+2. **State persistence** — last-used engine resumed from `engine-state.toml`
+3. **Auto-detection** — first registered engine of the matching type
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `default_voice_engine` | string | Name of the voice engine to activate (e.g. `"whisper"`, `"sherpa-onnx"`).  Corresponds to the `libtypio-engine-<name>.so` file name. |
+| `keyboard.engine` | string | Override keyboard engine to activate on startup (e.g. `"rime"`, `"basic"`). When omitted, the last-used engine is resumed. |
+| `voice.engine` | string | Override voice engine to activate on startup (e.g. `"whisper"`, `"sherpa-onnx"`). When omitted or the named engine is not installed, the first available voice engine is auto-selected. |
 
 Per-engine voice settings (illustrative):
 

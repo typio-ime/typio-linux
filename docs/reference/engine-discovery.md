@@ -8,7 +8,7 @@ How `typio` locates and loads engine plugins at startup.
 |---|---|---|
 | 1 | `-E` / `--engine-dir DIR` | directory given on the command line |
 | 2 | `$TYPIO_ENGINE_DIR` | value of the environment variable |
-| 3 | User data dir | `$XDG_DATA_HOME/typio/engines`, else `~/.local/share/typio/engines` |
+| 3 | User lib dir | `~/.local/lib/typio/engines` |
 | 4 | System lib dir | compile-time `<prefix>/<libdir>/typio/engines` (e.g. `/usr/lib/typio/engines`, or `/usr/local/lib/typio/engines` for a `/usr/local` prefix) |
 
 - All existing directories in the list are scanned, in the order above.
@@ -19,13 +19,13 @@ How `typio` locates and loads engine plugins at startup.
 
 | Rule | Value |
 |---|---|
-| Required prefix | `libtypio-engine-` |
+| Required prefix | `libtypio_engine_` |
 | Required suffix | `.so` |
 | Engine identifier | `<name>` — the text between prefix and suffix |
-| Loaded example | `libtypio-engine-basic.so` → identifier `basic` |
-| Ignored | any file not matching `libtypio-engine-*.so` (silently skipped) |
+| Loaded example | `libtypio_engine_basic.so` → identifier `basic` |
+| Ignored | any file not matching `libtypio_engine_*.so` (silently skipped) |
 
-- Cargo emits `libtypio_engine_<name>.so` (underscores). Rename to hyphens on install or it is not discovered.
+- Cargo emits `libtypio_engine_<name>.so` natively — no rename needed.
 - `<name>` is the identifier used in config keys (`engines.<name>.*`), the `--engine` flag, and `typioctl`.
 
 ## Bundled icons (optional)

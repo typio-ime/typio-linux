@@ -308,6 +308,10 @@ void typio_state_controller_notify_status_changed(
         return;
     }
     typio_state_controller_set_mode(ctrl, mode);
+    if (mode && mode->icon_name && mode->icon_name[0]) {
+        free(ctrl->status_icon);
+        ctrl->status_icon = strdup(mode->icon_name);
+    }
     typio_state_controller_broadcast(ctrl, TYPIO_STATE_CHANGE_STATUS);
 }
 

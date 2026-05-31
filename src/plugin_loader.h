@@ -7,7 +7,7 @@
 /**
  * @brief Plugin discovery callback for TypioInstanceConfig.plugin_loader.
  *
- * Enumerates libtypio-engine-*.so files in @p dir, dlopen()s each,
+ * Enumerates libtypio_engine_*.so files in @p dir, dlopen()s each,
  * resolves the engine entry points, and registers them with the
  * registry via typio_registry_register_plugin_keyboard/_voice. Core
  * calls this once per configured engine directory.

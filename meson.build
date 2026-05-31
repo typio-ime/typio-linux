@@ -35,7 +35,7 @@ endif
 build_tests = get_option('build_tests')
 enable_wayland = get_option('enable_wayland')
 enable_systray = get_option('enable_systray')
-build_voice = get_option('build_voice')
+enable_voice = get_option('enable_voice')
 
 # ── Dependencies ──────────────────────────────────────────────────────────
 thread_dep = dependency('threads')
@@ -65,7 +65,7 @@ endif
 dbus_dep = dependency('dbus-1', required: enable_systray)
 have_libdbus = dbus_dep.found()
 
-if build_voice
+if enable_voice
     pipewire_dep = dependency('libpipewire-0.3', required: true)
 endif
 
@@ -126,7 +126,7 @@ conf_data.set('TYPIO_SOURCE_ICON_DIR', meson.project_source_root() / 'data' / 'i
 conf_data.set('HAVE_WAYLAND', enable_wayland)
 conf_data.set('HAVE_SYSTRAY', enable_systray)
 conf_data.set('HAVE_LIBDBUS', have_libdbus)
-conf_data.set('HAVE_VOICE', build_voice)
+conf_data.set('HAVE_VOICE', enable_voice)
 conf_data.set('HAVE_FLUX', flux_dep.found())
 
 configure_file(

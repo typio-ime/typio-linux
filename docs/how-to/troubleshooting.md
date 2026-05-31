@@ -2,27 +2,20 @@
 
 ## `typio --list` shows no engines
 
-Most often the plugin is installed but its file name does not match
-`libtypio-engine-<name>.so` (hyphens). Cargo emits underscores
-(`libtypio_engine_basic.so`), which the scanner silently ignores. Rename it:
+Most often the plugin is installed in a directory that is not on the search
+path, or the file name does not match the expected pattern. The scanner
+looks for `libtypio_engine_<name>.so` (underscores). Cargo produces this
+naming natively, so no rename should be needed.
+
+Confirm the plugin sits in a scanned directory and is readable:
 
 ```bash
-cd ~/.local/share/typio/engines
-mv libtypio_engine_basic.so libtypio-engine-basic.so
-```
-
-Then re-run `typio --list`.
-
-If the name is already correct, confirm the plugin sits in a scanned directory
-and is readable:
-
-```bash
-ls ~/.local/share/typio/engines
+ls ~/.local/lib/typio/engines
 ls /usr/local/lib/typio/engines
 ```
 
 The [basic engine](../../typio-engine-basic) is a separate repository: build it
-with `cargo build --release`, then install the `.so` under its hyphenated name.
+with `cargo build --release`, then install the `.so` into an engine directory.
 
 See the [Engine Discovery Reference](../reference/engine-discovery.md) for the
 full search-path order and naming rules.
