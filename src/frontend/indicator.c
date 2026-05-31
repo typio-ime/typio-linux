@@ -21,7 +21,6 @@ static int indicator_duration_ms(TypioWlFrontend *frontend) {
     }
     int ms = typio_config_get_int(cfg, "display.indicator_duration_ms",
                                   TYPIO_INDICATOR_DEFAULT_DURATION_MS);
-    typio_config_free(cfg);
     if (ms < 100) ms = 100;
     if (ms > 10000) ms = 10000;
     return ms;
@@ -35,9 +34,7 @@ static bool indicator_enabled(TypioWlFrontend *frontend) {
     if (!cfg) {
         return true;
     }
-    bool enabled = typio_config_get_bool(cfg, "display.indicator_enabled", true);
-    typio_config_free(cfg);
-    return enabled;
+    return typio_config_get_bool(cfg, "display.indicator_enabled", true);
 }
 
 bool typio_wl_frontend_init_indicator(TypioWlFrontend *frontend) {
