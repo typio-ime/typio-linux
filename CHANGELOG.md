@@ -5,13 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.0.8] — 2026-06-01
 
 ### Fixed
 - Make Panel UI ownership explicit so indicator auto-hide can no longer hide candidate UI after typing starts. Candidate, indicator, and voice status requests now arbitrate through one positioned UI owner and one anchor-readiness model, with a default anchor probe for browser cursor placement. (ADR-0017)
 - Fix CJK and symbol rendering in the candidate panel. The text shaper now performs per-glyph font fallback via `FT_Get_Char_Index` when the primary font produces .notdef glyphs, resolving each missing codepoint against Fontconfig-sorted candidates. Up to 4 fallback fonts per text run are cached and reused. (ADR-0016)
 - Fix supplementary-plane characters (emoji, rare CJK) rendering as tofu. Font loading now selects a format-12 charmap when available, enabling correct lookup of codepoints above U+FFFF. (ADR-0016)
 - Fix primary font resolving to Latin-only variant when a CJK variant of the same family exists. `match_font_file` now verifies CJK coverage and retries with a charset constraint if needed. (ADR-0016)
+
+### Added
+- Add project glossary (`docs/reference/glossary.md`) with canonical term definitions and vocabulary replacement table.
+- Add writing conventions, required docs inventory, review process, ADR workflow, and cross-reference rules to the documentation style guide.
+- Rename `panel-ontology.md` to `panel-architecture.md` and consolidate duplicated term definitions into the glossary.
+
+## [Unreleased]
 
 ## [0.0.7] — 2026-05-31
 
