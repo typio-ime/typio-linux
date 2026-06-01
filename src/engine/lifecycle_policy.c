@@ -56,13 +56,13 @@ TypioWlDoneAction typio_wl_lifecycle_classify_done(bool was_active,
                                                    bool now_active,
                                                    bool activate_seen) {
     if (now_active && !was_active)
-        return TYPIO_WL_DONE_FOCUS_IN;
+        return TYPIO_WL_DONE_ACTIVATE;
     if (was_active && !now_active)
-        return TYPIO_WL_DONE_FOCUS_OUT;
-    /* Still focused. Only a fresh `activate` in this batch means a genuine
+        return TYPIO_WL_DONE_DEACTIVATE;
+    /* Still active. Only a fresh `activate` in this batch means a genuine
      * re-activation (a move to a new field); otherwise this `done` is just a
      * text-state update and must leave focus state untouched. */
     if (was_active && now_active && activate_seen)
-        return TYPIO_WL_DONE_REFOCUS;
+        return TYPIO_WL_DONE_REACTIVATE;
     return TYPIO_WL_DONE_NONE;
 }

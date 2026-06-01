@@ -89,28 +89,29 @@ TEST(activating_and_active_phases_allow_modifier_events) {
 }
 
 /* classify_done(was_active, now_active, activate_seen) is the single source of
- * truth for how a compositor `done` changes focus. Cover the full truth table. */
-TEST(classify_done_focus_in_on_inactive_to_active) {
-    /* Becoming active is FOCUS_IN regardless of whether the activate edge was
+ * truth for how a compositor `done` changes IME state. Cover the full truth
+ * table. */
+TEST(classify_done_activate_on_inactive_to_active) {
+    /* Becoming active is ACTIVATE regardless of whether the activate edge was
      * recorded (it always is, but the classification must not depend on it). */
     ASSERT(typio_wl_lifecycle_classify_done(false, true, true) ==
-           TYPIO_WL_DONE_FOCUS_IN);
+           TYPIO_WL_DONE_ACTIVATE);
     ASSERT(typio_wl_lifecycle_classify_done(false, true, false) ==
-           TYPIO_WL_DONE_FOCUS_IN);
+           TYPIO_WL_DONE_ACTIVATE);
 }
 
-TEST(classify_done_focus_out_on_active_to_inactive) {
+TEST(classify_done_deactivate_on_active_to_inactive) {
     ASSERT(typio_wl_lifecycle_classify_done(true, false, true) ==
-           TYPIO_WL_DONE_FOCUS_OUT);
+           TYPIO_WL_DONE_DEACTIVATE);
     ASSERT(typio_wl_lifecycle_classify_done(true, false, false) ==
-           TYPIO_WL_DONE_FOCUS_OUT);
+           TYPIO_WL_DONE_DEACTIVATE);
 }
 
-TEST(classify_done_refocus_only_when_active_to_active_with_activate) {
+TEST(classify_done_reactivate_only_when_active_to_active_with_activate) {
     /* Staying active *with* a fresh activate this batch = a real re-activation
-     * (new field) -> REFOCUS. */
+     * (new field) -> REACTIVATE. */
     ASSERT(typio_wl_lifecycle_classify_done(true, true, true) ==
-           TYPIO_WL_DONE_REFOCUS);
+           TYPIO_WL_DONE_REACTIVATE);
     /* Staying active *without* an activate = a plain text-state update -> NONE.
      * This is the guard that prevents rebuilding focus mid-composition. */
     ASSERT(typio_wl_lifecycle_classify_done(true, true, false) ==
@@ -132,9 +133,9 @@ int main(void) {
     run_test_rejects_unexpected_shortcuts_between_phases();
     run_test_only_active_phase_allows_key_events();
     run_test_activating_and_active_phases_allow_modifier_events();
-    run_test_classify_done_focus_in_on_inactive_to_active();
-    run_test_classify_done_focus_out_on_active_to_inactive();
-    run_test_classify_done_refocus_only_when_active_to_active_with_activate();
+    run_test_classify_done_activate_on_inactive_to_active();
+    run_test_classify_done_deactivate_on_active_to_inactive();
+    run_test_classify_done_reactivate_only_when_active_to_active_with_activate();
     run_test_classify_done_none_when_staying_inactive();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);

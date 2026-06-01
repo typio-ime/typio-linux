@@ -34,19 +34,20 @@ bool typio_wl_lifecycle_transition_is_valid(TypioWlLifecyclePhase from,
 bool typio_wl_lifecycle_phase_allows_key_events(TypioWlLifecyclePhase phase);
 bool typio_wl_lifecycle_phase_allows_modifier_events(TypioWlLifecyclePhase phase);
 /**
- * @brief How a compositor `done` should change focus, derived purely from the
- *        focus edges plus whether an `activate` arrived in the same batch.
+ * @brief How a compositor `done` should change IME state, derived purely from
+ *        the activation edges plus whether an `activate` arrived in the same
+ *        batch.
  *
  * @p activate_seen distinguishes a genuine (re)activation from a plain
  * text-state update `done` (surrounding text, content type), which the
- * compositor also delivers while focus is unchanged — those must not rebuild
- * focus state mid-composition.
+ * compositor also delivers while state is unchanged — those must not rebuild
+ * activation state mid-composition.
  */
 typedef enum {
-    TYPIO_WL_DONE_NONE = 0,   /* No focus change (e.g. a text-state update). */
-    TYPIO_WL_DONE_FOCUS_IN,   /* Became focused: build grab, focus the engine. */
-    TYPIO_WL_DONE_FOCUS_OUT,  /* Lost focus: drop grab, clear preedit. */
-    TYPIO_WL_DONE_REFOCUS,    /* Re-activated while focused (new field): re-anchor. */
+    TYPIO_WL_DONE_NONE = 0,       /* No state change (e.g. a text-state update). */
+    TYPIO_WL_DONE_ACTIVATE,       /* IME activated: build grab, engine focus_in. */
+    TYPIO_WL_DONE_DEACTIVATE,     /* IME deactivated: drop grab, clear preedit. */
+    TYPIO_WL_DONE_REACTIVATE,     /* Re-activated while active (new field): re-anchor. */
 } TypioWlDoneAction;
 
 TypioWlDoneAction typio_wl_lifecycle_classify_done(bool was_active,

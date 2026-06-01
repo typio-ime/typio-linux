@@ -378,7 +378,7 @@ static void on_key(void *data,
         /* Record effective-input recency: this press passed the guard and is
          * being dispatched to the engine (composing, shortcut, commit, nav…).
          * The indicator's on-focus suppression keys off this — "I was just
-         * typing" — so it stays quiet on an incidental refocus. */
+         * typing" — so it stays quiet on an incidental reactivation. */
         typio_wl_frontend_record_key_activity(frontend);
         typio_wl_key_arbiter_press(&keyboard->arbiter, keyboard, frontend->session,
                                    key, keysym, modifiers, unicode, time);

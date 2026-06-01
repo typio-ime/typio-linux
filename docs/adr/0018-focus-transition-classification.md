@@ -51,21 +51,20 @@ focus facts into one action:
 
 | was | now | activate_seen | action |
 |-----|-----|---------------|--------|
-| f | t | – | `FOCUS_IN` |
-| t | f | – | `FOCUS_OUT` |
-| t | t | t | `REFOCUS` |
+| f | t | – | `ACTIVATE` |
+| t | f | – | `DEACTIVATE` |
+| t | t | t | `REACTIVATE` |
 | t | t | f | `NONE` (text-state update) |
 | f | f | – | `NONE` |
 
 `im_handle_done` switches on the result: `transition_to_active` /
-`transition_to_inactive` / **new** `transition_to_refocus` / no-op (keeping the
+`transition_to_inactive` / **new** `transition_to_reactivate` / no-op (keeping the
 stale-grab recovery for the `NONE` case).
 
-**3. `transition_to_refocus`** handles "re-activated while focused (a new
+**3. `transition_to_reactivate`** handles "re-activated while active (a new
 field)". The keyboard grab and the engine's input context persist for the same
 input-method, so they are left intact; it only settles the phase back to
-`ACTIVE`, re-anchors the Panel (`reset_anchor`), and re-evaluates the on-focus
-indicator (gated by salience + recency). `ACTIVE → ACTIVATING` is added to the
+`ACTIVE`, re-anchors the Panel (`reset_anchor`). `ACTIVE → ACTIVATING` is added to the
 valid-transition table to make this flow first-class.
 
 **4. Pure logic is split into `engine/lifecycle_policy.c`** (the dependency-free
@@ -104,7 +103,7 @@ phase-machine reality is tracked separately.
   focused is a real, observable case (clicking between fields in one window);
   it genuinely needs a Panel re-anchor and indicator re-evaluation for the new
   caret, even though the grab and composition are preserved.
-- **Rebuild the grab on REFOCUS** (as the dead `handle_reactivation` did).
+- **Rebuild the grab on REACTIVATE** (as the dead `handle_reactivation` did).
   Rejected: the grab is per-input-method, not per-field; rebuilding churns key
   state for no benefit. Matches the prior *runtime* behaviour (which rebuilt
   nothing, since `handle_reactivation` never ran).
@@ -112,12 +111,12 @@ phase-machine reality is tracked separately.
 ## Consequences
 
 - Positive: focus classification is one pure, unit-tested function; the
-  indicator re-reveals correctly on refocus; the phase no longer gets stuck at
+  indicator re-reveals correctly on reactivation; the phase no longer gets stuck at
   `ACTIVATING` after a re-activation; ~60 lines of unreachable code removed; a
   previously orphaned test now runs in CI.
 - Trade-off: introduces an explicit `activate_seen` fact, which is a small step
   away from the pure-derived ADR-0003 ideal — accepted as pragmatic and clearer
   than the dead flag it replaces.
 - Verification: the pure classifier is covered by `test_lifecycle`; the
-  imperative wiring (grab persistence on refocus, phase settling) is exercised
+  imperative wiring (grab persistence on reactivation, phase settling) is exercised
   only against a live compositor and must be verified there.

@@ -185,7 +185,7 @@ void typio_wl_frontend_show_indicator_on_focus(TypioWlFrontend *frontend,
     /* Acknowledged-recency suppression (focus path only). If the user recently
      * engaged with this IME — by any effective keypress or shortcut (not only a
      * commit), or by seeing the indicator — they already know the state, so an
-     * incidental refocus (the terminal click-to-focus case) should stay silent.
+     * incidental reactivation (the terminal click-to-focus case) should stay silent.
      * Keying off the last *effective key* matches the user's "I was just typing
      * a moment ago" intuition better than keying off commits alone. */
     uint64_t now = typio_wl_monotonic_ms();

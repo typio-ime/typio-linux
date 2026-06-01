@@ -45,7 +45,7 @@ The old `inactive / activating / active / deactivating` enum is gone. Those name
 | `activating` | focused and a grab is wanted, but the grab is not `ready` yet | no (modifiers only, see below) |
 | `active` | focused and the grab resource is `ready` | yes |
 
-There is no stored `deactivating`: losing focus simply changes `desired`, and the next `diff` tears the grab down. A re-activate while focused is **not** a no-op, though: it is recorded as an `activate_seen` fact and classified at `done` as a `REFOCUS`, which keeps the grab and composition but re-anchors the Panel and re-evaluates the on-focus indicator for the new field. The old "deferred reactivation" flag and its predicate helpers were removed; see [ADR-0018](../adr/0018-focus-transition-classification.md).
+There is no stored `deactivating`: losing focus simply changes `desired`, and the next `diff` tears the grab down. A re-activate while active is **not** a no-op, though: it is recorded as an `activate_seen` fact and classified at `done` as a `REACTIVATE`, which keeps the grab and composition but re-anchors the Panel. The indicator is not re-shown on reactivation (engine state has not changed). The old "deferred reactivation" flag and its predicate helpers were removed; see [ADR-0018](../adr/0018-focus-transition-classification.md).
 
 ## Truth Sources
 

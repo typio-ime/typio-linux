@@ -411,7 +411,7 @@ static void im_handle_activate(void *data, [[maybe_unused]] struct zwp_input_met
      * activation. Hide it now so it never lingers — or worse, gets repositioned
      * by the compositor onto the new text field's caret. Only the INDICATOR
      * owner is affected; a live candidate panel is left untouched. The matching
-     * re-reveal happens in transition_to_active / transition_to_refocus. */
+     * re-reveal happens in transition_to_active / transition_to_reactivate. */
     typio_wl_frontend_hide_indicator(frontend);
 
     /* Record that an activate arrived in this batch. The next `done` consumes
@@ -521,22 +521,20 @@ static void transition_to_active(TypioWlFrontend *frontend) {
     trace_session_state(frontend, "done_focus_in_complete");
 }
 
-static void transition_to_refocus(TypioWlFrontend *frontend) {
-    /* Re-activated while staying focused: the compositor moved us to a
+static void transition_to_reactivate(TypioWlFrontend *frontend) {
+    /* Re-activated while staying active: the compositor moved us to a
      * (possibly different) text field without an intervening deactivate. The
      * keyboard grab and the engine's input context persist for the same
      * input-method, so they are left intact — we only settle the phase back to
-     * ACTIVE, re-anchor to the new caret, and re-evaluate the on-focus
-     * indicator (gated by salience + recency inside show_indicator_on_focus). */
-    typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_ACTIVE, "refocus complete");
+     * ACTIVE and re-anchor to the new caret. The indicator is not re-shown:
+     * the engine state has not changed across a reactivation, so the old
+     * indicator (already hidden by im_handle_activate) should not carry over.
+     * Any deliberate mode/engine change during reactivation is announced via
+     * show_indicator_for_state, not this path. */
+    typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_ACTIVE, "reactivate complete");
     typio_wl_panel_coordinator_reset_anchor(frontend);
 
-    const TypioKeyboardEngineStatus *mode =
-        typio_instance_get_last_keyboard_status(frontend->instance);
-    if (mode && mode->display_label && mode->display_label[0]) {
-        typio_wl_frontend_show_indicator_on_focus(frontend, mode);
-    }
-    trace_session_state(frontend, "done_refocus_complete");
+    trace_session_state(frontend, "done_reactivate_complete");
 }
 
 static void transition_to_inactive(TypioWlFrontend *frontend, const char *reason) {
@@ -638,21 +636,21 @@ static void im_handle_done(void *data, [[maybe_unused]] struct zwp_input_method_
     typio_wl_session_apply_pending(frontend->session);
 
     switch (action) {
-    case TYPIO_WL_DONE_FOCUS_IN:
+    case TYPIO_WL_DONE_ACTIVATE:
         transition_to_active(frontend);
         break;
-    case TYPIO_WL_DONE_REFOCUS:
-        transition_to_refocus(frontend);
+    case TYPIO_WL_DONE_REACTIVATE:
+        transition_to_reactivate(frontend);
         break;
-    case TYPIO_WL_DONE_FOCUS_OUT:
+    case TYPIO_WL_DONE_DEACTIVATE:
         transition_to_inactive(frontend, "focus out");
         break;
     case TYPIO_WL_DONE_NONE:
-        /* A `done` with no focus change — typically a text-state update. Guard
+        /* A `done` with no state change — typically a text-state update. Guard
          * against a keyboard grab that is somehow still active in a state that
          * cannot route keys, and recover it. */
         if (frontend_has_non_routable_grab(frontend, now_active)) {
-            typio_log_warning("Done without focus transition but keyboard grab is non-routable: phase=%s was_active=%s now_active=%s focused=%s",
+            typio_log_warning("Done without state transition but keyboard grab is non-routable: phase=%s was_active=%s now_active=%s focused=%s",
                       typio_wl_lifecycle_phase_name(frontend->lifecycle_phase),
                       was_active ? "yes" : "no",
                       now_active ? "yes" : "no",

@@ -169,10 +169,10 @@ When investigating swallowed or duplicated keys:
 
 Typical signatures:
 
-- first press after refocus disappears: likely stale `RELEASED_PENDING` state
+- first press after reactivation disappears: likely stale `RELEASED_PENDING` state
 - app receives release without prior press: wrong suppression-state release handling
 - Ctrl-based shortcut behaves oddly: main-path key sequence is being rewritten instead of only syncing modifiers
-- app keeps repeating a shortcut letter after refocus: `boundary_bridge.*` likely missed an orphan-release VK cleanup decision
+- app keeps repeating a shortcut letter after reactivation: `boundary_bridge.*` likely missed an orphan-release VK cleanup decision
 - a held Ctrl/Alt/Super stops affecting shortcuts after grab recreation: the new grab saw the modifier only via XKB/modifier events, not a fresh key press; physical modifier state must be resynchronized from XKB on modifier updates so later shortcuts still inherit the held modifier
 - a held Ctrl/Alt/Super stops affecting the newly focused client after deactivation: verify whether the last compositor modifier mask was carried across the boundary and later reset before the next activation
 

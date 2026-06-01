@@ -52,7 +52,7 @@ The compositor's double-buffer commit point, and where the per-step diff runs:
 
 1. **Serial increment**. `im_serial++`. The serial is the count of `done` events received; it is the commit serial for every `zwp_input_method_v2_commit()` call.
 2. **Apply facts**. The buffered `surrounding_text`, `content_type`, `text_change_cause`, and `active` facts become current atomically.
-3. **Classify the focus change.** The focus facts are reduced by the pure `typio_wl_lifecycle_classify_done(was_active, now_active, activate_seen)` into one action — `FOCUS_IN`, `FOCUS_OUT`, `REFOCUS`, or `NONE` — which selects `transition_to_active` / `transition_to_inactive` / `transition_to_refocus` / no-op. The classifier lives in `engine/lifecycle_policy.c` and is unit-tested (`tests/test_lifecycle.c`). A `NONE` that still finds a non-routable grab triggers the stale-grab recovery. See [ADR-0018](../adr/0018-focus-transition-classification.md).
+3. **Classify the state change.** The focus facts are reduced by the pure `typio_wl_lifecycle_classify_done(was_active, now_active, activate_seen)` into one action — `ACTIVATE`, `DEACTIVATE`, `REACTIVATE`, or `NONE` — which selects `transition_to_active` / `transition_to_inactive` / `transition_to_reactivate` / no-op. The classifier lives in `engine/lifecycle_policy.c` and is unit-tested (`tests/test_lifecycle.c`). A `NONE` that still finds a non-routable grab triggers the stale-grab recovery. See [ADR-0018](../adr/0018-focus-transition-classification.md).
 
    > Note: the focus path still carries an explicit `lifecycle_phase`; the fully *derived* reduce+diff model of [ADR-0003](../adr/0003-session-controller-reduce-diff.md) is not yet realised here, and `classify_done` is a small step toward it.
 
@@ -102,7 +102,7 @@ Briefly:
 
 A subtle protocol behaviour: the compositor may send `activate` while the daemon is still focused (e.g. the user clicked from one text field to another inside the same window). Treating this as a full `deactivate` → `activate` cycle would tear down the grab, lose the preedit round-trip, and interrupt typing.
 
-The `activate_seen` fact makes this case explicit without that cost. At `done`, `classify_done(was=true, now=true, activate_seen=true)` returns `REFOCUS`, which runs `transition_to_refocus`: the keyboard grab and the engine's input context are **left intact** (they belong to the same input-method, not the field), and only the *position-sensitive* state is refreshed — the Panel anchor is reset and the on-focus indicator is re-evaluated for the new caret (gated by salience + recency). A `done` with no `activate` this batch (`activate_seen=false`) classifies as `NONE` and changes nothing, so plain text-state updates during composition never disturb the grab. See [ADR-0018](../adr/0018-focus-transition-classification.md).
+The `activate_seen` fact makes this case explicit without that cost. At `done`, `classify_done(was=true, now=true, activate_seen=true)` returns `REACTIVATE`, which runs `transition_to_reactivate`: the keyboard grab and the engine's input context are **left intact** (they belong to the same input-method, not the field), and only the *position-sensitive* state is refreshed — the Panel anchor is reset. The indicator is **not** re-shown on reactivation: the engine state has not changed across a field switch, so the old indicator (already hidden by `activate`) should not carry over. Only genuine state changes — `ACTIVATE`, deliberate engine/mode switches — announce via the indicator. A `done` with no `activate` this batch (`activate_seen=false`) classifies as `NONE` and changes nothing, so plain text-state updates during composition never disturb the grab. See [ADR-0018](../adr/0018-focus-transition-classification.md).
 
 ## Resume and silent grab loss
 
@@ -114,6 +114,31 @@ How much of this the per-step diff handles depends on whether `observe()` can *s
 - **Grab object gone.** If the grab *object* is actually absent while `desired` wants it (typically right after one of our scrubs, or a connection drop surfacing as `POLLHUP`), `observe()` sees it and the next per-iteration `diff` rebuilds — no special routine.
 
 In both cases the input context is never `focus_out`'d, so the engine's in-flight composition survives, and the rebuild is the *same* grab build used on first focus.
+
+## Indicator behaviour
+
+The indicator (the transient Panel showing the active engine and mode label) has two show paths, each with different gate semantics:
+
+| Path | Trigger | Gates |
+|---|---|---|
+| Focus path (`show_indicator_on_focus`) | `ACTIVATE` only | salience (suppress `QUIET` states) + acknowledged-recency (suppress if user typed or saw indicator within the last 3 s) |
+| Deliberate-change path (`show_indicator_for_state`) | engine switch, mode change, profile toggle | none — user just acted, always announce |
+
+On `DEACTIVATE`, `transition_to_inactive` hides all Panel UI. On `REACTIVATE`, the indicator stays hidden (it was already hidden by the `activate` handler); the engine state has not changed across a field switch so there is nothing to announce.
+
+The indicator auto-hides after `display.indicator_duration_ms` (default 1500 ms, clamped 100–10000 ms) via a timerfd.
+
+## Known limits: terminal multiplexers
+
+Terminal emulators (foot, Alacritty, kitty, …) register the **entire terminal window** as a single `zwp_input_method_v2` input area. When a terminal multiplexer like tmux or screen splits that window into panes, sessions, or windows, those context switches happen entirely inside the terminal's own rendering — they produce **no Wayland focus events**. From the compositor's perspective, the user never left the same input field.
+
+Consequences for indicator behaviour:
+
+- Switching tmux panes or windows does **not** trigger `activate`/`deactivate`, so the daemon never sees a `REACTIVATE`. Any indicator that was showing stays visible until its auto-hide timer expires.
+- There is no way for the input method to detect intra-terminal context switches. This is an inherent limitation of the `zwp_input_method_v2` protocol model, which only knows about compositor-level focus, not application-level editing context.
+- The auto-hide timer (`indicator_duration_ms`) is the only mechanism that dismisses the indicator in this scenario. Lowering the duration makes the indicator vanish sooner but shortens the display window for all contexts, including those where the indicator is useful.
+
+This limitation also affects the candidate Panel position: the input-popup surface is anchored to the terminal's cursor rectangle, not to a tmux pane boundary.
 
 ## Preedit Round-Trip Optimisation
 
