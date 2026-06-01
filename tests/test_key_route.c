@@ -289,12 +289,6 @@ const char *typio_voice_session_get_unavail_reason(const TypioVoiceSession *sess
     return "disabled";
 }
 
-void typio_voice_session_set_idle_timeout_ms(TypioVoiceSession *session,
-                                              uint32_t timeout_ms) {
-    (void)session;
-    (void)timeout_ms;
-}
-
 TypioVoiceSession *typio_instance_get_voice_session(TypioInstance *instance) {
     (void)instance;
     return NULL;

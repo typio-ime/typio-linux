@@ -73,12 +73,16 @@ Each engine plugin registers its own `engines.<name>.*` schema.  The host does
 not interpret these keys; it passes the config table to the engine via the
 engine ABI.
 
+Engines obtain their data directory via `typio_instance_get_engine_data_dir()`
+(returns `<data_dir>/<engine_name>/`, e.g. `~/.local/share/typio/rime/`), so
+users do not need to configure `user_data_dir` manually. Only system-level
+paths (like Rime's `shared_data_dir`) remain as config keys.
+
 Common keys you may see in examples:
 
 ```toml
 [engines.rime]
 shared_data_dir = "/usr/share/rime-data"
-user_data_dir   = "~/.local/share/typio/rime"
 full_check      = false
 
 [engines.mozc]
@@ -100,6 +104,17 @@ Both keyboard and voice engines follow the same activation priority:
 | `keyboard.engine` | string | Override keyboard engine to activate on startup (e.g. `"rime"`, `"basic"`). When omitted, the last-used engine is resumed. |
 | `voice.engine` | string | Override voice engine to activate on startup (e.g. `"whisper"`, `"sherpa-onnx"`). When omitted or the named engine is not installed, the first available voice engine is auto-selected. |
 
+### Disabling engines
+
+Installed engines can be excluded from loading entirely.  Disabled engines
+are not `dlopen`ed and never appear in the engine list.  Useful when you
+have many engines installed but only want a subset active.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `keyboard.disabled` | string | Comma-separated keyboard engine names to skip (e.g. `"rime, mozc"`). |
+| `voice.disabled` | string | Comma-separated voice engine names to skip (e.g. `"whisper"`). |
+
 Per-engine voice settings (illustrative):
 
 ```toml
@@ -111,12 +126,6 @@ model    = "base"      # ggml model name; place at ~/.local/share/typio/whisper/
 language = "auto"
 model    = "sensevoice-small"   # directory name under ~/.local/share/typio/sherpa-onnx/
 ```
-
-Voice session timeout:
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `voice.unload_after_ms` | int | `480000` | Idle milliseconds before the voice session is torn down.  Set to `0` to disable auto-unload. |
 
 ---
 
@@ -162,7 +171,6 @@ channel.
 Keys that **require a restart** to take effect:
 
 - `engines.*` schema changes (engine plugins read their config at load time)
-- `voice.unload_after_ms` (read once when the voice session is created)
 
 ---
 

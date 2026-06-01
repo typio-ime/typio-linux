@@ -94,6 +94,60 @@ static bool typio_negotiate_capabilities(const char *path,
     return true;
 }
 
+static bool typio_is_engine_disabled(TypioRegistry *registry,
+                                     const TypioEngineInfo *info) {
+    TypioInstance *instance;
+    TypioConfig *config;
+    const char *disabled_str;
+    const char *engine_name;
+    const char *key;
+
+    if (!registry || !info || !info->name) {
+        return false;
+    }
+
+    instance = typio_registry_get_instance(registry);
+    if (!instance) {
+        return false;
+    }
+
+    config = typio_instance_get_config(instance);
+    if (!config) {
+        return false;
+    }
+
+    engine_name = info->name;
+
+    if (info->type == TYPIO_ENGINE_TYPE_KEYBOARD) {
+        key = "keyboard.disabled";
+    } else if (info->type == TYPIO_ENGINE_TYPE_VOICE) {
+        key = "voice.disabled";
+    } else {
+        return false;
+    }
+
+    disabled_str = typio_config_get_string(config, key, nullptr);
+    if (!disabled_str || !*disabled_str) {
+        return false;
+    }
+
+    size_t name_len = strlen(engine_name);
+    const char *p = disabled_str;
+    while (*p) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (!*p) break;
+        const char *end = p;
+        while (*end && *end != ',' && *end != ' ' && *end != '\t') end++;
+        size_t tok_len = (size_t)(end - p);
+        if (tok_len == name_len && strncmp(p, engine_name, name_len) == 0) {
+            return true;
+        }
+        p = end;
+    }
+
+    return false;
+}
+
 static bool typio_register_one(TypioRegistry *registry, const char *path) {
     void *handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!handle) {
@@ -112,6 +166,13 @@ static bool typio_register_one(TypioRegistry *registry, const char *path) {
     const TypioEngineInfo *info = info_func();
     if (!info) {
         typio_log_error("Engine %s returned null info", path);
+        dlclose(handle);
+        return false;
+    }
+
+    if (typio_is_engine_disabled(registry, info)) {
+        typio_log_info("Engine %s is disabled by configuration, skipping",
+                       info->name ? info->name : "(null)");
         dlclose(handle);
         return false;
     }

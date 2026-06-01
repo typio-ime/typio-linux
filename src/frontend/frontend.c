@@ -480,8 +480,6 @@ static void frontend_init_resume_signal(TypioWlFrontend *frontend) {
 #ifdef HAVE_VOICE
 static void frontend_init_voice(TypioWlFrontend *frontend,
                                  TypioInstance *instance) {
-    TypioConfig *inst_config = typio_instance_get_config(instance);
-
     TypioVoiceSession *voice = typio_voice_session_new(instance);
     if (voice) {
         TypioPwCapture *pw = typio_pw_capture_new(pw_audio_cb, voice);
@@ -491,10 +489,6 @@ static void frontend_init_voice(TypioWlFrontend *frontend,
         }
         typio_voice_session_set_callback(voice, voice_event_cb, frontend);
 
-        int idle_ms = typio_config_get_int(inst_config,
-                                           "voice.unload_after_ms", 480000);
-        if (idle_ms < 0) idle_ms = 0;
-        typio_voice_session_set_idle_timeout_ms(voice, (uint32_t)idle_ms);
         typio_instance_set_voice_session(instance, voice);
     }
     if (voice && typio_voice_session_is_available(voice))

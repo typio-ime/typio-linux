@@ -22,6 +22,11 @@
 # first available keyboard engine is auto-selected.
 # keyboard.engine = "rime"
 
+# Installed engines that should NOT be loaded.  Comma-separated names.
+# Disabled engines are skipped entirely (no dlopen, no memory use).
+# keyboard.disabled = "mozc"
+# voice.disabled = "whisper"
+
 # ── Engine routing (consumed by typio-wayland) ───────────────────────
 # These keys change how the Wayland frontend routes keys when the basic
 # engine is active.  They are NOT owned by the engine plugin itself.
@@ -44,7 +49,6 @@
 
 [engines.rime]
 # shared_data_dir = "/usr/share/rime-data"
-# user_data_dir = "~/.local/share/typio/rime"
 # full_check = false
 
 [engines.mozc]
@@ -71,10 +75,6 @@
 # [engines.sherpa-onnx]
 # language = "auto"
 # model = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
-
-# Session timeout: idle milliseconds before the voice session is torn down.
-# Set to 0 to disable auto-unload.  (default: 480000)
-# voice.unload_after_ms = 480000
 
 # ── Notifications ────────────────────────────────────────────────────
 # Consumed by typio-wayland.  Controls startup health notifications and
