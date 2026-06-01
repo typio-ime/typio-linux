@@ -17,6 +17,7 @@
 #include "chords.h"
 #include "bridge.h"
 #include "internal.h"
+#include "state.h"
 #include "trace.h"
 #include "typio/runtime/instance.h"
 #include "typio/runtime/registry.h"
@@ -106,6 +107,21 @@ static void arbiter_consume(TypioKeyArbiter *arbiter,
     /* Forward releases for keys that were already forwarded to the app
      * before we entered BUFFERING (e.g., the first Ctrl or Shift). */
     arbiter_release_orphaned_keys(arbiter, keyboard);
+
+    /* Tear down the old engine's in-flight composition and clear the
+     * compositor-facing preedit before switching, so the new engine
+     * inherits a clean slate and no stale underlined text lingers. */
+    if (frontend->session && frontend->session->ctx) {
+        typio_input_context_reset(frontend->session->ctx);
+    }
+    typio_wl_set_preedit(frontend, "", -1, -1);
+    typio_wl_commit(frontend);
+    typio_wl_panel_coordinator_hide(frontend, TYPIO_WL_UI_OWNER_CANDIDATE);
+    if (frontend->session) {
+        typio_wl_text_ui_reset_tracking(&frontend->panel_update_pending,
+                                        &frontend->session->last_preedit_text,
+                                        &frontend->session->last_preedit_cursor);
+    }
 
     if (registry) {
         TypioResult result = typio_registry_next_keyboard(registry);

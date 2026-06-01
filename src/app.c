@@ -13,6 +13,7 @@
 
 #ifdef HAVE_WAYLAND
 #include "frontend/internal.h"
+#include "ui/state.h"
 #endif
 
 #include <dirent.h>
@@ -365,6 +366,19 @@ static void typio_on_engine_change(TypioInstance *instance,
     if (active_name) {
 #ifdef HAVE_WAYLAND
         if (app && app->wl_frontend) {
+            TypioWlFrontend *fe = app->wl_frontend;
+            /* Safety net: clear stale composition UI from any engine switch
+             * path (tray menu, IPC, etc.) that did not pre-clean like the
+             * arbiter does.  Idempotent when the arbiter already cleared. */
+            typio_wl_set_preedit(fe, "", -1, -1);
+            typio_wl_commit(fe);
+            typio_wl_panel_coordinator_hide(fe, TYPIO_WL_UI_OWNER_CANDIDATE);
+            if (fe->session) {
+                typio_wl_text_ui_reset_tracking(
+                    &fe->panel_update_pending,
+                    &fe->session->last_preedit_text,
+                    &fe->session->last_preedit_cursor);
+            }
             typio_wl_frontend_remember_active_engine(app->wl_frontend,
                                                      active_name);
             typio_wl_frontend_show_indicator_for_state(app->wl_frontend, nullptr);

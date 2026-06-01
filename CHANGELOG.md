@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix stale preedit after engine switch via Ctrl+Shift. The arbiter now clears
+  the old engine's composition, the compositor-facing preedit, and the candidate
+  panel before switching engines. A safety net in `typio_on_engine_change` ensures
+  the same cleanup runs for any engine switch path (tray menu, IPC, etc.),
+  preventing underlined text from lingering when the new engine does not recognize
+  the previous composition state.
+
 ## [0.0.7] — 2026-05-31
 
 ### Added

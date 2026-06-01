@@ -134,6 +134,7 @@ Before merging keyboard-path changes, verify:
 - forwarded modifier shortcuts still reach applications
 - engine-only handled keys do not leak releases to applications
 - startup Enter suppression does not emit a lone app-facing release
+- engine switch (Ctrl+Shift, tray menu, IPC) clears composition, preedit, and candidate panel before the new engine activates
 - tests cover the new state transition or lifecycle boundary
 
 Before merging runtime-scheduling changes, verify:

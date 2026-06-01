@@ -135,6 +135,7 @@ Application shortcuts are decided in the Wayland frontend, as a pure routing dec
 - Typio-reserved shortcuts (emergency exit, voice PTT) are consumed internally and never treated as virtual-keyboard forwarding
 - emergency exit is the highest-priority reserved decision on key press: dump recent logs, release the grab, stop the frontend — it forwards no key
 - engines do not each implement shortcut bypass; `Ctrl+Shift`-style modifier-only shortcuts stay transparent to the app/compositor
+- on `Ctrl+Shift` engine switch completion, the arbiter clears the old engine's composition, the compositor-facing preedit, and the candidate panel before activating the new engine
 
 ## Event Loop Scheduling
 
@@ -162,6 +163,7 @@ The frontend uses one poll loop for Wayland and auxiliary runtime sources. Auxil
 - fail-safe paths prefer releasing the grab over running partially broken
 - config reload bursts coalesce into a single runtime reload once the filesystem settles
 - an engine-switch failure must not silently clear the previously active engine in that category
+- engine switch clears composition, preedit, and candidate panel before the new engine activates — no stale underlined text survives an engine boundary
 
 ## Observability Contract
 
