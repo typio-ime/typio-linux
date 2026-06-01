@@ -48,7 +48,17 @@ Record client editing-context facts (buffered during the `done` batch). These ar
 
 ### `done`
 
-The compositor's double-buffer commit point, and where the per-step diff runs:
+The compositor's double-buffer commit point, and where the per-step diff runs.
+
+**Why double-buffering?** The `zwp_input_method_v2` protocol sends a batch of events (`activate`, `deactivate`, `surrounding_text`, `content_type`, …) followed by a single `done`. Events in the batch are provisional — they record *facts* into a pending buffer, but no action is taken until `done` commits the batch atomically. This is the same pattern as `wl_surface::commit`: stage changes, then apply them all at once.
+
+**Why not react per-event?** Two scenarios demonstrate the problem:
+
+1. **Cancelled activation.** A UI flicker can produce `activate` → `deactivate` within one batch. Per-event handling would build the keyboard grab, call engine `focus_in`, show the indicator — then immediately tear it all down. With `done`-time reduction, the two facts cancel out: `was=false, now=false` → `NONE`, zero work done.
+
+2. **Reactivation.** Clicking from one text field to another inside the same window produces `activate` while already active (no intervening `deactivate`). Per-event handling would build a new grab on `activate`, destroying the existing one mid-composition. With `done`-time reduction: `was=true, now=true, activate_seen=true` → `REACTIVATE` — the grab and composition are preserved, only the Panel anchor is refreshed.
+
+**Steps at `done`:**
 
 1. **Serial increment**. `im_serial++`. The serial is the count of `done` events received; it is the commit serial for every `zwp_input_method_v2_commit()` call.
 2. **Apply facts**. The buffered `surrounding_text`, `content_type`, `text_change_cause`, and `active` facts become current atomically.
