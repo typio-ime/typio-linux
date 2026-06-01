@@ -45,4 +45,41 @@ void typio_engine_dirs_free(const char *const *dirs);
  */
 const char *typio_plugin_discovered_icon_theme_path(void);
 
+/**
+ * @brief Load a single engine from a specific path.
+ *
+ * @param registry  Engine registry.
+ * @param path      Absolute path to a `libtypio_engine_*.so` file.
+ * @return true if loaded successfully, false otherwise.
+ */
+bool typio_plugin_load_single(TypioRegistry *registry, const char *path);
+
+/**
+ * @brief Unload an engine by name.
+ *
+ * Deactivates the engine if active, then destroys and unregisters it.
+ *
+ * @param registry  Engine registry.
+ * @param name      Engine name (e.g. "rime").
+ * @return true if unloaded, false if not found.
+ */
+bool typio_plugin_unload(TypioRegistry *registry, const char *name);
+
+/**
+ * @brief Reload an engine: unload then reload.
+ *
+ * If @p path is provided, reloads from that exact path. If @p path is NULL,
+ * rescans all engine_dirs to find the engine by name.
+ *
+ * @param registry    Engine registry.
+ * @param name        Engine name to reload.
+ * @param path        Optional: explicit path to load from (may be NULL).
+ * @param engine_dirs NULL-terminated array of directories to scan if path is NULL.
+ * @return true if reloaded successfully, false otherwise.
+ */
+bool typio_plugin_reload(TypioRegistry *registry,
+                          const char *name,
+                          const char *path,
+                          const char *const *engine_dirs);
+
 #endif /* TYPIOD_PLUGIN_LOADER_H */

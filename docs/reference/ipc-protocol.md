@@ -94,8 +94,13 @@ Notifications have no `id` and expect no reply. The client must have subscribed 
 | `engine.use` | `{ name }` | `{}` |
 | `engine.next` | `{ kind? }` | `{ active }` |
 | `engine.invoke` | `{ name, command, args? }` | `{}` |
+| `engine.load` | `{ path }` | `{ loaded, path }` |
+| `engine.unload` | `{ name }` | `{ unloaded, name }` |
+| `engine.reload` | `{ name, path? }` | `{ reloaded, name, path? }` |
 
 `kind` is `"keyboard"` or `"voice"`. `engine.next` defaults to keyboards when `kind` is omitted. Each property entry in `engine.describe` carries `{ key, type, value, label, choices? }`.
+
+`engine.load` loads a single engine plugin from an absolute `.so` path. `engine.unload` unregisters an engine by name (deactivating it first if active). `engine.reload` combines unload + load: if `path` is provided, loads from that exact path; if omitted, rescans the configured `engine_dirs` to find the engine by name (`libtypio_engine_<name>.so`).
 
 ### `daemon.*`
 

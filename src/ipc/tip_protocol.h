@@ -44,6 +44,9 @@ char *typio_ipc_socket_path(void);
 #define TYPIO_IPC_METHOD_ENGINE_USE       "engine.use"
 #define TYPIO_IPC_METHOD_ENGINE_NEXT      "engine.next"
 #define TYPIO_IPC_METHOD_ENGINE_INVOKE    "engine.invoke"
+#define TYPIO_IPC_METHOD_ENGINE_LOAD      "engine.load"
+#define TYPIO_IPC_METHOD_ENGINE_UNLOAD    "engine.unload"
+#define TYPIO_IPC_METHOD_ENGINE_RELOAD    "engine.reload"
 
 #define TYPIO_IPC_METHOD_DAEMON_STATUS    "daemon.status"
 #define TYPIO_IPC_METHOD_DAEMON_STOP      "daemon.stop"

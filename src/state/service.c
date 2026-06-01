@@ -25,6 +25,7 @@
 #include "typio_build_config.h"
 #include "typio/abi/log.h"
 #include "typio/abi/string.h"
+#include "plugin_loader.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -624,6 +625,117 @@ static char *handle_engine_invoke(TypioStatusService *svc, const char *params, i
     }
 }
 
+static char *handle_engine_load(TypioStatusService *svc, const char *params, int id)
+{
+    char *path = tip_json_extract_string(params, "path");
+    if (!path || !*path) {
+        free(path);
+        return tip_json_build_error(id, RPC_INVALID_PARAMS, "Missing 'path' param");
+    }
+    TypioRegistry *reg = svc_registry(svc);
+    if (!reg) {
+        free(path);
+        return tip_json_build_error(id, RPC_INTERNAL_ERROR, "no registry");
+    }
+
+    if (!typio_plugin_load_single(reg, path)) {
+        free(path);
+        return tip_json_build_error(id, RPC_INTERNAL_ERROR, "engine.load failed");
+    }
+
+    TipJsonBuilder *b = tip_json_builder_new();
+    TIP_JSON_OBJ_START(b);
+    TIP_JSON_KEY(b, "loaded");
+    tip_json_builder_append_bool(b, true);
+    TIP_JSON_COMMA(b);
+    TIP_JSON_KEY(b, "path");
+    tip_json_builder_append_string(b, path);
+    TIP_JSON_OBJ_END(b);
+
+    free(path);
+    char *payload = tip_json_builder_steal(b);
+    char *response = tip_json_build_response(id, payload);
+    free(payload);
+    return response;
+}
+
+static char *handle_engine_unload(TypioStatusService *svc, const char *params, int id)
+{
+    char *name = tip_json_extract_string(params, "name");
+    if (!name || !*name) {
+        free(name);
+        return tip_json_build_error(id, RPC_INVALID_PARAMS, "Missing 'name' param");
+    }
+    TypioRegistry *reg = svc_registry(svc);
+    if (!reg) {
+        free(name);
+        return tip_json_build_error(id, RPC_INTERNAL_ERROR, "no registry");
+    }
+
+    if (!typio_plugin_unload(reg, name)) {
+        free(name);
+        return tip_json_build_error(id, RPC_INVALID_PARAMS, "Unknown engine");
+    }
+
+    TipJsonBuilder *b = tip_json_builder_new();
+    TIP_JSON_OBJ_START(b);
+    TIP_JSON_KEY(b, "unloaded");
+    tip_json_builder_append_bool(b, true);
+    TIP_JSON_COMMA(b);
+    TIP_JSON_KEY(b, "name");
+    tip_json_builder_append_string(b, name);
+    TIP_JSON_OBJ_END(b);
+
+    free(name);
+    char *payload = tip_json_builder_steal(b);
+    char *response = tip_json_build_response(id, payload);
+    free(payload);
+    return response;
+}
+
+static char *handle_engine_reload(TypioStatusService *svc, const char *params, int id)
+{
+    char *name = tip_json_extract_string(params, "name");
+    char *path = tip_json_extract_string(params, "path");
+    if (!name || !*name) {
+        free(name); free(path);
+        return tip_json_build_error(id, RPC_INVALID_PARAMS, "Missing 'name' param");
+    }
+    TypioRegistry *reg = svc_registry(svc);
+    if (!reg) {
+        free(name); free(path);
+        return tip_json_build_error(id, RPC_INTERNAL_ERROR, "no registry");
+    }
+
+    const char *const *engine_dirs = typio_engine_dirs_build(nullptr);
+    if (!typio_plugin_reload(reg, name, path, engine_dirs)) {
+        typio_engine_dirs_free(engine_dirs);
+        free(name); free(path);
+        return tip_json_build_error(id, RPC_INTERNAL_ERROR, "engine.reload failed");
+    }
+    typio_engine_dirs_free(engine_dirs);
+
+    TipJsonBuilder *b = tip_json_builder_new();
+    TIP_JSON_OBJ_START(b);
+    TIP_JSON_KEY(b, "reloaded");
+    tip_json_builder_append_bool(b, true);
+    TIP_JSON_COMMA(b);
+    TIP_JSON_KEY(b, "name");
+    tip_json_builder_append_string(b, name);
+    if (path) {
+        TIP_JSON_COMMA(b);
+        TIP_JSON_KEY(b, "path");
+        tip_json_builder_append_string(b, path);
+    }
+    TIP_JSON_OBJ_END(b);
+
+    free(name); free(path);
+    char *payload = tip_json_builder_steal(b);
+    char *response = tip_json_build_response(id, payload);
+    free(payload);
+    return response;
+}
+
 /* ------------------------------------------------------------------ */
 /*  daemon.*                                                          */
 /* ------------------------------------------------------------------ */
@@ -774,6 +886,12 @@ char *typio_status_service_handle(TypioStatusService *svc,
         return handle_engine_next(svc, params, id);
     if (strcmp(method, TYPIO_IPC_METHOD_ENGINE_INVOKE) == 0)
         return handle_engine_invoke(svc, params, id);
+    if (strcmp(method, TYPIO_IPC_METHOD_ENGINE_LOAD) == 0)
+        return handle_engine_load(svc, params, id);
+    if (strcmp(method, TYPIO_IPC_METHOD_ENGINE_UNLOAD) == 0)
+        return handle_engine_unload(svc, params, id);
+    if (strcmp(method, TYPIO_IPC_METHOD_ENGINE_RELOAD) == 0)
+        return handle_engine_reload(svc, params, id);
 
     if (strcmp(method, TYPIO_IPC_METHOD_DAEMON_STATUS) == 0)
         return handle_daemon_status(svc, params, id);

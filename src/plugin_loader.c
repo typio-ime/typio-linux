@@ -327,3 +327,97 @@ void typio_engine_dirs_free(const char *const *dirs) {
 const char *typio_plugin_discovered_icon_theme_path(void) {
     return typio_discovered_icon_theme_path;
 }
+
+/* ── Engine lifecycle: load/unload/reload ──────────────────────────────── */
+
+bool typio_plugin_load_single(TypioRegistry *registry, const char *path) {
+    if (!registry || !path) {
+        return false;
+    }
+
+    /* Validate filename pattern */
+    const char *basename = strrchr(path, '/');
+    basename = basename ? basename + 1 : path;
+    if (!typio_is_engine_filename(basename)) {
+        typio_log_error("Plugin filename must match libtypio_engine_*.so: %s", path);
+        return false;
+    }
+
+    /* Check if file exists */
+    if (access(path, R_OK) != 0) {
+        typio_log_error("Plugin file not readable: %s", path);
+        return false;
+    }
+
+    typio_log_info("Loading engine from path: %s", path);
+    return typio_register_one(registry, path);
+}
+
+bool typio_plugin_unload(TypioRegistry *registry, const char *name) {
+    if (!registry || !name) {
+        return false;
+    }
+
+    TypioResult result = typio_registry_unload(registry, name);
+    if (result != TYPIO_OK) {
+        if (result == TYPIO_ERROR_NOT_FOUND) {
+            typio_log_warning("Engine not found: %s", name);
+        } else {
+            typio_log_error("Failed to unload engine %s: %d", name, result);
+        }
+        return false;
+    }
+
+    typio_log_info("Unloaded engine: %s", name);
+    return true;
+}
+
+bool typio_plugin_reload(TypioRegistry *registry,
+                          const char *name,
+                          const char *path,
+                          const char *const *engine_dirs) {
+    if (!registry || !name) {
+        return false;
+    }
+
+    /* Step 1: Unload the engine (ignore if not found) */
+    typio_plugin_unload(registry, name);
+
+    /* Step 2: Reload */
+    if (path) {
+        /* Explicit path provided */
+        typio_log_info("Reloading engine %s from path: %s", name, path);
+        return typio_plugin_load_single(registry, path);
+    }
+
+    /* Step 3: No path provided, scan engine_dirs to find by name */
+    if (!engine_dirs) {
+        typio_log_error("Cannot reload engine %s: no path and no engine_dirs", name);
+        return false;
+    }
+
+    char target_filename[256];
+    int n = snprintf(target_filename, sizeof(target_filename),
+                     "%s%s%s", TYPIO_ENGINE_PREFIX, name, TYPIO_ENGINE_SUFFIX);
+    if (n <= 0 || (size_t)n >= sizeof(target_filename)) {
+        typio_log_error("Engine name too long: %s", name);
+        return false;
+    }
+
+    for (size_t i = 0; engine_dirs[i]; i++) {
+        const char *dir = engine_dirs[i];
+        char full_path[4096];
+        n = snprintf(full_path, sizeof(full_path), "%s/%s", dir, target_filename);
+        if (n <= 0 || (size_t)n >= sizeof(full_path)) {
+            continue;
+        }
+
+        if (access(full_path, R_OK) == 0) {
+            typio_log_info("Reloading engine %s from directory: %s", name, dir);
+            return typio_register_one(registry, full_path);
+        }
+    }
+
+    typio_log_error("Engine %s not found in any configured directory", name);
+    return false;
+}

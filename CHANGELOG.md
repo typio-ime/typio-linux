@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `engine.load`, `engine.unload`, and `engine.reload` IPC methods for
+  runtime engine hot-reload. `engine.reload` accepts an optional `path` param
+  for explicit-path loading (development workflow) or rescans engine_dirs when
+  omitted (production). New plugin_loader API: `typio_plugin_load_single()`,
+  `typio_plugin_unload()`, `typio_plugin_reload()`.
+
 ### Fixed
 
 - Fix stale preedit after engine switch via Ctrl+Shift. The arbiter now clears
