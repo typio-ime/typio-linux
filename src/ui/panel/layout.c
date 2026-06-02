@@ -590,3 +590,27 @@ void panel_config_build_palette(const PanelConfig *cfg, TypioPanelThemeCache *ca
     if (custom->has_selection) { out->selection_r = custom->selection_r; out->selection_g = custom->selection_g; out->selection_b = custom->selection_b; out->selection_a = custom->selection_a; }
     if (custom->has_sel_text) { out->selection_text_r = custom->sel_text_r; out->selection_text_g = custom->sel_text_g; out->selection_text_b = custom->sel_text_b; }
 }
+
+/* ── LRU iteration (for atlas compaction) ───────────────────────────── */
+
+size_t panel_render_ctx_entry_count(const PanelRenderCtx *pc)
+{
+    if (!pc) return 0;
+    size_t count = 0;
+    for (size_t i = 0; i < PANEL_LAYOUT_CACHE_CAP; ++i) {
+        if (pc->entries[i].layout) count++;
+    }
+    return count;
+}
+
+bool panel_render_ctx_entry_shapes(const PanelRenderCtx *pc, size_t idx,
+                                     TypioTextShape **out_text_shape,
+                                     TypioTextShape **out_label_shape)
+{
+    if (!pc || idx >= PANEL_LAYOUT_CACHE_CAP) return false;
+    const PanelLayoutEntry *e = &pc->entries[idx];
+    if (!e->layout) return false;
+    if (out_text_shape)  *out_text_shape  = e->layout;
+    if (out_label_shape) *out_label_shape = e->label_layout;
+    return true;
+}

@@ -46,7 +46,7 @@ All GPU and CPU caches in typio-wayland are bounded. Nothing grows without limit
 | Resource | Cap | Source |
 |---|---|---|
 | Glyph atlas texture | 4 MiB (2048² × R8) | `GLYPH_ATLAS_DIM` in `text_shaper.c` |
-| Glyph slot table | 32768 entries | `GLYPH_SLOT_CAP` in `text_shaper.c` |
+| Glyph slot table | 131072 entries (~1.5 MiB) | `GLYPH_SLOT_CAP` in `text_shaper.c` (compaction at 75 % load) |
 | Layout LRU cache | 128 entries | `PANEL_LAYOUT_CACHE_CAP` in `layout.h` |
 | Font object cache | 64 entries | `FONT_OBJ_CACHE_CAP` in `text_shaper.c` |
 | Font file cache | 32 entries | `FONT_FILE_CACHE_CAP` in `text_shaper.c` |

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-06-02
+
+### Fixed
+
+- **Panel UI lag after extended CJK input sessions.** The glyph atlas hash table
+  accumulated dead entries as LRU-evicted layouts' glyphs were never removed,
+  degrading lookup from O(1) to O(n) via linear-probe chains. Added automatic
+  hash-table compaction (triggered at 75 % load) that rebuilds the table with
+  only live entries — pure CPU work (~100 μs), no GPU involvement.
+  `GLYPH_SLOT_CAP` increased 4× (32 K → 128 K) to delay first compaction.
+  (ADR-0019)
+
 ## [0.1.5] — 2026-06-02
 
 ### Changed

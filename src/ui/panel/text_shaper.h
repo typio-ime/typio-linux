@@ -57,6 +57,9 @@ typedef struct TypioTextShaper {
 } TypioTextShaper;
 
 #ifdef HAVE_FLUX
+
+struct PanelRenderCtx;
+
 TypioTextShaper *typio_text_shaper_create(void);
 void typio_text_shaper_destroy(TypioTextShaper *shaper);
 
@@ -65,6 +68,27 @@ void typio_text_shaper_destroy(TypioTextShaper *shaper);
  * after a configuration reload.  Subsequent shaping operations will
  * re-populate caches on demand. */
 void typio_text_shaper_purge_font_caches(void);
+
+/* Atlas entry count — for diagnostics and compaction threshold checks. */
+uint32_t typio_text_atlas_entry_count(void);
+
+/*
+ * Compact the glyph atlas hash table by removing entries no longer referenced
+ * by any layout in @pc's LRU cache.
+ *
+ * The atlas uses an open-addressing hash table for glyph lookup.  Over time,
+ * entries for evicted layouts accumulate as dead weight, degrading lookup from
+ * O(1) toward O(n) via linear-probe chains.  Compaction rebuilds the table
+ * with only live entries — O(live_glyphs) CPU work, no GPU involvement.
+ *
+ * Atlas texture pixels are NOT relocated; only the hash table is rebuilt.
+ * Dead entries' texture space is abandoned (the atlas is large enough that
+ * texture exhaustion is practically unreachable before hash degradation).
+ *
+ * Returns true if compaction was performed, false if skipped (load below
+ * threshold or prerequisites not met).
+ */
+bool typio_text_atlas_compact(struct PanelRenderCtx *pc);
 
 /*
  * Record a shaped text run into a flux canvas as a tinted coverage blit.

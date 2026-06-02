@@ -186,4 +186,16 @@ void panel_config_build_palette(const PanelConfig *cfg,
                                  TypioPanelThemeCache *cache,
                                  TypioPanelPalette *out_palette);
 
+/* ── LRU iteration (for atlas compaction) ───────────────────────────── */
+
+/* Number of populated entries in the LRU cache. */
+size_t panel_render_ctx_entry_count(const PanelRenderCtx *pc);
+
+/* Get the TypioTextShape pointers of an LRU entry by index.
+ * Returns false if the index is out of range or the slot is empty.
+ * The returned pointers are borrowed (do not free). */
+bool panel_render_ctx_entry_shapes(const PanelRenderCtx *pc, size_t idx,
+                                     TypioTextShape **out_text_shape,
+                                     TypioTextShape **out_label_shape);
+
 #endif /* TYPIO_WL_PANEL_LAYOUT_H */

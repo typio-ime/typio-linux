@@ -183,6 +183,8 @@ static bool panel_render(TypioPanel *panel,
     t0  = typio_wl_monotonic_ms();
     cfg = get_config(panel);
 
+    typio_text_atlas_compact(&panel->render);
+
     panel_config_build_palette(cfg, &panel->theme_cache, &palette);
     pal_sig      = typio_panel_palette_hash(&palette);
     scale        = panel_surface_scale(panel->surface);

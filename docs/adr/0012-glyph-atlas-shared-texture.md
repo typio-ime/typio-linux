@@ -19,6 +19,13 @@
 > memory, no per-run texture churn, no first-class synchronous uploads), not as
 > the lag fix. The reasoning preserved below is a cautionary record of a
 > plausible-but-unconfirmed root cause that measurement later disproved.
+>
+> **Scope correction (2026-06-02, see [ADR-0019](0019-atlas-hash-compaction.md)):**
+> the hash-table sizing and eviction strategy described below (`GLYPH_SLOT_CAP =
+> 32768`, non-destructive overflow) proved insufficient for sustained CJK input.
+> Dead entries from LRU-evicted layouts accumulated indefinitely, degrading
+> linear-probe lookup from O(1) to O(n). ADR-0019 adds automatic compaction at
+> 75 % load and increases capacity to 131072 slots.
 
 ## Context — the cause the earlier ADRs kept circling
 

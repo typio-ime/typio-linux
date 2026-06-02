@@ -1,15 +1,12 @@
 # Panel Appearance Development Notes
 
-This document covers the rendering pipeline for the candidate Panel (preedit + candidates + mode label), including the pixel-format traps, variable-font weight handling, and theme resolution that have caused real bugs.
+Rendering pipeline for the candidate Panel: GPU present, stall recovery, font loading, theme resolution, and cache invalidation.
 
 ---
 
 ## GPU present pipeline
 
-The Panel presents a flux (Vulkan) swapchain **directly** onto its
-`zwp_input_popup_surface_v2` `wl_surface`. There is no SHM buffer pool, no CPU
-pixel buffer, and no pixel readback — the swapchain owns frame pacing and
-buffering.
+The Panel presents a flux (Vulkan) swapchain onto its `zwp_input_popup_surface_v2` `wl_surface`. The swapchain owns frame pacing and buffering — no SHM buffer pool, no CPU pixel buffer, no readback.
 
 `TypioPanelSurface` (`surface.c`) drives the present pipeline:
 
@@ -34,28 +31,20 @@ by FreeType once into a single long-lived R8 *coverage* texture;
 sub-rect, so the colour (normal / muted / selection) is a **draw-time tint**
 ([ADR-0011](../adr/0011-colour-independent-coverage-glyphs.md)) and no per-text
 GPU upload happens during candidate navigation. Solid fills (background, border,
-selection) use premultiplied RGBA via `flux_color_rgba_premul`. flux and the WSI
-handle the swapchain format — there is no `0xAARRGGBB`/`ARGB8888` byte-order
-concern on this path.
+selection) use premultiplied RGBA via `flux_color_rgba_premul`.
 
-**Historical note:** earlier revisions painted into a CPU-mapped SHM buffer
-(`WL_SHM_FORMAT_ARGB8888`), and before that flux rendered to a GPU offscreen
-surface and read pixels back via `flux_surface_read_pixels` (which forced an
-`ABGR8888` workaround). Both readback/SHM paths are gone; the Panel now presents
-its swapchain image directly.
+The atlas hash table is automatically compacted when its load exceeds 75 %
+([ADR-0019](../adr/0019-atlas-hash-compaction.md)), preventing lookup degradation
+during extended CJK input sessions.
 
 ---
 
 ## Present pacing and stall recovery (lock / suspend)
 
-`panel_surface_present` runs synchronously on the single-threaded event loop (the
-`PANEL_UPDATE` stage). To keep that loop responsive when a compositor stops
-releasing swapchain images — e.g. while the display is asleep or the surface is
-occluded behind a lock screen — the acquire/present is **bounded and
-self-recovering**.
+`panel_surface_present` runs synchronously on the single-threaded event loop. To keep the loop responsive when a compositor stops releasing swapchain images (display asleep, surface occluded), the acquire is bounded and self-recovering.
 
-- `flux_surface_begin_frame` is called with `PANEL_PRESENT_TIMEOUT_NS` (~32 ms)
-  instead of an infinite wait. The healthy on-demand path acquires instantly, so
+- `flux_surface_begin_frame` is called with `PANEL_PRESENT_TIMEOUT_NS` (2 ms)
+  instead of an infinite wait. The healthy on-demand path acquires in <100 μs, so
   this budget is only consumed during a real stall.
 - On `FLUX_ERROR_TIMEOUT`, `panel_surface_present` returns `PANEL_PRESENT_RETRY`:
   `selected`/`visible` are **not** updated and `present_retry` is set, which
@@ -68,13 +57,7 @@ self-recovering**.
 - The same `flux_surface_resize` recovery is used for `FLUX_ERROR_SURFACE_LOST`
   (driver-reported `OUT_OF_DATE`/`SUBOPTIMAL`).
 
-This is why a stalled present never freezes key handling: input events queue on
-the Wayland fd while a frame is skipped/retried, so navigation stays correct even
-while the on-screen highlight is briefly behind.
-
-> Requires the matching flux change that maps an acquire `VK_TIMEOUT` to
-> `FLUX_ERROR_TIMEOUT`. flux is built from a local sibling checkout; rebuild it
-> (`ninja -C build/_flux_build install`) before rebuilding typio-wayland.
+A stalled present never freezes key handling: input events queue on the Wayland fd while a frame is skipped, so navigation stays correct even while the on-screen highlight is briefly behind.
 
 ---
 
@@ -111,11 +94,9 @@ Call this **before** `FT_Set_Pixel_Sizes`.
 
 ## Font object caching
 
-`font_obj_cache` stores `(path, size, weight)` → `(FT_Face, hb_font_t)`. Because variable fonts need different `wght` coordinates for the same file, the cache key **must include weight**.
+`font_obj_cache` stores `(path, size, weight)` → `(FT_Face, hb_font_t)`. The cache key **must include weight** — variable fonts mutate the face's `wght` axis in place, so omitting weight would alias Medium and SemiBold to the same `FT_Face`.
 
-If you omit weight from the cache key, Medium (500) and SemiBold (600) would share the same `FT_Face` even after the variable-font fix above, because the face object itself is mutated by `FT_Set_Var_Design_Coordinates`.
-
-The cached `FT_Face` is borrowed by `TypioTextShape`. Each glyph is rasterised by `FT_Load_Glyph` exactly once, the first time it is seen, into the shared R8 glyph atlas (keyed by font + glyph id); thereafter every draw of that glyph is an atlas hit with no FreeType call and no GPU upload (`typio_text_shape_fill` emits one tinted quad per glyph sampling its atlas sub-rect). So the borrowed `FT_Face` is only touched during first-sight rasterisation, not on every render. Shapes must still not outlive their owning font cache entry; `panel_render_ctx_invalidate` frees all shapes before the cache can be evicted (draining the surface's retire ring behind a device fence first).
+`TypioTextShape` borrows the cached `FT_Face`. Glyphs are rasterised once via `FT_Load_Glyph` into the atlas on first sight; subsequent draws are atlas hits with no FreeType call. Shapes must not outlive their font cache entry — `panel_render_ctx_invalidate` frees all shapes before eviction (draining the retire ring behind a device fence first).
 
 ---
 
@@ -146,9 +127,6 @@ Users can override individual channels per mode via `display.colors.light.*` and
 
 ## Layout cache invalidation
 
-`PanelRenderCtx` maintains an LRU layout cache keyed by:
-- candidate label + text
-- font description
-- packed 32-bit colours (label + text)
+`PanelRenderCtx` maintains an LRU layout cache keyed by candidate label + text + font description (label and main). Colour is not part of the key — glyphs are colour-independent R8 coverage ([ADR-0011](../adr/0011-colour-independent-coverage-glyphs.md)), so the selected and unselected states of a row share one cache entry.
 
-Changing the font weight, size, family, or any colour channel produces a different cache key and therefore new layouts. However, the cache does **not** survive a `panel_render_ctx_invalidate` call, which happens on theme changes or manual reloads.
+Changing the font weight, size, or family produces a different cache key. The cache does **not** survive `panel_render_ctx_invalidate`, which happens on theme or config changes.

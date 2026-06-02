@@ -28,13 +28,14 @@ Decisions about the framework core (engine ABI, composition contract) live in th
 | [ADR-0009](0009-long-term-performance-optimizations.md) | Long-term performance optimizations — font cache purging, composition short-circuit, and snapshot fast-path | Accepted |
 | [ADR-0010](0010-non-blocking-candidate-popup-present.md) | Non-blocking present mode for the candidate popup | Accepted (lag-cause attribution corrected by ADR-0013) |
 | [ADR-0011](0011-colour-independent-coverage-glyphs.md) | Colour-independent coverage glyph textures (draw-time tint) | Accepted (texture model superseded by ADR-0012; lag-cause attribution corrected by ADR-0013) |
-| [ADR-0012](0012-glyph-atlas-shared-texture.md) | Shared glyph atlas (rasterise once, reference sub-rects) | Accepted (lag-cause attribution corrected by ADR-0013) |
+| [ADR-0012](0012-glyph-atlas-shared-texture.md) | Shared glyph atlas (rasterise once, reference sub-rects) | Accepted (lag-cause attribution corrected by ADR-0013; hash-table strategy amended by ADR-0019) |
 | [ADR-0013](0013-grow-only-popup-swapchain.md) | Grow-only popup swapchain (stop rebuilding per candidate page) | Accepted |
 | [ADR-0014](0014-canonical-panel-vocabulary.md) | Canonical panel vocabulary and module ontology | Accepted (refines ADR-0005) |
 | [ADR-0015](0015-candidate-popup-lag-final-fixes.md) | Candidate popup lag — final fixes (acquire timeout, retry deferral, persistent upload context) | Accepted |
 | [ADR-0016](0016-per-glyph-font-fallback.md) | Per-glyph font fallback with format-12 charmap selection | Accepted |
 | [ADR-0017](0017-positioned-ui-arbitration.md) | Positioned UI arbitration for panel owners | Accepted |
 | [ADR-0018](0018-focus-transition-classification.md) | Focus-transition classification and re-activation | Accepted |
+| [ADR-0019](0019-atlas-hash-compaction.md) | Atlas hash-table compaction for sustained CJK input | Accepted (amends ADR-0012) |
 
 ## Looking for something else?
 

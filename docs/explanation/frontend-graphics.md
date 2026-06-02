@@ -67,10 +67,11 @@ already seen.
 Crucially, the text shapes it produces are **colour-independent**: each shape
 references a shared R8 *coverage* atlas and the colour is supplied at draw time
 as a tint ([ADR-0011](../adr/0011-colour-independent-coverage-glyphs.md),
-[ADR-0012](../adr/0012-glyph-atlas-shared-texture.md)). The same glyph can be
-drawn normal, muted, or selected without re-shaping or re-uploading — and, more
-to the point here, the shape carries no notion of a specific backend's colour or
-paint object.
+[ADR-0012](../adr/0012-glyph-atlas-shared-texture.md)). The atlas hash table is
+automatically compacted when load exceeds 75 %, keeping lookup O(1) regardless
+of session length ([ADR-0019](../adr/0019-atlas-hash-compaction.md)). The same
+glyph can be drawn normal, muted, or selected without re-shaping or re-uploading
+— and the shape carries no notion of a specific backend's colour or paint object.
 
 ### 3. Paint — `panel_record()`
 

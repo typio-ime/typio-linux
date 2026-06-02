@@ -1,4 +1,5 @@
 #include "text_shaper.h"
+#include "layout.h"
 #include "device.h"
 #include "fallback_cache.h"
 #include "glyph_pack.h"
@@ -868,9 +869,9 @@ void typio_text_shape_free(TypioTextShape *layout)
 
 #define GLYPH_ATLAS_DIM   2048u   /* R8 → 4 MiB; thousands of glyphs           */
 #define GLYPH_ATLAS_PAD   1u      /* transparent gutter to stop bilinear bleed */
-#define GLYPH_SLOT_CAP    32768u  /* power of two; comfortably exceeds how many
-                                   * glyphs the atlas image can hold, so the
-                                   * open-addressed table stays sparse (fast)   */
+#define GLYPH_SLOT_CAP    131072u /* power of two; 4× the atlas image capacity
+                                   * so the hash table stays well below the 75%
+                                   * compaction threshold in normal use          */
 
 typedef struct {
     uint64_t key;          /* (font_id << 32) | glyph_id; 0 == empty slot     */
@@ -884,6 +885,7 @@ typedef struct {
     flux_image  *image;
     GlyphSlot   *slots;     /* GLYPH_SLOT_CAP entries                          */
     GlyphPacker  packer;    /* skyline shelf cursor (see glyph_pack.h)         */
+    uint32_t     live_count;/* occupied entries; tracked for compaction         */
 } GlyphAtlas;
 
 static GlyphAtlas g_atlas;
@@ -1221,6 +1223,99 @@ static bool glyph_atlas_ensure(void)
     return true;
 }
 
+/* ── Hash-table compaction ─────────────────────────────────────────────
+ *
+ * The atlas hash table accumulates dead entries as LRU cache evictions
+ * discard layouts whose glyphs remain referenced in the table.  Over time
+ * the linear-probe chains grow, degrading lookup from O(1) toward O(n).
+ *
+ * Compaction collects the set of live glyph keys by walking every layout
+ * in the panel's LRU cache, then rebuilds the hash table with only those
+ * entries.  Atlas texture pixels are NOT relocated — only the lookup table
+ * changes.  Dead entries' texture space is abandoned (the atlas is large
+ * enough that texture exhaustion is practically unreachable before hash
+ * degradation would recur).
+ *
+ * Triggered automatically from glyph_atlas_get when the load factor
+ * exceeds 75%.  Can also be called explicitly from the panel render path. */
+
+#define ATLAS_COMPACT_THRESHOLD_PCT 75
+
+uint32_t typio_text_atlas_entry_count(void)
+{
+    return g_atlas.slots ? g_atlas.live_count : 0;
+}
+
+static void collect_shape_keys(TypioTextShape *shape, uint32_t *mark,
+                                const uint32_t mask, size_t *out_count)
+{
+    if (!shape || !shape->glyphs) return;
+    for (size_t j = 0; j < shape->count; ++j) {
+        uint32_t gid = shape->glyphs[j].glyph_id;
+        uint32_t fid = shape->font_id;
+        if (gid == 0 && shape->glyphs[j].fb_glyph_id != 0) {
+            uint8_t fb = shape->glyphs[j].fb_idx;
+            if (fb < shape->fallback_count) {
+                gid = shape->glyphs[j].fb_glyph_id;
+                fid = shape->fallback_font_ids[fb];
+            }
+        }
+        if (gid == 0) continue;
+        uint64_t key64 = ((uint64_t)fid << 32) | gid;
+        uint32_t h = (uint32_t)(key64 * 1099511628211ULL) & mask;
+        if (!mark[h]) { mark[h] = 1; (*out_count)++; }
+    }
+}
+
+static void glyph_atlas_compact(PanelRenderCtx *pc)
+{
+    if (!pc || !g_atlas.slots || g_atlas.live_count == 0) return;
+
+    flux_device *dev = typio_render_device_get();
+    if (dev) flux_device_wait_idle(dev);
+
+    const size_t   nslot = GLYPH_SLOT_CAP;
+    const size_t   nentry = panel_render_ctx_entry_count(pc);
+    const uint32_t mask  = (uint32_t)(nslot - 1u);
+
+    uint32_t *mark = (uint32_t *)calloc(nslot, sizeof(uint32_t));
+    if (!mark) return;
+
+    GlyphSlot *old = (GlyphSlot *)malloc(nslot * sizeof(GlyphSlot));
+    if (!old) { free(mark); return; }
+
+    size_t live_count = 0;
+
+    for (size_t i = 0; i < nentry; ++i) {
+        TypioTextShape *text_shape  = nullptr;
+        TypioTextShape *label_shape = nullptr;
+        if (!panel_render_ctx_entry_shapes(pc, i, &text_shape, &label_shape))
+            continue;
+        collect_shape_keys(text_shape,  mark, mask, &live_count);
+        collect_shape_keys(label_shape, mark, mask, &live_count);
+    }
+
+    memcpy(old, g_atlas.slots, nslot * sizeof(GlyphSlot));
+    memset(g_atlas.slots, 0, nslot * sizeof(GlyphSlot));
+
+    for (size_t k = 0; k < nslot; ++k) {
+        if (mark[k] && old[k].occupied) g_atlas.slots[k] = old[k];
+    }
+
+    g_atlas.live_count = (uint32_t)live_count;
+
+    free(mark); free(old);
+}
+
+bool typio_text_atlas_compact(PanelRenderCtx *pc)
+{
+    if (!g_atlas.slots) return false;
+    uint32_t threshold = (uint32_t)((uint64_t)GLYPH_SLOT_CAP * ATLAS_COMPACT_THRESHOLD_PCT / 100);
+    if (g_atlas.live_count < threshold) return false;
+    glyph_atlas_compact(pc);
+    return true;
+}
+
 /* Look up a glyph's atlas slot, rasterising and uploading it on first sight.
  * After warm-up every panel glyph is a hash hit with zero GPU work.
  *
@@ -1230,7 +1325,11 @@ static bool glyph_atlas_ensure(void)
  * texture mid-frame — doing so would blank glyphs already recorded into the
  * current command buffer and force a GPU drain on the IME loop. The atlas is
  * sized for thousands of glyphs and is rebuilt fresh at engine teardown; a
- * config reload that changes the font also rebuilds it via the STYLE path. */
+ * config reload that changes the font also rebuilds it via the STYLE path.
+ *
+ * Hash-table degradation is prevented by automatic compaction: when the load
+ * factor exceeds ATLAS_COMPACT_THRESHOLD_PCT, the table is rebuilt with only
+ * live entries (those still referenced by the panel's LRU layout cache). */
 static const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t glyph_id)
 {
     if (!glyph_atlas_ensure()) return NULL;
@@ -1282,6 +1381,7 @@ static const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t
     }
 
     g_atlas.slots[i] = slot;
+    g_atlas.live_count++;
     return &g_atlas.slots[i];
 }
 

@@ -35,6 +35,7 @@ in depth.
 | **TextShape** | A shaped glyph run produced by the TextShaper. Replaces the old `TypioTextLayout`. | [ADR-0014](../adr/0014-canonical-panel-vocabulary.md) |
 | **RenderDevice** | Shared GPU context used by the Panel rendering pipeline. | [ADR-0014](../adr/0014-canonical-panel-vocabulary.md) |
 | **Glyph Atlas** | A single persistent R8 texture holding every rasterised glyph, keyed `(font_id, glyph_id)`, packed by a skyline allocator. | [ADR-0012](../adr/0012-glyph-atlas-shared-texture.md) |
+| **Atlas Compaction** | Automatic rebuild of the atlas hash table with only live entries, triggered at 75 % load. Pure CPU operation (~100 μs); atlas texture pixels are not relocated. | [ADR-0019](../adr/0019-atlas-hash-compaction.md) |
 
 ## Wayland input method
 
