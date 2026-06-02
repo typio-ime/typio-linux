@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-06-02
+
+### Added
+
+- **Host-managed candidate selection (ADR-0012).** `candidate_guard.c`
+  intercepts Up/Down/Left/Right, number keys 1–9, Space, and Enter when
+  `host_managed_selection = true`. The host maintains the selected index
+  and commits via `typio_input_context_commit_candidate`.
+- **Profile fields in IPC payload.** `engine.statusChanged` now includes
+  `profileId` and `profileLabel` alongside mode fields.
+
+### Removed
+
+- **Engagement-based routing.** The host no longer bypasses the engine
+  based on `engagement`. `key_route_should_forward_basic_text` and
+  `TRACK_BASIC_PASSTHROUGH` are deleted; all keys flow to the active
+  engine's `process_key`.
+- **Old status API references.** All surfaces updated from
+  `TypioKeyboardEngineStatus` to `TypioKeyboardEngineMode`.
+
+### Changed
+
+- **IPC payload shape.** `engine.statusChanged` removes `engagement`;
+  adds `profileId` and `profileLabel`.
+- **Tray tooltip and indicator logic.** No longer engagement-aware;
+  derives display purely from mode metadata.
+
 ## [0.0.9] — 2026-06-01
 
 ### Added
