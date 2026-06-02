@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] — 2026-06-02
+
+### Added
+
+- **`COMMIT_RAW` host-managed selection action (ADR-0012).** Enter/KP_Enter
+  is now classified separately from Space. When the engine sets the
+  `TYPIO_HOST_SEL_COMMIT_RAW` flag, the host commits the raw preedit text
+  instead of the selected candidate. `router.c` gains raw-commit logic using
+  `typio_wl_build_plain_preedit` + `typio_input_context_commit`.
+
 ## [0.1.2] — 2026-06-02
 
 ### Fixed

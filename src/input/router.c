@@ -14,6 +14,7 @@
 #include "boundary.h"
 #include "candidate_guard.h"
 #include "panel.h"
+#include "preedit.h"
 #include "debug.h"
 #include "tracker_access.h"
 #include "typio/abi/shortcut.h"
@@ -33,6 +34,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 static TypioWlKeyDecision key_route_decision(TypioWlKeyAction action,
@@ -152,6 +154,17 @@ static bool key_route_handle_host_selection(TypioWlFrontend *frontend,
     if (cat == TYPIO_WL_HOST_SEL_CATEGORY_COMMIT ||
         cat == TYPIO_WL_HOST_SEL_CATEGORY_INDEX_PICK) {
         return typio_wl_host_selection_try_commit(frontend, session, sel);
+    }
+
+    if (cat == TYPIO_WL_HOST_SEL_CATEGORY_COMMIT_RAW) {
+        const TypioPreedit *preedit =
+            typio_input_context_get_preedit(session->ctx);
+        int cursor_pos = -1;
+        char *plain_text = typio_wl_build_plain_preedit(preedit, &cursor_pos);
+        typio_input_context_commit(session->ctx,
+                                   plain_text ? plain_text : "");
+        free(plain_text);
+        return true;
     }
 
     return false;

@@ -34,6 +34,8 @@ TypioWlHostSelCategory typio_wl_host_selection_category(TypioWlHostSelKey sel) {
         return TYPIO_WL_HOST_SEL_CATEGORY_NAVIGATE;
     case TYPIO_WL_HOST_SEL_COMMIT_SELECTED:
         return TYPIO_WL_HOST_SEL_CATEGORY_COMMIT;
+    case TYPIO_WL_HOST_SEL_COMMIT_RAW:
+        return TYPIO_WL_HOST_SEL_CATEGORY_COMMIT_RAW;
     case TYPIO_WL_HOST_SEL_COMMIT_INDEX_1:
     case TYPIO_WL_HOST_SEL_COMMIT_INDEX_2:
     case TYPIO_WL_HOST_SEL_COMMIT_INDEX_3:
@@ -71,6 +73,8 @@ bool typio_wl_candidate_guard_should_consume(TypioWlSession *session,
         return (flags & TYPIO_HOST_SEL_NAVIGATE) != 0;
     case TYPIO_WL_HOST_SEL_CATEGORY_COMMIT:
         return (flags & TYPIO_HOST_SEL_COMMIT) != 0;
+    case TYPIO_WL_HOST_SEL_CATEGORY_COMMIT_RAW:
+        return (flags & TYPIO_HOST_SEL_COMMIT_RAW) != 0;
     case TYPIO_WL_HOST_SEL_CATEGORY_INDEX_PICK:
         return (flags & TYPIO_HOST_SEL_INDEX_PICK) != 0;
     default:
@@ -90,7 +94,7 @@ TypioWlHostSelKey typio_wl_host_selection_keysym(uint32_t keysym) {
         return TYPIO_WL_HOST_SEL_COMMIT_SELECTED;
     case XKB_KEY_Return:
     case XKB_KEY_KP_Enter:
-        return TYPIO_WL_HOST_SEL_COMMIT_SELECTED;
+        return TYPIO_WL_HOST_SEL_COMMIT_RAW;
     default:
         break;
     }
@@ -135,6 +139,7 @@ int typio_wl_host_selection_resolve(TypioWlHostSelKey sel,
 
 bool typio_wl_host_selection_is_commit(TypioWlHostSelKey sel) {
     return sel == TYPIO_WL_HOST_SEL_COMMIT_SELECTED ||
+           sel == TYPIO_WL_HOST_SEL_COMMIT_RAW ||
            (sel >= TYPIO_WL_HOST_SEL_COMMIT_INDEX_1 &&
             sel <= TYPIO_WL_HOST_SEL_COMMIT_INDEX_9);
 }
