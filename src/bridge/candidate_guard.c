@@ -1,6 +1,6 @@
 /**
  * @file candidate_guard.c
- * @brief Host-managed candidate selection (ADR-0012).
+ * @brief Host-managed candidate selection (libtypio ADR-0013).
  *
  * When an engine publishes a composition with host-managed-selection flags set,
  * the host intercepts the corresponding navigation and selection keys before

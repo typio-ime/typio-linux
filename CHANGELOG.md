@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`COMMIT_RAW` host-managed selection action (ADR-0012).** Enter/KP_Enter
+- **`COMMIT_RAW` host-managed selection action (libtypio ADR-0013).** Enter/KP_Enter
   is now classified separately from Space. When the engine sets the
   `TYPIO_HOST_SEL_COMMIT_RAW` flag, the host commits the raw preedit text
   instead of the selected candidate. `router.c` gains raw-commit logic using
@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`candidate_guard` now respects per-capability flags (ADR-0012).**
+- **`candidate_guard` now respects per-capability flags (libtypio ADR-0013).**
   `typio_wl_candidate_guard_should_consume` classifies each keysym into
   Navigate / Commit / IndexPick categories and checks the corresponding
   bit in `session->last_host_managed_selection` instead of the old coarse
@@ -54,8 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Host-managed candidate selection (ADR-0012).** `candidate_guard.c`
-  intercepts Up/Down/Left/Right, number keys 1–9, Space, and Enter when
+- **Host-managed candidate selection (libtypio ADR-0012).** `candidate_guard.c`
+  intercepts Up/Down/Left/Right, digit keys 0–9, Space, and Enter when
   `host_managed_selection = true`. The host maintains the selected index
   and commits via `typio_input_context_commit_candidate`.
 - **Profile fields in IPC payload.** `engine.statusChanged` now includes

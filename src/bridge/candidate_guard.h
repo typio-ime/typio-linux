@@ -1,6 +1,6 @@
 /**
  * @file candidate_guard.h
- * @brief Host-managed candidate selection (ADR-0012)
+ * @brief Host-managed candidate selection (libtypio ADR-0013)
  */
 
 #ifndef TYPIO_WL_CANDIDATE_GUARD_H
