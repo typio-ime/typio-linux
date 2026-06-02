@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-06-02
+
+### Changed
+
+- **Qualified ADR-0012 references as libtypio ADR.** The CHANGELOG and source
+  code comments now prefix "ADR-0012" with "libtypio" to avoid confusion with
+  typio-wayland's own ADR-0012 (shared glyph atlas). Fixed digit key range
+  from "1–9" to "0–9" in historical entries.
+
 ## [0.1.4] — 2026-06-02
 
 ### Added
