@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-06-02
+
+### Fixed
+
+- **Host-managed candidate selection keys now actually work.** `router.c`
+  previously intercepted navigation/commit/index-pick keys (consuming them
+  so they never reached the engine or the application) but forgot to act on
+  them. Added `key_route_handle_host_selection` which updates the local
+  selected index and re-renders the panel for arrow keys, and calls
+  `typio_wl_host_selection_try_commit` for Space/Enter/digit keys.
+
 ## [0.1.1] — 2026-06-02
 
 ### Changed

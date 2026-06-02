@@ -121,6 +121,42 @@ static bool key_route_is_app_shortcut(uint32_t keysym, uint32_t modifiers) {
     }
 }
 
+/**
+ * @brief Handle a host-managed candidate-selection key.
+ *
+ * Called when the candidate guard has decided to consume a key.  The host
+ * updates its locally-managed selected index for navigation keys, or commits
+ * the chosen candidate for commit/index-pick keys.
+ */
+static bool key_route_handle_host_selection(TypioWlFrontend *frontend,
+                                            TypioWlSession *session,
+                                            uint32_t keysym)
+{
+    TypioWlHostSelKey sel = typio_wl_host_selection_keysym(keysym);
+    TypioWlHostSelCategory cat = typio_wl_host_selection_category(sel);
+
+    if (cat == TYPIO_WL_HOST_SEL_CATEGORY_NAVIGATE) {
+        int new_selected = typio_wl_host_selection_resolve(
+            sel,
+            session->last_candidate_selected,
+            session->last_candidate_count);
+        if (new_selected >= 0) {
+            session->last_candidate_selected = new_selected;
+            session->candidate_snapshot.selected = new_selected;
+            session->frontend->panel_update_pending = true;
+            typio_wl_session_flush_ui_update(session);
+        }
+        return true;
+    }
+
+    if (cat == TYPIO_WL_HOST_SEL_CATEGORY_COMMIT ||
+        cat == TYPIO_WL_HOST_SEL_CATEGORY_INDEX_PICK) {
+        return typio_wl_host_selection_try_commit(frontend, session, sel);
+    }
+
+    return false;
+}
+
 const char *typio_wl_key_action_name(TypioWlKeyAction action) {
     switch (action) {
     case TYPIO_WL_KEY_ACTION_FORWARD:
@@ -417,6 +453,7 @@ void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
 
         if (!handled &&
             typio_wl_candidate_guard_should_consume(session, keysym)) {
+            key_route_handle_host_selection(frontend, session, keysym);
             decision = key_route_decision(TYPIO_WL_KEY_ACTION_CONSUME,
                                           TYPIO_WL_KEY_REASON_CANDIDATE_NAVIGATION);
             key_route_trace_decision(keyboard, "press-engine", key, keysym,
