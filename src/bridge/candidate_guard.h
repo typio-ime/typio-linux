@@ -32,6 +32,7 @@ typedef enum {
     TYPIO_WL_HOST_SEL_COMMIT_INDEX_7,
     TYPIO_WL_HOST_SEL_COMMIT_INDEX_8,
     TYPIO_WL_HOST_SEL_COMMIT_INDEX_9,
+    TYPIO_WL_HOST_SEL_COMMIT_INDEX_0,
 } TypioWlHostSelKey;
 
 /* Classification of a keysym into a host-managed selection category. */

@@ -45,6 +45,7 @@ TypioWlHostSelCategory typio_wl_host_selection_category(TypioWlHostSelKey sel) {
     case TYPIO_WL_HOST_SEL_COMMIT_INDEX_7:
     case TYPIO_WL_HOST_SEL_COMMIT_INDEX_8:
     case TYPIO_WL_HOST_SEL_COMMIT_INDEX_9:
+    case TYPIO_WL_HOST_SEL_COMMIT_INDEX_0:
         return TYPIO_WL_HOST_SEL_CATEGORY_INDEX_PICK;
     default:
         return TYPIO_WL_HOST_SEL_CATEGORY_NONE;
@@ -102,6 +103,9 @@ TypioWlHostSelKey typio_wl_host_selection_keysym(uint32_t keysym) {
     if (keysym >= XKB_KEY_1 && keysym <= XKB_KEY_9)
         return TYPIO_WL_HOST_SEL_COMMIT_INDEX_1 + (keysym - XKB_KEY_1);
 
+    if (keysym == XKB_KEY_0)
+        return TYPIO_WL_HOST_SEL_COMMIT_INDEX_0;
+
     return TYPIO_WL_HOST_SEL_NONE;
 }
 
@@ -120,6 +124,10 @@ int typio_wl_host_selection_resolve(TypioWlHostSelKey sel,
     }
     case TYPIO_WL_HOST_SEL_COMMIT_SELECTED:
         return current_selected >= 0 ? current_selected : 0;
+    case TYPIO_WL_HOST_SEL_COMMIT_INDEX_0: {
+        int idx = 9;
+        return idx < (int)candidate_count ? idx : -1;
+    }
     case TYPIO_WL_HOST_SEL_COMMIT_INDEX_1:
     case TYPIO_WL_HOST_SEL_COMMIT_INDEX_2:
     case TYPIO_WL_HOST_SEL_COMMIT_INDEX_3:
@@ -141,7 +149,8 @@ bool typio_wl_host_selection_is_commit(TypioWlHostSelKey sel) {
     return sel == TYPIO_WL_HOST_SEL_COMMIT_SELECTED ||
            sel == TYPIO_WL_HOST_SEL_COMMIT_RAW ||
            (sel >= TYPIO_WL_HOST_SEL_COMMIT_INDEX_1 &&
-            sel <= TYPIO_WL_HOST_SEL_COMMIT_INDEX_9);
+            sel <= TYPIO_WL_HOST_SEL_COMMIT_INDEX_9) ||
+           sel == TYPIO_WL_HOST_SEL_COMMIT_INDEX_0;
 }
 
 bool typio_wl_host_selection_try_commit(TypioWlFrontend *frontend,
