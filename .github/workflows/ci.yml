@@ -12,9 +12,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # libtypio is installed here so pkg-config / the linker can find it.
-  PKG_CONFIG_PATH: /home/runner/.local/lib/pkgconfig
-  LD_LIBRARY_PATH: /home/runner/.local/lib
+  # libtypio is built in-tree with cargo. Its build.rs emits the .pc files
+  # and the cdylib under target/release, so point pkg-config / the linker
+  # there (see meson.build "local cargo build" note).
+  PKG_CONFIG_PATH: ${{ github.workspace }}/_libtypio/target/release
+  LD_LIBRARY_PATH: ${{ github.workspace }}/_libtypio/target/release
 
 jobs:
   build-test:
@@ -41,11 +43,11 @@ jobs:
           repository: ${{ github.repository_owner }}/libtypio
           path: _libtypio
 
-      - name: Build & install libtypio
-        run: |
-          meson setup _libtypio/build _libtypio \
-            --prefix="$HOME/.local" -Dbuild_tests=false
-          ninja -C _libtypio/build install
+      # libtypio is a Cargo project (cdylib + full C ABI headers); it has no
+      # meson build. cargo build emits libtypio.so plus libtypio.pc /
+      # typio-engine-abi.pc into target/release for pkg-config to pick up.
+      - name: Build libtypio
+        run: cargo build --release --manifest-path _libtypio/Cargo.toml
 
       - name: Configure host
         run: meson setup build --prefix="$HOME/.local" -Denable_systray=true
