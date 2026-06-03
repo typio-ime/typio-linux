@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9] — 2026-06-03
+
+### Fixed
+
+- **Candidate Panel scheduling no longer mixes dirty updates with present
+  retries.** Replaced the old pending boolean with an explicit `IDLE` /
+  `DIRTY` / `RETRY` schedule state. Candidate navigation now only marks the
+  latest snapshot dirty; rendering and protocol commits run from the event-loop
+  Panel stage, and the 16 ms retry cadence applies only to a focused,
+  flushable present retry. (ADR-0023)
+
 ## [0.1.8] — 2026-06-03
 
 ### Fixed
@@ -14,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Candidate Panel could stay stale after a present RETRY.** Removed the
   persistent `present_retry` latch that let the event loop skip every future
   Panel flush after one stalled present. Panel updates now return `OK` /
-  `RETRY` / `FAIL`, and the frontend keeps `panel_update_pending` armed only
-  from the current result. (ADR-0022)
+  `RETRY` / `FAIL`, and retry scheduling is driven by the current update
+  result rather than durable surface state. (ADR-0022; scheduling later
+  formalized by ADR-0023)
 
 ### Changed
 

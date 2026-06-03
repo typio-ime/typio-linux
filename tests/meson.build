@@ -63,6 +63,13 @@ test_text_ui_state = executable('test_text_ui_state',
 )
 test('text_ui_state', test_text_ui_state)
 
+test_panel_scheduler = executable('test_panel_scheduler',
+    ['test_panel_scheduler.c', '../src/frontend/panel_scheduler.c'],
+    include_directories: wayland_test_inc,
+    dependencies: libtypio_dep,
+)
+test('panel_scheduler', test_panel_scheduler)
+
 test_shortcut_chord = executable('test_shortcut_chord',
     ['test_shortcut_chord.c', '../src/input/chords.c'],
     include_directories: wayland_test_inc,

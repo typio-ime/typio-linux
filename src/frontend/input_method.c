@@ -298,10 +298,7 @@ void typio_wl_session_reset(TypioWlSession *session) {
 
     /* Reset preedit change tracking and cancel any deferred panel work from
      * the previous activation so stale candidates cannot be redrawn later. */
-    typio_wl_text_ui_reset_tracking(session->frontend ? &session->frontend->panel_update_pending
-                                                      : nullptr,
-                                    &session->last_preedit_text,
-                                    &session->last_preedit_cursor);
+    typio_wl_session_cancel_ui_tracking(session);
 
     /* Reset pending state */
     free(session->pending.surrounding_text);
@@ -541,9 +538,7 @@ static void transition_to_inactive(TypioWlFrontend *frontend, const char *reason
     typio_log_info("Input context unfocused");
     typio_wl_panel_coordinator_reset_anchor(frontend);
     typio_wl_panel_coordinator_clear_caret_rect(frontend);
-    typio_wl_text_ui_reset_tracking(&frontend->panel_update_pending,
-                                    &frontend->session->last_preedit_text,
-                                    &frontend->session->last_preedit_cursor);
+    typio_wl_session_cancel_ui_tracking(frontend->session);
     typio_input_context_focus_out(frontend->session->ctx);
     typio_input_context_reset(frontend->session->ctx);
     typio_wl_panel_coordinator_hide_all(frontend);
@@ -700,9 +695,7 @@ static void on_commit_callback([[maybe_unused]] TypioInputContext *ctx, const ch
     /* Apply changes */
     typio_wl_commit(session->frontend);
 
-    typio_wl_text_ui_reset_tracking(&session->frontend->panel_update_pending,
-                                    &session->last_preedit_text,
-                                    &session->last_preedit_cursor);
+    typio_wl_session_cancel_ui_tracking(session);
 
     /* Notify the registry that the active engine committed text,
      * so the recent-engine pair used for slow-switch toggling stays current. */
@@ -747,12 +740,33 @@ static void on_composition_callback([[maybe_unused]] TypioInputContext *ctx,
     }
     candidate_snapshot_assign(&session->candidate_snapshot, composition);
 
-    /* Defer the heavy rendering and protocol commit to the event loop flush.
-     * This prevents rapid key repeats from blocking the Wayland message loop. */
-    session->frontend->panel_update_pending = true;
+    typio_wl_session_request_ui_update(session);
 }
 
-void typio_wl_session_flush_ui_update(TypioWlSession *session) {
+void typio_wl_session_request_ui_update(TypioWlSession *session) {
+    if (!session || !session->frontend) {
+        return;
+    }
+
+    session->frontend->panel_schedule_state =
+        typio_wl_panel_scheduler_mark_dirty(
+            session->frontend->panel_schedule_state);
+}
+
+void typio_wl_session_cancel_ui_tracking(TypioWlSession *session) {
+    if (!session) {
+        return;
+    }
+
+    if (session->frontend) {
+        session->frontend->panel_schedule_state =
+            typio_wl_panel_scheduler_cancel();
+    }
+    typio_wl_text_ui_reset_tracking(&session->last_preedit_text,
+                                    &session->last_preedit_cursor);
+}
+
+void typio_wl_session_flush_scheduled_ui_update(TypioWlSession *session) {
     if (!session || !session->ctx) {
         return;
     }
@@ -789,17 +803,16 @@ static void update_wayland_text_ui(TypioWlSession *session, TypioInputContext *c
                                                new_text,
                                                cursor_pos);
 
-    /* Keep the panel synchronous so candidate navigation updates the visible
-     * highlight immediately. When the preedit is unchanged, skip the protocol
-     * round-trip to the focused application and only refresh the panel. */
+    /* Scheduled Panel updates run from the event loop. When the preedit is
+     * unchanged, skip the protocol round-trip to the focused application and
+     * refresh only the Panel. */
     TypioPanelUpdateResult panel_result =
         typio_wl_panel_coordinator_show_candidates(session->frontend, ctx);
     panel_done_ms = typio_wl_monotonic_ms();
 
-    session->frontend->panel_update_pending = false;
-    if (panel_result == TYPIO_PANEL_UPDATE_RETRY) {
-        session->frontend->panel_update_pending = true;
-    } else if (panel_result == TYPIO_PANEL_UPDATE_OK &&
+    session->frontend->panel_schedule_state =
+        typio_wl_panel_scheduler_complete(panel_result);
+    if (panel_result == TYPIO_PANEL_UPDATE_OK &&
                session->candidate_snapshot.count > 0) {
         typio_wl_panel_coordinator_mark_anchor_ready(session->frontend,
                                                      "candidate_present");

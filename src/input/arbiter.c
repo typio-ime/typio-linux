@@ -118,9 +118,7 @@ static void arbiter_consume(TypioKeyArbiter *arbiter,
     typio_wl_commit(frontend);
     typio_wl_panel_coordinator_hide(frontend, TYPIO_WL_UI_OWNER_CANDIDATE);
     if (frontend->session) {
-        typio_wl_text_ui_reset_tracking(&frontend->panel_update_pending,
-                                        &frontend->session->last_preedit_text,
-                                        &frontend->session->last_preedit_cursor);
+        typio_wl_session_cancel_ui_tracking(frontend->session);
     }
 
     if (registry) {

@@ -14,8 +14,11 @@ Decisions about the framework core (engine ABI, composition contract) live in th
 > carries a scope-correction block. The misdiagnosis trail is kept deliberately:
 > it is the record that stops the next reader repeating it. See
 > [`docs/dev/maintenance.md`](../dev/maintenance.md) for the condensed lesson.
-> A later retry-latch regression in ADR-0015's deferral path is recorded in
-> ADR-0022.
+> Later retry-latch and scheduler regressions in ADR-0015's deferral path are
+> recorded in ADR-0022 and ADR-0023. Do not implement new scheduling from the
+> historical `panel_update_pending` or retry-latch descriptions in ADR-0015 /
+> ADR-0022; the active model is ADR-0023's `IDLE` / `DIRTY` / `RETRY`
+> scheduler.
 
 | ADR | Title | Status |
 |-----|-------|--------|
@@ -41,6 +44,7 @@ Decisions about the framework core (engine ABI, composition contract) live in th
 | [ADR-0020](0020-atlas-reclamation-and-glyph-layer-modularization.md) | Atlas texture reclamation and glyph-layer modularization | Accepted (supersedes ADR-0019) |
 | [ADR-0021](0021-systemd-user-service-daemon-lifecycle.md) | systemd user service for daemon lifecycle | Accepted |
 | [ADR-0022](0022-panel-retry-result-owned-by-update.md) | Panel retry result owned by update | Accepted (amends ADR-0015) |
+| [ADR-0023](0023-panel-scheduler-state-machine.md) | Panel Scheduler State Machine | Accepted (amends ADR-0022) |
 
 ## Looking for something else?
 

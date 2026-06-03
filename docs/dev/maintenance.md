@@ -318,8 +318,14 @@ chain:
   `PANEL_PRESENT_RETRY` could set surface state that made the event loop skip
   every future Panel flush, so `panel_render()` never ran again to clear the
   flag. Fixed by removing durable retry state from `TypioPanelSurface`: retry is
-  now one update result (`TYPIO_PANEL_UPDATE_RETRY`), and the frontend keeps
-  `panel_update_pending` armed with a 16 ms retry poll cadence.
+  now one update result (`TYPIO_PANEL_UPDATE_RETRY`). ADR-0023 then separated
+  frontend scheduling into `IDLE` / `DIRTY` / `RETRY`, so ordinary candidate
+  changes cannot inherit the 16 ms retry poll cadence and key routing no longer
+  calls Panel flush directly.
+- **Do not resurrect the old pending flag.** The live implementation is
+  `src/frontend/panel_scheduler.c`. Historical ADR text that mentions
+  `panel_update_pending`, durable retry latches, or key-path Panel flushes is
+  retained only to explain the regression trail.
 - **GPU memory (~192 MB)** looked alarming but was a *bounded plateau* of
   flux's 64 MiB pool blocks (`/proc/<pid>/fdinfo` `drm-total-system0` stayed
   flat under load), driven by the per-run texture churn — not a leak and not

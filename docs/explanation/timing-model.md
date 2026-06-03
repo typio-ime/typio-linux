@@ -141,7 +141,9 @@ Application shortcuts are decided in the Wayland frontend, as a pure routing dec
 
 The frontend uses one poll loop for Wayland and auxiliary runtime sources. Auxiliary fds are part of the timing model because they can otherwise delay keymap deadlines, lifecycle cleanup, or user-visible config changes.
 
-- the candidate Panel is rendered once per loop iteration from a coalesced panel update flag, never inline in the composition callback
+- the candidate Panel is rendered once per loop iteration from the Panel
+  Scheduler's `DIRTY` / `RETRY` state, never inline in the composition callback
+  or key routing path
 - the Panel's GPU present runs on the loop thread and must stay bounded on **both** the acquire and the present side. Acquire: `flux_surface_begin_frame` uses a finite timeout so a compositor that stops releasing swapchain images (display asleep / occluded after a lock or suspend) cannot block the loop; a timed-out present skips the frame and re-arms the panel update, and repeated stalls recreate the swapchain (ADR-0006). Present: the swapchain uses a **non-blocking present mode** (`vsync=false` → MAILBOX/IMMEDIATE) so `vkQueuePresentKHR` does not block waiting for the compositor to release a buffer (ADR-0010).
 - glyphs are drawn from a **shared, persistent glyph atlas** — each glyph is rasterised once, packed into one R8 texture, and referenced by sub-rect (ADR-0012). The Panel draw path must not build or synchronously upload a texture per text run: that made every candidate **page** ~20 blocking `flux_image_create → submit_one_shot_and_wait → vkWaitForFences` calls on the loop, the cause of candidate-switch lag (and library-independent — it recurred across graphics backends). Colour stays a **draw-time tint** over the atlas's R8 coverage (R8 coverage + tint, ADR-0011), so changing the highlighted candidate only re-tints — no GPU upload.
 - while the grab resource is `needs_keymap`, the poll timeout must not sleep past the current keymap deadline

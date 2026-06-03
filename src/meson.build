@@ -56,6 +56,7 @@ if enable_wayland
         'engine/lifecycle_policy.c',
         'input/modifiers.c',
         'frontend/event_loop.c',
+        'frontend/panel_scheduler.c',
         'frontend/panel_coordinator.c',
         'frontend/runtime_config.c',
         'frontend/watchdog.c',

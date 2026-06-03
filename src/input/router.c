@@ -145,8 +145,7 @@ static bool key_route_handle_host_selection(TypioWlFrontend *frontend,
         if (new_selected >= 0) {
             session->last_candidate_selected = new_selected;
             session->candidate_snapshot.selected = new_selected;
-            session->frontend->panel_update_pending = true;
-            typio_wl_session_flush_ui_update(session);
+            typio_wl_session_request_ui_update(session);
         }
         return true;
     }

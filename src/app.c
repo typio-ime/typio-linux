@@ -374,10 +374,7 @@ static void typio_on_engine_change(TypioInstance *instance,
             typio_wl_commit(fe);
             typio_wl_panel_coordinator_hide(fe, TYPIO_WL_UI_OWNER_CANDIDATE);
             if (fe->session) {
-                typio_wl_text_ui_reset_tracking(
-                    &fe->panel_update_pending,
-                    &fe->session->last_preedit_text,
-                    &fe->session->last_preedit_cursor);
+                typio_wl_session_cancel_ui_tracking(fe->session);
             }
             typio_wl_frontend_remember_active_engine(app->wl_frontend,
                                                      active_name);

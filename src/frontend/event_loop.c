@@ -81,8 +81,8 @@ static void event_loop_flush_pending_panel(TypioWlFrontend *frontend) {
         }
     }
 
-    if (!typio_wl_text_ui_should_flush_panel_update(
-            frontend->panel_update_pending,
+    if (!typio_wl_panel_scheduler_should_flush(
+            frontend->panel_schedule_state,
             true,
             frontend->session->ctx != nullptr,
             frontend->session->ctx &&
@@ -91,8 +91,7 @@ static void event_loop_flush_pending_panel(TypioWlFrontend *frontend) {
     }
 
     typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_PANEL_UPDATE);
-    /* Note: panel_update_pending is cleared inside update_wayland_text_ui -> typio_wl_session_flush_ui_update */
-    typio_wl_session_flush_ui_update(frontend->session);
+    typio_wl_session_flush_scheduled_ui_update(frontend->session);
     typio_wl_frontend_watchdog_heartbeat(frontend);
     typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_IDLE);
 }
@@ -195,8 +194,15 @@ static int event_loop_poll(TypioWlFrontend *frontend,
 
     typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_POLL);
     int timeout_ms = 100;
-    timeout_ms = typio_wl_text_ui_panel_retry_poll_timeout_ms(
-        frontend->panel_update_pending,
+    bool panel_flushable = typio_wl_panel_scheduler_should_flush(
+        frontend->panel_schedule_state,
+        frontend->session != nullptr,
+        frontend->session && frontend->session->ctx != nullptr,
+        frontend->session && frontend->session->ctx &&
+            typio_input_context_is_focused(frontend->session->ctx));
+    timeout_ms = typio_wl_panel_scheduler_poll_timeout_ms(
+        frontend->panel_schedule_state,
+        panel_flushable,
         timeout_ms);
     if (frontend->virtual_keyboard_state == TYPIO_WL_VK_STATE_NEEDS_KEYMAP &&
         frontend->virtual_keyboard_keymap_deadline_ms > 0) {

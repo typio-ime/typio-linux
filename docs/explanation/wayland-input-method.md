@@ -160,7 +160,11 @@ update_plan = typio_wl_text_ui_plan_update(session->last_preedit_text,
                                            new_text, cursor_pos);
 ```
 
-If `update_plan == PANEL_ONLY`, the Panel is repainted synchronously but the expensive `zwp_input_method_v2.set_preedit_string` → `done` round-trip to the application is skipped entirely. This avoids composition-update jank in heavyweight clients like Chrome.
+If `update_plan == TYPIO_WL_TEXT_UI_SYNC_PANEL_ONLY`, the Panel Scheduler
+refreshes only the Candidate Panel during the event-loop Panel stage. The
+expensive `zwp_input_method_v2.set_preedit_string` → `done` round-trip to the
+application is skipped entirely. This avoids composition-update jank in
+heavyweight clients like Chrome.
 
 ## Source Map
 

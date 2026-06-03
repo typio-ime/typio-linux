@@ -54,43 +54,21 @@ TEST(treats_null_preedit_as_empty_string) {
               TYPIO_WL_TEXT_UI_SYNC_PREEDIT_AND_PANEL);
 }
 
-TEST(reset_tracking_clears_pending_and_preedit_state) {
-    bool panel_update_pending = true;
+TEST(reset_tracking_clears_preedit_state) {
     char *last_preedit_text = strdup("ni");
     int last_preedit_cursor = 2;
 
     ASSERT(last_preedit_text != nullptr);
 
-    typio_wl_text_ui_reset_tracking(&panel_update_pending,
-                                    &last_preedit_text,
+    typio_wl_text_ui_reset_tracking(&last_preedit_text,
                                     &last_preedit_cursor);
 
-    ASSERT_EQ(panel_update_pending, false);
     ASSERT_EQ(last_preedit_text, nullptr);
     ASSERT_EQ(last_preedit_cursor, -1);
 }
 
 TEST(reset_tracking_accepts_null_fields) {
-    bool panel_update_pending = true;
-
-    typio_wl_text_ui_reset_tracking(&panel_update_pending, nullptr, nullptr);
-    ASSERT_EQ(panel_update_pending, false);
-
-    typio_wl_text_ui_reset_tracking(nullptr, nullptr, nullptr);
-}
-
-TEST(flush_panel_update_requires_focused_context) {
-    ASSERT_EQ(typio_wl_text_ui_should_flush_panel_update(true, true, true, true), true);
-    ASSERT_EQ(typio_wl_text_ui_should_flush_panel_update(false, true, true, true), false);
-    ASSERT_EQ(typio_wl_text_ui_should_flush_panel_update(true, false, true, true), false);
-    ASSERT_EQ(typio_wl_text_ui_should_flush_panel_update(true, true, false, true), false);
-    ASSERT_EQ(typio_wl_text_ui_should_flush_panel_update(true, true, true, false), false);
-}
-
-TEST(panel_retry_pending_shortens_poll_timeout) {
-    ASSERT_EQ(typio_wl_text_ui_panel_retry_poll_timeout_ms(false, 100), 100);
-    ASSERT_EQ(typio_wl_text_ui_panel_retry_poll_timeout_ms(true, 100), 16);
-    ASSERT_EQ(typio_wl_text_ui_panel_retry_poll_timeout_ms(true, 8), 8);
+    typio_wl_text_ui_reset_tracking(nullptr, nullptr);
 }
 
 TEST(positioned_ui_waits_for_ready_anchor) {
@@ -120,10 +98,8 @@ int main(void) {
     run_test_syncs_when_preedit_text_changes();
     run_test_syncs_when_cursor_changes();
     run_test_treats_null_preedit_as_empty_string();
-    run_test_reset_tracking_clears_pending_and_preedit_state();
+    run_test_reset_tracking_clears_preedit_state();
     run_test_reset_tracking_accepts_null_fields();
-    run_test_flush_panel_update_requires_focused_context();
-    run_test_panel_retry_pending_shortens_poll_timeout();
     run_test_positioned_ui_waits_for_ready_anchor();
     run_test_positioned_ui_cancels_when_anchor_times_out();
     run_test_positioned_ui_handles_clock_regression_as_wait();

@@ -18,6 +18,7 @@
 #include "resume.h"
 #include "startup.h"
 #include "bridge.h"
+#include "panel_scheduler.h"
 #include "typio/abi/input_context.h"
 #include "typio/abi/types.h"
 #include "typio_build_config.h"
@@ -304,7 +305,7 @@ struct TypioWlFrontend {
      * forces a recovery once a divergence outlives its threshold. */
     uint64_t reconcile_divergence_since_ms;
 
-    bool panel_update_pending;
+    TypioWlPanelScheduleState panel_schedule_state;
     int config_watch_fd;
     int config_dir_watch;
     int config_engines_watch;
@@ -417,7 +418,7 @@ TypioWlSession *typio_wl_session_create(TypioWlFrontend *frontend);
 void typio_wl_session_destroy(TypioWlSession *session);
 void typio_wl_session_reset(TypioWlSession *session);
 void typio_wl_session_apply_pending(TypioWlSession *session);
-void typio_wl_session_flush_ui_update(TypioWlSession *session);
+void typio_wl_session_flush_scheduled_ui_update(TypioWlSession *session);
 
 /* Keyboard functions (wl_keyboard.c) */
 TypioWlKeyboard *typio_wl_keyboard_create(TypioWlFrontend *frontend);
@@ -446,6 +447,8 @@ void typio_wl_delete_surrounding(TypioWlFrontend *frontend,
 void typio_wl_set_preedit(TypioWlFrontend *frontend, const char *text,
                           int cursor_begin, int cursor_end);
 void typio_wl_commit(TypioWlFrontend *frontend);
+void typio_wl_session_request_ui_update(TypioWlSession *session);
+void typio_wl_session_cancel_ui_tracking(TypioWlSession *session);
 
 #ifdef __cplusplus
 }
