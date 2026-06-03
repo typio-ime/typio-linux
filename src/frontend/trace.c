@@ -1,5 +1,5 @@
 /**
- * @file wl_trace.c
+ * @file trace.c
  * @brief Consistent Wayland trace logging
  */
 

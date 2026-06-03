@@ -45,7 +45,7 @@ in depth.
 | **Virtual Keyboard** | `zwp_virtual_keyboard_v1`. Forwards unhandled keys back to the compositor as synthetic press/release events. | [Wayland Input Method](../explanation/wayland-input-method.md) |
 | **Keyboard Grab** | `zwp_input_method_keyboard_grab_v2`. Delivers raw key/modifier/keymap events for the focused input context. | [Wayland Input Method](../explanation/wayland-input-method.md) |
 | **Activation** | A `zwp_input_method_v2.activate` event. Begins a focused input session. | [Timing Model](../explanation/timing-model.md) |
-| **Grab Epoch** | A generation counter that fences stale key events. A key cycle belongs to the current grab only if the daemon observed its press in the current epoch. | [Timing Model](../explanation/timing-model.md) |
+| **Grab Generation** | A generation counter that fences stale key events. A key cycle belongs to the current grab only if the daemon observed its press in the current generation. | [Timing Model](../explanation/timing-model.md) |
 | **Reactivation** | A repeat `activate` for an already-focused session. Keeps the grab and composition, re-anchors the Panel. Classified at `done`. | [ADR-0018](../adr/0018-focus-transition-classification.md) |
 | **Boundary Bridge** | Policy layer for short-lived handoff behavior at activation boundaries (orphan release forwarding, carried modifiers). | [Maintenance Manual](../dev/maintenance.md) |
 
@@ -54,8 +54,9 @@ in depth.
 | Term | Definition | Primary source |
 |------|-----------|----------------|
 | **Engine Plugin** | A `libtypio_engine_<name>.so` shared library loaded via `dlopen`. Implements the libtypio engine ABI. | [Engine Discovery](engine-discovery.md) |
+| **Engine Availability** | The active engine lifecycle state that answers whether the engine can process input right now. Non-ready keyboard engines consume key cycles locally instead of leaking raw keys to the application. | [Timing Model](../explanation/timing-model.md) |
 | **TIP v1** | Typio IPC Protocol version 1. Unix Domain Socket + length-prefixed JSON-RPC 2.0. | [IPC Protocol](ipc-protocol.md) |
-| **Reconciler** | The `reduce → diff → apply` loop that converges the daemon's derived state onto reality each step. | [Timing Model](../explanation/timing-model.md) |
+| **Reconciler** | The lifecycle repair layer that compares observed axes with the declared phase and fixes resource drift. | [Timing Model](../explanation/timing-model.md) |
 
 ## Vocabulary to avoid
 

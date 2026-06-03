@@ -1,5 +1,5 @@
 /**
- * @file wl_shortcut.c
+ * @file shortcut.c
  * @brief Cached shortcut bindings used by the Wayland frontend
  */
 

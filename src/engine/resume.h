@@ -1,5 +1,5 @@
 /**
- * @file resume_signal.h
+ * @file resume.h
  * @brief System-resume detector for the Wayland frontend
  *
  * The composition lifecycle's most user-visible failure mode is a stuck

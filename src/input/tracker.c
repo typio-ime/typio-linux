@@ -1,5 +1,5 @@
 /**
- * @file key_tracking.c
+ * @file tracker.c
  * @brief Helpers for managing per-key forwarding state across lifecycle boundaries
  */
 
@@ -56,6 +56,8 @@ const char *typio_wl_key_tracking_state_name(TypioKeyTrackState state) {
         return "released_pending";
     case TYPIO_KEY_TRACK_SUPPRESSED_STARTUP:
         return "suppressed_startup";
+    case TYPIO_KEY_TRACK_ENGINE_NOT_READY:
+        return "engine_not_ready";
     case TYPIO_KEY_TRACK_VOICE_PTT:
         return "voice_ptt";
     case TYPIO_KEY_TRACK_VOICE_PTT_UNAVAIL:

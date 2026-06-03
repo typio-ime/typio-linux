@@ -1,5 +1,5 @@
 /**
- * @file wl_frontend_internal.h
+ * @file internal.h
  * @brief Internal structures for Wayland frontend
  */
 
@@ -86,7 +86,7 @@ typedef enum TypioWlLoopStage {
  *
  * This state machine records what happened to a key after routing decided
  * whether to consume or forward it. It is not itself the routing decision
- * model; action/reason routing decisions live in key_route.*.
+ * model; action/reason routing decisions live in input/router.*.
  *
  * Each key can be in exactly one tracking state. Transitions:
  *
@@ -97,6 +97,7 @@ typedef enum TypioWlLoopStage {
  *   TRACK_FORWARDED ─physical release──▶ IDLE
  *   TRACK_RELEASED_PENDING ─physical release──▶ IDLE  (consumed)
  *   TRACK_SUPPRESSED_STARTUP ─physical release──▶ IDLE
+ *   TRACK_ENGINE_NOT_READY ─physical release──▶ IDLE  (consumed)
  */
 
 /**
@@ -260,6 +261,8 @@ struct TypioWlFrontend {
     TypioWlUiOwner ui_owner;
     TypioWlIdentityProvider *identity_provider;
     TypioWlIdentity current_identity;
+    TypioEngineAvailability keyboard_availability;
+    char keyboard_availability_reason[160];
 
     /* Optional subsystems registered as uniform TypioWlAuxHandler instances.
      * This replaces #ifdef-polluted struct members with a runtime array so
@@ -402,13 +405,13 @@ int typio_wl_frontend_get_indicator_fd(TypioWlFrontend *frontend);
 void typio_wl_frontend_dispatch_indicator_timer(TypioWlFrontend *frontend);
 void typio_wl_frontend_destroy_indicator(TypioWlFrontend *frontend);
 
-/* Input method functions (wl_input_method.c) */
+/* Input method functions (input_method.c) */
 void typio_wl_input_method_setup(TypioWlFrontend *frontend);
 void typio_wl_input_method_handle_resume(TypioWlFrontend *frontend,
                                          const char *reason,
                                          uint64_t sleep_ms);
 
-/* Reconnect after a lost Wayland display (wl_frontend.c). Tears down and
+/* Reconnect after a lost Wayland display (frontend.c). Tears down and
  * re-establishes all Wayland objects with capped backoff, preserving engine
  * state. Returns true once reconnected, false if it gave up or was stopped. */
 bool typio_wl_frontend_reconnect(TypioWlFrontend *frontend);
@@ -420,7 +423,7 @@ void typio_wl_session_reset(TypioWlSession *session);
 void typio_wl_session_apply_pending(TypioWlSession *session);
 void typio_wl_session_flush_scheduled_ui_update(TypioWlSession *session);
 
-/* Keyboard functions (wl_keyboard.c) */
+/* Keyboard functions (keyboard.c) */
 TypioWlKeyboard *typio_wl_keyboard_create(TypioWlFrontend *frontend);
 void typio_wl_keyboard_destroy(TypioWlKeyboard *keyboard);
 void typio_wl_keyboard_release_grab(TypioWlKeyboard *keyboard);

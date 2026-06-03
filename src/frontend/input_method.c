@@ -1,5 +1,5 @@
 /**
- * @file wl_input_method.c
+ * @file input_method.c
  * @brief zwp_input_method_v2 event handlers
  */
 
@@ -114,6 +114,23 @@ static void candidate_snapshot_assign(TypioCandidateList *snap,
     snap->has_prev = composition->has_prev;
     snap->has_next = composition->has_next;
     snap->content_signature = composition->content_signature;
+}
+
+/* Reset all candidate-session state derived from a composition: the
+ * candidate-guard scalars consulted on every key and the heap-owned snapshot
+ * used to re-render the panel. libtypio's commit is silent (it clears the
+ * in-flight composition without firing the composition callback; see
+ * typio_input_context_commit), so the commit callback must run this teardown
+ * itself. The composition callback's empty branch funnels through here too, so
+ * both "engine cleared the composition" and "text was committed" reach the same
+ * idle state. */
+static void session_clear_candidate_state(TypioWlSession *session) {
+    if (!session)
+        return;
+    session->last_candidate_count = 0;
+    session->last_candidate_selected = -1;
+    session->last_host_managed_selection = TYPIO_HOST_SEL_NONE;
+    candidate_snapshot_clear(&session->candidate_snapshot);
 }
 
 /* Input method event handlers */
@@ -689,6 +706,12 @@ static void on_commit_callback([[maybe_unused]] TypioInputContext *ctx, const ch
     typio_wl_set_preedit(session->frontend, "", -1, -1);
     typio_wl_panel_coordinator_hide(session->frontend, TYPIO_WL_UI_OWNER_CANDIDATE);
 
+    /* The commit ends the candidate session. libtypio cleared its own
+     * composition silently, so reset the host-side candidate-guard state here;
+     * otherwise a later Left/Right would still be consumed as stale candidate
+     * navigation. */
+    session_clear_candidate_state(session);
+
     /* Commit the text */
     typio_wl_commit_string(session->frontend, text);
 
@@ -733,12 +756,10 @@ static void on_composition_callback([[maybe_unused]] TypioInputContext *ctx,
         session->last_candidate_count = composition->candidate_count;
         session->last_candidate_selected = composition->selected;
         session->last_host_managed_selection = composition->host_managed_selection;
+        candidate_snapshot_assign(&session->candidate_snapshot, composition);
     } else {
-        session->last_candidate_count = 0;
-        session->last_candidate_selected = -1;
-        session->last_host_managed_selection = TYPIO_HOST_SEL_NONE;
+        session_clear_candidate_state(session);
     }
-    candidate_snapshot_assign(&session->candidate_snapshot, composition);
 
     typio_wl_session_request_ui_update(session);
 }

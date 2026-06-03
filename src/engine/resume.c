@@ -1,5 +1,5 @@
 /**
- * @file resume_signal.c
+ * @file resume.c
  * @brief System-resume detector implementation
  */
 

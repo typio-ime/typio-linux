@@ -1,5 +1,5 @@
 /**
- * @file key_tracking.h
+ * @file tracker.h
  * @brief Helpers for managing per-key forwarding state across lifecycle boundaries
  */
 
@@ -20,6 +20,7 @@ typedef enum {
     TYPIO_KEY_TRACK_APP_SHORTCUT,
     TYPIO_KEY_TRACK_RELEASED_PENDING,
     TYPIO_KEY_TRACK_SUPPRESSED_STARTUP,
+    TYPIO_KEY_TRACK_ENGINE_NOT_READY,
     TYPIO_KEY_TRACK_VOICE_PTT,
     TYPIO_KEY_TRACK_VOICE_PTT_UNAVAIL,
 } TypioKeyTrackState;

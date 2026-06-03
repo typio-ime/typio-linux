@@ -1,5 +1,5 @@
 /**
- * @file boundary_bridge.h
+ * @file boundary.h
  * @brief Pure boundary-bridge policy for activation/deactivation handoff
  */
 

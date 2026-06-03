@@ -1,5 +1,5 @@
 /**
- * @file vk_bridge.h
+ * @file bridge.h
  * @brief Virtual keyboard forwarding helpers
  */
 

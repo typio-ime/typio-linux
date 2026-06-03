@@ -1,5 +1,5 @@
 /**
- * @file reconnect_backoff.c
+ * @file backoff.c
  * @brief Pure capped-exponential backoff (see reconnect_backoff.h)
  */
 

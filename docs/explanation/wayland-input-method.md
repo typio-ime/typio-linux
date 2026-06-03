@@ -2,7 +2,7 @@
 
 `typio` is a Wayland-native input method. Every key the user presses, every preedit string shown, and every positioned Panel update travels through the `zwp_input_method_v2` family of unstable protocols. This document maps how the daemon implements those protocols, what workarounds it applies to the unstable surface, and where the detailed rules live.
 
-This is a **connective-tissue** document: it does not replace the protocol specification, the source-code comments, or the deep-dive timing model. It exists so a reader can answer "how does typio handle X?" in one stop rather than grepping across `wl_input_method.c`, `wl_keyboard.c`, and five other explanation files.
+This is a **connective-tissue** document: it does not replace the protocol specification, the source-code comments, or the deep-dive timing model. It exists so a reader can answer "how does typio handle X?" in one stop rather than grepping across `input_method.c`, `keyboard.c`, and the input helper modules.
 
 For the protocol specification see the upstream [wayland-protocols `input-method-unstable-v2.xml`](https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/unstable/input-method/input-method-unstable-v2.xml). For timing, lifecycle, and daemon-resilience rules see [Timing Model](timing-model.md).
 
@@ -32,15 +32,15 @@ The daemon binds five Wayland protocol layers. The input-method layer is the one
 | Interface | Role |
 |---|---|
 | `zwp_input_method_v2` | Listens for `activate`, `deactivate`, `done`, `surrounding_text`, `text_change_cause`, `content_type`, `unavailable`; sends `set_preedit_string`, `commit_string`, `commit`, `delete_surrounding_text` |
-| `zwp_virtual_keyboard_v1` | Forwards unhandled keys back to the compositor as synthetic press/release events; managed by the vk-bridge module for keymap handoff and readiness gating |
+| `zwp_virtual_keyboard_v1` | Forwards unhandled keys back to the compositor as synthetic press/release events; managed by the virtual-keyboard bridge for keymap handoff and readiness gating |
 
 ## Event Handlers: events become facts
 
-Every `zwp_input_method_v2` event does one thing — **record a fact**. No handler mutates a phase, rebuilds a grab, or decides a transition; that all happens when the per-step diff runs (at `done` and once per event-loop iteration). This is what keeps the handlers trivial and the lifecycle in one place.
+Every `zwp_input_method_v2` event does one thing — **record a fact**. Focus facts are classified at `done`; resource drift is checked by the reconciler on the event-loop path. This is what keeps protocol handlers small and the lifecycle boundaries explicit.
 
 ### `activate` / `deactivate`
 
-Record the pending focus fact (`active = true` / `false`) for the current session, creating the session if none exists. `activate` additionally records an `activate_seen` fact for the current `done` batch (and hides any stale positioned indicator from the prior activation). They make no transition decision themselves — that happens at `done`. `activate_seen` is what lets `done` tell a genuine (re)activation apart from a plain text-state update; see [ADR-0018](../adr/0018-focus-transition-classification.md).
+Record the pending focus fact (`active = true` / `false`) for the current session, creating the session if none exists. `activate` additionally records an `activate_seen` fact for the current `done` batch and hides any stale positioned indicator from the prior activation. They make no transition decision themselves; that happens at `done`. `activate_seen` is what lets `done` tell a genuine (re)activation apart from a plain text-state update; see [ADR-0018](../adr/0018-focus-transition-classification.md).
 
 ### `surrounding_text`, `text_change_cause`, `content_type`
 
@@ -48,7 +48,7 @@ Record client editing-context facts (buffered during the `done` batch). These ar
 
 ### `done`
 
-The compositor's double-buffer commit point, and where the per-step diff runs.
+The compositor's double-buffer commit point, and where focus facts become lifecycle actions.
 
 **Why double-buffering?** The `zwp_input_method_v2` protocol sends a batch of events (`activate`, `deactivate`, `surrounding_text`, `content_type`, …) followed by a single `done`. Events in the batch are provisional — they record *facts* into a pending buffer, but no action is taken until `done` commits the batch atomically. This is the same pattern as `wl_surface::commit`: stage changes, then apply them all at once.
 
@@ -62,9 +62,7 @@ The compositor's double-buffer commit point, and where the per-step diff runs.
 
 1. **Serial increment**. `im_serial++`. The serial is the count of `done` events received; it is the commit serial for every `zwp_input_method_v2_commit()` call.
 2. **Apply facts**. The buffered `surrounding_text`, `content_type`, `text_change_cause`, and `active` facts become current atomically.
-3. **Classify the state change.** The focus facts are reduced by the pure `typio_wl_lifecycle_classify_done(was_active, now_active, activate_seen)` into one action — `ACTIVATE`, `DEACTIVATE`, `REACTIVATE`, or `NONE` — which selects `transition_to_active` / `transition_to_inactive` / `transition_to_reactivate` / no-op. The classifier lives in `engine/lifecycle_policy.c` and is unit-tested (`tests/test_lifecycle.c`). A `NONE` that still finds a non-routable grab triggers the stale-grab recovery. See [ADR-0018](../adr/0018-focus-transition-classification.md).
-
-   > Note: the focus path still carries an explicit `lifecycle_phase`; the fully *derived* reduce+diff model of [ADR-0003](../adr/0003-session-controller-reduce-diff.md) is not yet realised here, and `classify_done` is a small step toward it.
+3. **Classify the state change.** The focus facts are reduced by the pure `typio_wl_lifecycle_classify_done(was_active, now_active, activate_seen)` into one action — `ACTIVATE`, `DEACTIVATE`, `REACTIVATE`, or `NONE` — which selects `transition_to_active` / `transition_to_inactive` / `transition_to_reactivate` / no-op. The classifier lives in `engine/lifecycle_policy.c` and is unit-tested (`tests/test_lifecycle.c`). A `NONE` that still finds a non-routable grab triggers stale-grab recovery through the reconciler. See [ADR-0018](../adr/0018-focus-transition-classification.md).
 
 ### `unavailable`
 
@@ -91,18 +89,18 @@ This chokepoint is the single place where every protocol write is validated. All
 
 ## Keyboard Grab Lifecycle
 
-The grab and its keymap handshake are **one resource** (`absent → needs_keymap → ready → broken`) that the diff creates and tears down; the timing rules are in [Timing Model](timing-model.md).
+The grab and its keymap handshake are **one resource** (`absent → needs_keymap → ready → broken`) that lifecycle transitions create and the reconciler repairs; the timing rules are in [Timing Model](timing-model.md).
 
 Briefly:
-- Each grab incarnation has an **epoch**. Every recorded key fact carries the epoch it arrived under, and a key whose epoch ≠ the current grab epoch is dropped at routing — this is the single fence that replaces the old generation arrays, `suppress_stale_keys`, and `created_at_epoch`.
-- When a grab is rebuilt (focus-in, re-activate, resume, reconnect), the compositor may re-send already-in-flight keys; the epoch fence discards them.
+- Each grab incarnation has a **generation**. A key press claims the current generation, and the matching release is accepted only when the stored per-key generation still matches the active grab generation.
+- When a grab is rebuilt (focus-in, re-activate, resume, reconnect), the compositor may re-send already-in-flight keys; the generation fence discards them.
 - Unhandled keys are forwarded as original press/release pairs through the virtual keyboard.
 - Modifier state is synced separately; modifier changes do not synthesise releases for unrelated non-modifier keys.
 - Two fail-safe backstops remain: an emergency-exit shortcut and a rejected-press-streak threshold, both releasing the grab.
 
-## Virtual Keyboard Forwarding (`vk_bridge.c`)
+## Virtual Keyboard Forwarding (`bridge.c`)
 
-`zwp_virtual_keyboard_v1` is the daemon's output path for keys the engine declined (`TYPIO_KEY_NOT_HANDLED`). The vk-bridge module manages:
+`zwp_virtual_keyboard_v1` is the daemon's output path for keys the engine declined (`TYPIO_KEY_NOT_HANDLED`). The virtual-keyboard bridge manages:
 
 - **Keymap handoff** — when the compositor delivers a new keymap on the grab, the vk must receive the same keymap before forwarding keys, or modifier mappings will mismatch.
 - **Readiness gating** — vk forwarding is blocked until the keymap is confirmed, preventing modifier-sync errors during activation handshakes.
@@ -118,10 +116,10 @@ The `activate_seen` fact makes this case explicit without that cost. At `done`, 
 
 System suspend is invisible to the Wayland protocol: no `deactivate` before sleep, no guaranteed `activate` after wake; a held modifier may be stuck and the grab may be silently dead on wake. The compositor can also drop the grab with no event at all (restart, bug, race).
 
-How much of this the per-step diff handles depends on whether `observe()` can *see* it — and `observe()` reads resource *presence*, not *liveness*:
+How much of this the reconciler handles depends on whether `typio_wl_lifecycle_observe()` can *see* it — and observation reads resource *presence*, not *liveness*:
 
-- **Suspend.** A grab dead across suspend leaves a *live proxy*; `observe()` reports it healthy, so the diff alone is blind. A resume **detector** (logind `PrepareForSleep` plus a `CLOCK_BOOTTIME` vs `CLOCK_MONOTONIC` gap heuristic) records facts: it invalidates the grab epoch and drops the compositor-visible preedit, then lets the step run.
-- **Grab object gone.** If the grab *object* is actually absent while `desired` wants it (typically right after one of our scrubs, or a connection drop surfacing as `POLLHUP`), `observe()` sees it and the next per-iteration `diff` rebuilds — no special routine.
+- **Suspend.** A grab dead across suspend leaves a *live proxy*; observation reports it healthy, so the reconciler alone is blind. A resume **detector** (logind `PrepareForSleep` plus a `CLOCK_BOOTTIME` vs `CLOCK_MONOTONIC` gap heuristic) records facts: it invalidates the grab generation and drops the compositor-visible preedit, then lets the lifecycle path rebuild as needed.
+- **Grab object gone.** If the grab *object* is actually absent while the declared phase still expects a routable session, observation sees the mismatch and the reconciler repairs it.
 
 In both cases the input context is never `focus_out`'d, so the engine's in-flight composition survives, and the rebuild is the *same* grab build used on first focus.
 
@@ -175,7 +173,7 @@ heavyweight clients like Chrome.
 | Lifecycle policy (pure) | `src/engine/lifecycle_policy.c` | `classify_done`, transition validity, phase predicates — dependency-free, unit-tested |
 | Reconciler | `src/engine/reconciler.c` | Observes resources, detects divergence, triggers repair |
 | `zwp_input_method_keyboard_grab_v2` | `src/frontend/keyboard.c` | Grab create/destroy, key/modifiers/repeat listeners, emergency exit |
-| Key epoch + tracking | `src/input/tracker.{c,h}` | Epoch fence and symmetric press/release |
+| Key generation + tracking | `src/input/tracker.{c,h}` | Generation fence and symmetric press/release |
 | `zwp_virtual_keyboard_v1` | `src/input/bridge.c` | Keymap handoff, readiness gating, unhandled-key forwarding, fail-safe downgrade |
 | `zwp_input_popup_surface_v2` | `src/ui/panel/surface.c` | Panel geometry, present, retry-on-stall |
 | Panel rendering | `src/ui/panel/paint.c` | Vulkan swapchain on `wl_surface` |
@@ -184,5 +182,5 @@ heavyweight clients like Chrome.
 
 ## See Also
 
-- [Timing Model](timing-model.md) — the derived reduce+diff state model, truth sources, event-loop scheduling, and daemon resilience (suspend/resume, compositor restart, silent grab loss)
+- [Timing Model](timing-model.md) — declared lifecycle phase, observed axes, key generation fencing, event-loop scheduling, and daemon resilience (suspend/resume, compositor restart, silent grab loss)
 - [Panel Appearance](../dev/panel-appearance.md) — Vulkan Panel rendering pipeline

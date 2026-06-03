@@ -28,7 +28,7 @@ The current lifecycle is:
 5. old keyboard grab destroyed if present
 6. new keyboard grab created
 
-If `activate` arrives while the current session is already focused, treat it as a deferred reactivation request:
+If `activate` arrives while the current session is already focused, treat it as a reactivation fact:
 
 1. keep the current grab active long enough to finish any in-flight key cycle
 2. record pending reactivation state only
@@ -58,6 +58,7 @@ States:
 - `TYPIO_KEY_TRACK_APP_SHORTCUT`: non-modifier shortcut key bypassed the engine and was forwarded directly to the application
 - `TYPIO_KEY_TRACK_RELEASED_PENDING`: the daemon already sent a synthetic release and must consume the physical one
 - `TYPIO_KEY_TRACK_SUPPRESSED_STARTUP`: dormant — no longer entered by routing (stale presses are dropped by the grab-generation fence, not suppressed at the press path); the state and its release handler are retained only as a defensive cleanup path
+- `TYPIO_KEY_TRACK_ENGINE_NOT_READY`: press was consumed because the active keyboard engine was not `TYPIO_ENGINE_READY`; the matching release is consumed locally
 - `TYPIO_KEY_TRACK_VOICE_PTT`: voice push-to-talk is actively held
 - `TYPIO_KEY_TRACK_VOICE_PTT_UNAVAIL`: voice push-to-talk binding was pressed, but voice is unavailable
 
@@ -67,6 +68,7 @@ Maintenance rules:
 - `TYPIO_KEY_TRACK_APP_SHORTCUT` must forward both press and release without involving the engine
 - `TYPIO_KEY_TRACK_RELEASED_PENDING` must be cleared by the matching physical release or by activation reset
 - `TYPIO_KEY_TRACK_SUPPRESSED_STARTUP` may forward only a cleanup release
+- `TYPIO_KEY_TRACK_ENGINE_NOT_READY` must never start repeat and must not emit virtual-keyboard events
 - voice tracking states are internal consume paths and must not leak VK events
 - do not synthesize releases for forwarded non-modifier keys just because Ctrl, Alt, or Super changed
 - a release for a key whose press never reached the daemon in the current generation is an orphan release and must be consumed locally, not sent to the engine or app
@@ -75,7 +77,7 @@ Do not overload tracking state names with routing semantics. Final routing decis
 
 ## Startup Guard Rules
 
-Stale **presses** are not suppressed by a time/epoch window. A key press is trusted as genuine user input the moment it arrives; a key whose generation does not match the active grab is dropped by the grab-generation fence (see [Timing Model §One epoch fence](../explanation/timing-model.md#one-epoch-fence)). Do not reintroduce a dispatch-window press filter — it cannot distinguish a compositor re-send from a real keystroke and silently eats the first key after every grab rebuild (notably on the reactivation churn that terminals and tmux produce).
+Stale **presses** are not suppressed by a time/epoch window. A key press is trusted as genuine user input the moment it arrives; a key whose generation does not match the active grab is dropped by the grab-generation fence (see [Timing Model §One Generation Fence](../explanation/timing-model.md#one-generation-fence)). Do not reintroduce a dispatch-window press filter — it cannot distinguish a compositor re-send from a real keystroke and silently eats the first key after every grab rebuild (notably on the reactivation churn that terminals and tmux produce).
 
 The startup guard's only remaining role is to bound **orphan-release cleanup**: `typio_wl_startup_guard_is_in_guard_window()` (using the grab's `created_at_epoch`) marks the brief window in which a release for a key that was held before the grab existed may be forwarded to the virtual keyboard so the focused client is not left with a stuck key.
 
@@ -83,7 +85,7 @@ The startup guard does not own activation-boundary VK handoff decisions. Orphan 
 
 ## Lifecycle Cleanup Boundary
 
-`key_tracking.c` centralizes the lifecycle-only bulk operations on key state:
+`tracker.c` centralizes the lifecycle-only bulk operations on key state:
 
 - reset all tracked keys when a grab is created or destroyed
 - mark forwarded keys as `RELEASED_PENDING` only when the daemon explicitly performs boundary cleanup during deactivation or grab teardown
@@ -113,7 +115,7 @@ Rule:
 - owned generations trust the daemon's physical modifier tracking
 - not-yet-owned generations may inherit Ctrl/Alt/Super from `xkb_state`
 - Caps Lock and Num Lock come from `xkb_state`
-- do not re-implement modifier fallback rules inline in `wl_keyboard.c`
+- do not re-implement modifier fallback rules inline in `keyboard.c`
 
 ## Shortcut Policy
 
@@ -133,6 +135,7 @@ Before merging keyboard-path changes, verify:
 - key repeat cancellation still works when modifiers change
 - forwarded modifier shortcuts still reach applications
 - engine-only handled keys do not leak releases to applications
+- not-ready keyboard engines consume press/release locally and do not latch repeat
 - startup Enter suppression does not emit a lone app-facing release
 - engine switch (Ctrl+Shift, tray menu, IPC) clears composition, preedit, and candidate panel before the new engine activates
 - tests cover the new state transition or lifecycle boundary
@@ -153,10 +156,11 @@ At minimum, keyboard-path changes should keep these areas covered:
 - boundary bridge policy
 - repeat cancellation helper logic
 - activation-boundary reset of key tracking state
+- not-ready engine routing state
 - orphan release cleanup
-- deferred reactivation commit rules
+- reactivation commit rules
 
-If a change touches `wl_keyboard.c` and cannot be covered by an existing helper test, add a new helper or state-policy test rather than relying only on manual testing.
+If a change touches `keyboard.c` and cannot be covered by an existing helper test, add a new helper or state-policy test rather than relying only on manual testing.
 
 ## Debugging Workflow
 
@@ -221,7 +225,7 @@ Candidate data travels through three ownership layers:
 
 1. **Engine** (RIME) owns the raw candidate list.
 2. **libtypio** (`content.rs`) copies into `TypioComposition`.
-3. **typio-wayland** (`wl_input_method.c`) copies into `TypioCandidateList` snapshot.
+3. **typio-wayland** (`input_method.c`) copies into `TypioCandidateList` snapshot.
 
 To reduce churn:
 

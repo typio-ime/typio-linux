@@ -1,5 +1,5 @@
 /**
- * @file shortcut_chord.c
+ * @file chords.c
  * @brief Pure policy for modifier-only shortcut chords
  */
 

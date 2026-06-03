@@ -1,5 +1,5 @@
 /**
- * @file reconcile_model.c
+ * @file reconcile.c
  * @brief Pure reconcile decision rule
  *
  * Dependency-free (reconciler.h only) so the divergence/threshold logic

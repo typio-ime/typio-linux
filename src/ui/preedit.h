@@ -1,5 +1,5 @@
 /**
- * @file preedit_format.h
+ * @file preedit.h
  * @brief Formatting helpers for plain preedit display
  */
 

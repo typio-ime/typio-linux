@@ -1,5 +1,5 @@
 /**
- * @file key_arbiter.h
+ * @file arbiter.h
  * @brief Key event arbiter — buffers modifier events during potential
  *        system shortcut sequences and either consumes or replays them
  */

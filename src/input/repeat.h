@@ -1,5 +1,5 @@
 /**
- * @file keyboard_repeat.h
+ * @file repeat.h
  * @brief Keyboard repeat helpers for Wayland keyboard grabs
  */
 

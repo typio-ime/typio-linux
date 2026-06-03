@@ -1,5 +1,5 @@
 /**
- * @file key_route.h
+ * @file router.h
  * @brief Key press/release routing for Wayland keyboard events
  */
 
@@ -32,6 +32,7 @@ typedef enum {
     TYPIO_WL_KEY_REASON_BASIC_PASSTHROUGH,
     TYPIO_WL_KEY_REASON_ENGINE_HANDLED,
     TYPIO_WL_KEY_REASON_ENGINE_UNHANDLED,
+    TYPIO_WL_KEY_REASON_ENGINE_NOT_READY,
     TYPIO_WL_KEY_REASON_MODIFIER_PASSTHROUGH,
     TYPIO_WL_KEY_REASON_CANDIDATE_NAVIGATION,
     TYPIO_WL_KEY_REASON_STARTUP_SUPPRESSED,

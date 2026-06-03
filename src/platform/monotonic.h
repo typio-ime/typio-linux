@@ -1,5 +1,5 @@
 /**
- * @file monotonic_time.h
+ * @file monotonic.h
  * @brief Inline helpers for Wayland-side time sources
  *
  * Two clocks are exposed:

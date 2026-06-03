@@ -1,5 +1,5 @@
 /**
- * @file state_controller.h
+ * @file controller.h
  * @brief Centralized state controller — single source of truth for runtime surfaces
  *
  * The StateController sits between the Core layer and external runtime surfaces

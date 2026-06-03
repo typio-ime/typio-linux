@@ -1,9 +1,9 @@
 /**
- * @file reconnect_backoff.h
+ * @file backoff.h
  * @brief Pure capped-exponential backoff schedule for Wayland reconnect
  *
  * Separated so the schedule can be unit-tested without sleeping or a live
- * display. The reconnect loop (wl_frontend.c) consults this for each
+ * display. The reconnect loop (frontend.c) consults this for each
  * attempt's delay and the give-up cutoff.
  */
 

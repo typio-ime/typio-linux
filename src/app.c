@@ -344,6 +344,27 @@ static void typio_on_status_icon_change(TypioInstance *instance,
     }
 }
 
+static void typio_on_engine_availability_change(TypioInstance *instance,
+                                                TypioEngineAvailability availability,
+                                                const char *reason,
+                                                void *user_data) {
+    TypioApp *app = user_data;
+
+    (void)instance;
+
+#ifdef HAVE_WAYLAND
+    if (app && app->wl_frontend) {
+        typio_wl_frontend_set_keyboard_availability(app->wl_frontend,
+                                                    availability,
+                                                    reason);
+    }
+#else
+    (void)app;
+    (void)availability;
+    (void)reason;
+#endif
+}
+
 static void typio_on_engine_change(TypioInstance *instance,
                                    const TypioEngineInfo *engine,
                                    void *user_data) {
@@ -775,6 +796,10 @@ static int typio_run_wayland(TypioApp *app) {
     typio_instance_set_keyboard_mode_changed_callback(app->instance,
                                               typio_on_mode_change,
                                               app);
+    typio_instance_set_engine_availability_changed_callback(
+        app->instance,
+        typio_on_engine_availability_change,
+        app);
 
     if (app->state_controller) {
         typio_state_controller_sync(app->state_controller);

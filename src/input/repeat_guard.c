@@ -24,6 +24,7 @@ bool typio_wl_repeat_should_run_for_state(TypioKeyTrackState state) {
     switch (state) {
     case TYPIO_KEY_TRACK_SUPPRESSED_STARTUP:
     case TYPIO_KEY_TRACK_RELEASED_PENDING:
+    case TYPIO_KEY_TRACK_ENGINE_NOT_READY:
         return false;
     default:
         return true;

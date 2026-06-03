@@ -1,5 +1,5 @@
 /**
- * @file key_debug.c
+ * @file debug.c
  * @brief Helpers for readable key debug output
  */
 

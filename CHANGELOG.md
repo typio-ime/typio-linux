@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Clear host-side candidate guard state when a commit ends composition, so
+  Left/Right after committing no longer resurrect stale candidate lists.
+- Gate key routing on `TypioEngineAvailability`: while the active keyboard
+  engine is preparing, key presses and releases are consumed instead of being
+  forwarded to the application or latched into repeat.
+
 ## [0.1.9] — 2026-06-03
 
 ### Fixed

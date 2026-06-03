@@ -1,5 +1,5 @@
 /**
- * @file wl_event_loop.c
+ * @file event_loop.c
  * @brief Wayland event loop with optional-subsystem strategy pattern.
  *
  * @see docs/explanation/timing-model.md

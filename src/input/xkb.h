@@ -1,5 +1,5 @@
 /**
- * @file keyboard_xkb.h
+ * @file xkb.h
  * @brief XKB state management for Wayland keyboard grabs
  */
 

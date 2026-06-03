@@ -1,10 +1,10 @@
 /**
- * @file wl_keyboard.c
+ * @file keyboard.c
  * @brief Keyboard grab lifecycle and event dispatch
  *
- * This file is intentionally thin: XKB logic lives in keyboard_xkb.c,
- * key routing lives in key_route.c, repeat logic lives in keyboard_repeat.c,
- * and guard / tracking utilities live in key_tracking.c.  Only grab
+ * This file is intentionally thin: XKB logic lives in input/xkb.c,
+ * key routing lives in input/router.c, repeat logic lives in input/repeat.c,
+ * and guard / tracking utilities live in input/tracker.c.  Only grab
  * lifecycle and the top-level Wayland dispatcher remain here.
  *
  * @see docs/explanation/timing-model.md

@@ -1,5 +1,5 @@
 /**
- * @file wl_watchdog.c
+ * @file watchdog.c
  * @brief Watchdog thread and stage tracking for Wayland frontend
  */
 

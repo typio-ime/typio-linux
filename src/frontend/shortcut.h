@@ -1,5 +1,5 @@
 /**
- * @file wl_shortcut.h
+ * @file shortcut.h
  * @brief Cached shortcut bindings used by the Wayland frontend
  *
  * libtypio addresses shortcuts by string action-id; this struct caches

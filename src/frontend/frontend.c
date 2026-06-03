@@ -1,5 +1,5 @@
 /**
- * @file wl_frontend.c
+ * @file frontend.c
  * @brief Wayland input method frontend implementation
  */
 
@@ -15,6 +15,7 @@
 #include "typio/typio.h"
 #include "typio/abi/log.h"
 #include "typio/abi/string.h"
+#include "typio/runtime/registry.h"
 
 #include <time.h>
 #ifdef HAVE_VOICE
@@ -424,6 +425,14 @@ TypioWlFrontend *typio_wl_frontend_new(TypioInstance *instance,
     }
 
     frontend->instance = instance;
+    frontend->keyboard_availability = TYPIO_ENGINE_READY;
+    {
+        TypioRegistry *registry = typio_instance_get_registry(instance);
+        if (registry) {
+            frontend->keyboard_availability =
+                typio_registry_get_active_keyboard_availability(registry);
+        }
+    }
 
     /* Load shortcut bindings from config */
     typio_shortcut_config_load(&frontend->shortcuts,
@@ -449,6 +458,30 @@ TypioWlFrontend *typio_wl_frontend_new(TypioInstance *instance,
     frontend_init_voice(frontend, instance);
 #endif
     return frontend;
+}
+
+void typio_wl_frontend_set_keyboard_availability(TypioWlFrontend *frontend,
+                                                 TypioEngineAvailability availability,
+                                                 const char *reason) {
+    if (!frontend) {
+        return;
+    }
+
+    frontend->keyboard_availability = availability;
+    if (reason && reason[0]) {
+        snprintf(frontend->keyboard_availability_reason,
+                 sizeof(frontend->keyboard_availability_reason),
+                 "%s",
+                 reason);
+    } else {
+        frontend->keyboard_availability_reason[0] = '\0';
+    }
+
+    typio_log_debug("Keyboard engine availability: state=%d reason=%s",
+                    (int)availability,
+                    frontend->keyboard_availability_reason[0]
+                        ? frontend->keyboard_availability_reason
+                        : "-");
 }
 
 static void frontend_on_resume(void *user_data, const char *reason,

@@ -2,16 +2,14 @@
  * @file lifecycle_state.h
  * @brief Orthogonal lifecycle state axes for the Wayland frontend
  *
- * The legacy @c TypioWlLifecyclePhase (lifecycle.h) is a single enum that
- * conflates four independent concerns: whether we are connected to the
- * compositor, whether the input method is focused, whether a keyboard
- * grab is established, and whether a composition is in flight. That works
- * for the happy path but cannot express disagreements like "we believe we
- * are ACTIVE but the grab is gone" — which is exactly the state a
- * suspend/resume or a compositor restart leaves us in.
+ * The declared @c TypioWlLifecyclePhase (lifecycle.h) is a single enum that
+ * names the frontend's intended lifecycle boundary. It does not directly
+ * encode the live resource axes: whether we are connected to the compositor,
+ * whether the input method is focused, whether a keyboard grab is established,
+ * and whether a composition is in flight.
  *
- * This module decomposes the phase into four orthogonal axes and provides
- * a pure projection back to the legacy phase. The orthogonal state is
+ * This module observes those four orthogonal axes and provides a pure
+ * projection back to a lifecycle phase. The orthogonal state is
  * never stored as a second source of truth; it is *observed* from the
  * live frontend fields (see @c typio_wl_lifecycle_observe in lifecycle.c)
  * and compared, via the projection, against the phase the frontend

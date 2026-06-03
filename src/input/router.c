@@ -1,5 +1,5 @@
 /**
- * @file key_route.c
+ * @file router.c
  * @brief Key press/release routing for Wayland keyboard events
  */
 
@@ -191,6 +191,8 @@ const char *typio_wl_key_reason_name(TypioWlKeyReason reason) {
         return "engine_handled";
     case TYPIO_WL_KEY_REASON_ENGINE_UNHANDLED:
         return "engine_unhandled";
+    case TYPIO_WL_KEY_REASON_ENGINE_NOT_READY:
+        return "engine_not_ready";
     case TYPIO_WL_KEY_REASON_MODIFIER_PASSTHROUGH:
         return "modifier_passthrough";
     case TYPIO_WL_KEY_REASON_CANDIDATE_NAVIGATION:
@@ -287,6 +289,24 @@ static TypioWlKeyDecision key_route_shortcut_decision(
 
     return key_route_decision(TYPIO_WL_KEY_ACTION_CONSUME,
                               TYPIO_WL_KEY_REASON_NONE);
+}
+
+static TypioEngineAvailability key_route_keyboard_availability(
+    TypioWlFrontend *frontend) {
+    TypioRegistry *registry;
+
+    if (!frontend || !frontend->instance) {
+        return TYPIO_ENGINE_FAILED;
+    }
+
+    registry = typio_instance_get_registry(frontend->instance);
+    if (!registry) {
+        return frontend->keyboard_availability;
+    }
+
+    frontend->keyboard_availability =
+        typio_registry_get_active_keyboard_availability(registry);
+    return frontend->keyboard_availability;
 }
 
 void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
@@ -413,6 +433,22 @@ void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
     }
 #endif
 
+    if (key_route_keyboard_availability(frontend) != TYPIO_ENGINE_READY) {
+        const char *reason = frontend->keyboard_availability_reason[0]
+            ? frontend->keyboard_availability_reason
+            : "keyboard engine not ready";
+        key_set_state(frontend, key, TYPIO_KEY_TRACK_ENGINE_NOT_READY);
+        decision = key_route_decision(TYPIO_WL_KEY_ACTION_CONSUME,
+                                      TYPIO_WL_KEY_REASON_ENGINE_NOT_READY);
+        key_route_trace_decision(keyboard, "press-engine-not-ready", key,
+                                 keysym, modifiers, unicode,
+                                 TYPIO_KEY_TRACK_ENGINE_NOT_READY,
+                                 decision, reason);
+        typio_log_debug("Keyboard engine not ready, consumed keycode=%u: %s",
+                        key, reason);
+        return;
+    }
+
     if (decision.reason == TYPIO_WL_KEY_REASON_APPLICATION_SHORTCUT) {
         TypioKeyEvent event = {
             .struct_size = sizeof(TypioKeyEvent),
@@ -505,9 +541,6 @@ void typio_wl_key_route_process_release(TypioWlKeyboard *keyboard,
     TypioKeyTrackState kstate = key_get_state(frontend, key);
     TypioWlKeyDecision decision;
 
-    if (keyboard->repeating && keyboard->repeat_key == key)
-        keyboard->repeat_timer_fd >= 0 ? (void)0 : (void)0;
-
     switch (kstate) {
     case TYPIO_KEY_TRACK_RELEASED_PENDING:
         decision = key_route_decision(TYPIO_WL_KEY_ACTION_CONSUME,
@@ -527,6 +560,17 @@ void typio_wl_key_route_process_release(TypioWlKeyboard *keyboard,
         key_clear_tracking(frontend, key);
         typio_wl_vk_forward_key(keyboard, time, key, WL_KEYBOARD_KEY_STATE_RELEASED, unicode);
         typio_log_debug("Forwarding release for startup key: keycode=%u", key);
+        return;
+
+    case TYPIO_KEY_TRACK_ENGINE_NOT_READY:
+        decision = key_route_decision(TYPIO_WL_KEY_ACTION_CONSUME,
+                                      TYPIO_WL_KEY_REASON_ENGINE_NOT_READY);
+        key_route_trace_decision(keyboard, "release-engine-not-ready", key,
+                                 keysym, modifiers, unicode, kstate, decision,
+                                 nullptr);
+        key_clear_tracking(frontend, key);
+        typio_log_debug("Consumed release for not-ready engine key: keycode=%u",
+                        key);
         return;
 
     case TYPIO_KEY_TRACK_APP_SHORTCUT:

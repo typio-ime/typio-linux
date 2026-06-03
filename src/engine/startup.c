@@ -1,5 +1,5 @@
 /**
- * @file startup_guard.c
+ * @file startup.c
  * @brief Epoch-based startup filtering for freshly activated keyboard grabs
  */
 

@@ -61,11 +61,13 @@ TEST(ignores_shift_only_transitions) {
         TYPIO_MOD_SHIFT | TYPIO_MOD_CAPSLOCK));
 }
 
-TEST(blocks_repeat_for_suppressed_or_pending_states) {
+TEST(blocks_repeat_for_suppressed_pending_or_not_ready_states) {
     ASSERT(!typio_wl_repeat_should_run_for_state(
         TYPIO_KEY_TRACK_SUPPRESSED_STARTUP));
     ASSERT(!typio_wl_repeat_should_run_for_state(
         TYPIO_KEY_TRACK_RELEASED_PENDING));
+    ASSERT(!typio_wl_repeat_should_run_for_state(
+        TYPIO_KEY_TRACK_ENGINE_NOT_READY));
 }
 
 TEST(allows_repeat_for_normal_owned_routes) {
@@ -81,7 +83,7 @@ int main(void) {
     run_test_cancels_when_ctrl_changes();
     run_test_cancels_when_alt_or_super_changes();
     run_test_ignores_shift_only_transitions();
-    run_test_blocks_repeat_for_suppressed_or_pending_states();
+    run_test_blocks_repeat_for_suppressed_pending_or_not_ready_states();
     run_test_allows_repeat_for_normal_owned_routes();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);

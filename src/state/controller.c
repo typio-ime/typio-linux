@@ -1,5 +1,5 @@
 /**
- * @file state_controller.c
+ * @file controller.c
  * @brief StateController implementation
  */
 

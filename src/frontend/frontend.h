@@ -1,5 +1,5 @@
 /**
- * @file wl_frontend.h
+ * @file frontend.h
  * @brief Wayland input method frontend public interface
  *
  * This module implements the zwp_input_method_v2 side of the Wayland
@@ -89,6 +89,9 @@ void typio_wl_frontend_remember_active_engine(TypioWlFrontend *frontend,
 void typio_wl_frontend_remember_active_mode(TypioWlFrontend *frontend,
                                             const char *engine_name,
                                             const char *mode_id);
+void typio_wl_frontend_set_keyboard_availability(TypioWlFrontend *frontend,
+                                                 TypioEngineAvailability availability,
+                                                 const char *reason);
 
 #ifdef __cplusplus
 }

@@ -1,5 +1,5 @@
 /**
- * @file startup_guard.h
+ * @file startup.h
  * @brief Epoch-based startup filtering for freshly activated keyboard grabs
  *
  * When a new keyboard grab is established, the compositor may re-send a

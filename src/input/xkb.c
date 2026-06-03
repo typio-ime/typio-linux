@@ -1,8 +1,8 @@
 /**
- * @file keyboard_xkb.c
+ * @file xkb.c
  * @brief XKB state management for Wayland keyboard grabs
  *
- * Isolated from wl_keyboard.c so that XKB details do not leak into the
+ * Isolated from keyboard.c so that XKB details do not leak into the
  * key-routing and grab-handling layers.
  */
 

@@ -1,5 +1,5 @@
 /**
- * @file key_tracking_access.h
+ * @file tracker_access.h
  * @brief Inline accessors for per-key tracking state stored on TypioWlFrontend
  */
 

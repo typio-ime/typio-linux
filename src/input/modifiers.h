@@ -1,5 +1,5 @@
 /**
- * @file modifier_policy.h
+ * @file modifiers.h
  * @brief Effective modifier policy for Wayland keyboard events
  */
 
