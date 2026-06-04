@@ -4,7 +4,7 @@
  */
 
 #include "internal.h"
-#include "bridge.h"
+#include "input/wayland/bridge.h"
 
 #include <stdio.h>
 #include <stdlib.h>

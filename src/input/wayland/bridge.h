@@ -6,7 +6,7 @@
 #ifndef TYPIO_WL_VK_BRIDGE_H
 #define TYPIO_WL_VK_BRIDGE_H
 
-#include "tracker.h"
+#include "input/policy/tracker.h"
 
 #include <stdint.h>
 

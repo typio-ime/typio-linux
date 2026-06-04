@@ -3,7 +3,7 @@
  * @brief Tests for modifier-only shortcut chord policy
  */
 
-#include "chords.h"
+#include "input/policy/chords.h"
 #include "typio/abi/event.h"
 
 #include <stdint.h>

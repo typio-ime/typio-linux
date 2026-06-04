@@ -3,7 +3,7 @@
  * @brief Tests for key event arbiter state machine
  */
 
-#include "arbiter.h"
+#include "input/wayland/arbiter.h"
 #include "internal.h"
 #include "typio/abi/event.h"
 #include "typio/runtime/instance.h"

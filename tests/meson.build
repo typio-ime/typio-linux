@@ -12,7 +12,8 @@
 wayland_test_inc = [
     include_directories('../src'),
     include_directories('../src/frontend'),
-    include_directories('../src/input'),
+    include_directories('../src/input/policy'),
+    include_directories('../src/input/wayland'),
     include_directories('../src/ui'),
     include_directories('../src/ui/panel'),
     include_directories('../src/engine'),
@@ -42,7 +43,7 @@ test_boundary_bridge = executable('test_boundary_bridge',
 test('boundary_bridge', test_boundary_bridge)
 
 test_repeat_guard = executable('test_repeat_guard',
-    ['test_repeat_guard.c', '../src/input/repeat_guard.c'],
+    ['test_repeat_guard.c', '../src/input/policy/repeat_guard.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )
@@ -70,14 +71,14 @@ test_panel_scheduler = executable('test_panel_scheduler',
 test('panel_scheduler', test_panel_scheduler)
 
 test_shortcut_chord = executable('test_shortcut_chord',
-    ['test_shortcut_chord.c', '../src/input/chords.c'],
+    ['test_shortcut_chord.c', '../src/input/policy/chords.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )
 test('shortcut_chord', test_shortcut_chord)
 
 test_key_arbiter = executable('test_key_arbiter',
-    ['test_key_arbiter.c', '../src/input/arbiter.c', '../src/input/chords.c',
+    ['test_key_arbiter.c', '../src/input/wayland/arbiter.c', '../src/input/policy/chords.c',
      protocol_headers],
     include_directories: [wayland_test_inc, top_inc],
     dependencies: libtypio_dep,
@@ -85,14 +86,14 @@ test_key_arbiter = executable('test_key_arbiter',
 test('key_arbiter', test_key_arbiter)
 
 test_modifier_policy = executable('test_modifier_policy',
-    ['test_modifier_policy.c', '../src/input/modifiers.c'],
+    ['test_modifier_policy.c', '../src/input/policy/modifiers.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )
 test('modifier_policy', test_modifier_policy)
 
 test_key_tracking = executable('test_key_tracking',
-    ['test_key_tracking.c', '../src/input/tracker.c'],
+    ['test_key_tracking.c', '../src/input/policy/tracker.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )

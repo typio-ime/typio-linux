@@ -14,7 +14,7 @@
 
 #include "arbiter.h"
 
-#include "chords.h"
+#include "input/policy/chords.h"
 #include "bridge.h"
 #include "internal.h"
 #include "state.h"

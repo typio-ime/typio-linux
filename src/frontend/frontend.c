@@ -13,7 +13,7 @@
 
 #include "frontend.h"
 #include "engine/niri/identity.h"
-#include "tracker.h"
+#include "input/policy/tracker.h"
 #include "monotonic.h"
 #include "backoff.h"
 #include "internal.h"

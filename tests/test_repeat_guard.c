@@ -3,7 +3,7 @@
  * @brief Repeat cancellation helper tests
  */
 
-#include "repeat_guard.h"
+#include "input/policy/repeat_guard.h"
 #include "typio/abi/types.h"
 
 #include <assert.h>

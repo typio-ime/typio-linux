@@ -35,7 +35,7 @@
 #include "session_controller.h"
 
 #include "internal.h"
-#include "bridge.h"
+#include "input/wayland/bridge.h"
 #include "engine/niri/identity.h"
 #include "panel.h"
 #include "monotonic.h"
