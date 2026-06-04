@@ -161,4 +161,3 @@ endif
 # ── Post-install hook ──────────────────────────────────────────────────────
 # Restart typio.service if it's running after installation
 meson.add_install_script('meson_post_install.sh')
-endif

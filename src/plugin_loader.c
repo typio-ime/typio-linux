@@ -3,6 +3,7 @@
 #include "typio/abi/log.h"
 #include "typio/abi/engine.h"
 #include "typio/abi/types.h"
+#include "typio/abi/version.h"
 #include "typio/schema/config_schema.h"
 #include "typio_build_config.h"
 
@@ -155,6 +156,28 @@ static bool typio_register_one(TypioRegistry *registry, const char *path) {
         return false;
     }
 
+    /* ABI version check: must happen before any other plugin function calls */
+    TypioEngineAbiVersionFunc abi_version_func =
+        (TypioEngineAbiVersionFunc)dlsym(handle, "typio_engine_abi_version");
+    if (!abi_version_func) {
+        typio_log_error("Engine %s missing typio_engine_abi_version (built against old ABI?)", path);
+        dlclose(handle);
+        return false;
+    }
+
+    const TypioAbiVersion *plugin_abi = abi_version_func();
+    if (!typio_engine_abi_check(plugin_abi)) {
+        typio_log_error(
+            "Engine %s ABI version mismatch: plugin=%u.%u, host=%u.%u — refusing to load",
+            path,
+            plugin_abi ? plugin_abi->major : 0,
+            plugin_abi ? plugin_abi->minor : 0,
+            TYPIO_ENGINE_ABI_MAJOR,
+            TYPIO_ENGINE_ABI_MINOR);
+        dlclose(handle);
+        return false;
+    }
+
     TypioEngineInfoFunc info_func =
         (TypioEngineInfoFunc)dlsym(handle, "typio_engine_get_info");
     if (!info_func) {
@@ -301,13 +324,15 @@ const char *const *typio_engine_dirs_build(const char *cli_override) {
         dirs[n++] = strdup(env_dir);
     }
 
+    /* System directory takes precedence over user directory for production use.
+     * User directory is for development/testing overrides. */
+    if (TYPIO_ENGINE_DIR[0]) {
+        dirs[n++] = strdup(TYPIO_ENGINE_DIR);
+    }
+
     char *user_dir = typio_user_engine_dir();
     if (user_dir) {
         dirs[n++] = user_dir;
-    }
-
-    if (TYPIO_ENGINE_DIR[0]) {
-        dirs[n++] = strdup(TYPIO_ENGINE_DIR);
     }
 
     dirs[n] = nullptr;
