@@ -6,7 +6,7 @@
 #include "typio/runtime/instance.h"
 #include "typio/abi/config.h"
 #include "typio/abi/string.h"
-#include "engine/identity.h"
+#include "engine/niri/identity.h"
 #include "frontend/internal.h"
 
 #include <stdio.h>

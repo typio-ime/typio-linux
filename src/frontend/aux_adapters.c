@@ -5,7 +5,7 @@
 
 #include "typio_build_config.h"
 #include "aux_handler.h"
-#include "resume.h"
+#include "engine/logind/resume.h"
 #include "typio/abi/log.h"
 #include <stdlib.h>
 

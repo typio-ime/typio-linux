@@ -17,7 +17,7 @@
 
 #include "internal.h"
 #include "panel.h"
-#include "identity.h"
+#include "engine/niri/identity.h"
 #include "monotonic.h"
 #include "preedit.h"
 #include "state.h"

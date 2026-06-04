@@ -12,7 +12,7 @@
  */
 
 #include "frontend.h"
-#include "identity.h"
+#include "engine/niri/identity.h"
 #include "tracker.h"
 #include "monotonic.h"
 #include "backoff.h"

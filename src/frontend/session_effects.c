@@ -36,7 +36,7 @@
 
 #include "internal.h"
 #include "bridge.h"
-#include "identity.h"
+#include "engine/niri/identity.h"
 #include "panel.h"
 #include "monotonic.h"
 #include "typio/abi/instance.h"

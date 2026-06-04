@@ -7,7 +7,7 @@
 #define TYPIO_WL_AUX_ADAPTERS_H
 
 #include "aux_handler.h"
-#include "resume.h"
+#include "engine/logind/resume.h"
 
 /* Always available: resume detector has no build-time dependency beyond
  * libdbus (already required by the daemon) and degrades to the boottime
