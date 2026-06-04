@@ -98,6 +98,40 @@ Briefly:
 - Modifier state is synced separately; modifier changes do not synthesise releases for unrelated non-modifier keys.
 - Two fail-safe backstops remain: an emergency-exit shortcut and a rejected-press-streak threshold, both releasing the grab.
 
+## Engine Availability and Fault Isolation
+
+The daemon must remain responsive even when third-party engine plugins are buggy, slow to initialize, or fail entirely. This section describes the patterns that prevent engine failures from bringing down the input method.
+
+### Deferred availability query
+
+During `typio_wl_frontend_new`, the daemon **does not** eagerly query engine availability. Instead, it defaults `keyboard_availability` to `TYPIO_ENGINE_PREPARING` and relies on the push-based availability callback (ADR-0014) to transition to `TYPIO_ENGINE_READY` when the engine finishes warm-up.
+
+```c
+// frontend.c — typio_wl_frontend_new
+frontend->keyboard_availability = TYPIO_ENGINE_PREPARING;
+// Do NOT call typio_registry_get_active_keyboard_availability here
+```
+
+**Why not query eagerly?** Third-party plugins may have slow `init()` callbacks (loading dictionaries, compiling schemas), or may panic during early lifecycle operations. An eager query would block the daemon startup and, if the plugin panics, crash the entire process before the Wayland connection is established.
+
+The key router already implements the "engine not ready" path: when `keyboard_availability != TYPIO_ENGINE_READY`, the router consumes all keys silently and does not forward them to the application. The daemon remains responsive to Wayland events, and the user sees the indicator show "engine preparing" until the push callback fires.
+
+### Engine availability push
+
+When an engine finishes initialization (e.g., Rime completes schema deployment), it calls `typio_instance_notify_engine_availability(instance, TYPIO_ENGINE_READY, "ready")`. The framework dispatches this to the host via the `TypioEngineAvailabilityChangedCallback`, which the frontend registers during initialization. The callback updates `frontend->keyboard_availability` and triggers a UI refresh.
+
+This push-based design means the daemon can start accepting Wayland events immediately, without waiting for engines to warm up. The engine works asynchronously in the background, and the user sees the transition from "preparing" to "ready" as soon as the engine is available.
+
+### Panic isolation for vtable calls
+
+Every call into a C plugin vtable (e.g., `process_key`, `focus_in`, `availability`) is wrapped in `sandbox_call`, which catches Rust panics and returns a safe fallback value. This prevents a buggy third-party engine from crashing the daemon.
+
+**Limitations**:
+- C-side crashes (SIGSEGV, SIGABRT) cannot be caught in-process and will terminate the daemon. Full crash isolation requires out-of-process hosting via the IPC backend (ADR-0007).
+- The wrapper logs the engine name, callback name, and panic message for debugging.
+
+See the [libtypio Engine Contract](https://github.com/typio-ime/libtypio/blob/main/docs/explanation/engine-contract.md#9-fault-isolation-protecting-the-daemon-from-engine-failures) for the complete list of sandboxed callbacks and their fallback behaviors.
+
 ## Virtual Keyboard Forwarding (`bridge.c`)
 
 `zwp_virtual_keyboard_v1` is the daemon's output path for keys the engine declined (`TYPIO_KEY_NOT_HANDLED`). The virtual-keyboard bridge manages:
