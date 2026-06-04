@@ -77,8 +77,8 @@ static void key_route_trace(TypioWlKeyboard *keyboard,
                    modifiers,
                    keyboard->physical_modifiers,
                    xkb_mods,
-                   key < TYPIO_WL_MAX_TRACKED_KEYS ? keyboard->frontend->key_generations[key] : 0,
-                   keyboard->frontend->active_key_generation,
+                   key < TYPIO_WL_MAX_TRACKED_KEYS ? keyboard->frontend->tracker->generations[key] : 0,
+                   keyboard->frontend->tracker->active_generation,
                    unicode_desc,
                    detail ? detail : "-");
 }
@@ -694,7 +694,7 @@ void typio_wl_key_route_process_release(TypioWlKeyboard *keyboard,
                                      "press_never_reached_typio");
             typio_log_debug("Consumed orphan release: keycode=%u generation=%u active_generation=%u",
                       key, key_get_generation(frontend, key),
-                      frontend->active_key_generation);
+                      frontend->tracker->active_generation);
             key_clear_tracking(frontend, key);
             return;
         }

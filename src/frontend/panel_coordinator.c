@@ -26,44 +26,44 @@
 static const char *ui_owner_name(TypioWlUiOwner owner);
 
 bool typio_wl_panel_coordinator_anchor_ready(const TypioWlFrontend *frontend) {
-    return frontend &&
-           frontend->position_anchor_generation > 0 &&
-           frontend->position_anchor_ready_generation ==
-               frontend->position_anchor_generation;
+    return frontend && frontend->panel_coord &&
+           frontend->panel_coord->position_anchor_generation > 0 &&
+           frontend->panel_coord->position_anchor_ready_generation ==
+               frontend->panel_coord->position_anchor_generation;
 }
 
 void typio_wl_panel_coordinator_reset_anchor(TypioWlFrontend *frontend) {
     if (!frontend) return;
-    frontend->position_anchor_generation++;
-    if (frontend->position_anchor_generation == 0) {
-        frontend->position_anchor_generation = 1;
+    frontend->panel_coord->position_anchor_generation++;
+    if (frontend->panel_coord->position_anchor_generation == 0) {
+        frontend->panel_coord->position_anchor_generation = 1;
     }
-    frontend->position_anchor_ready_generation = 0;
-    frontend->position_anchor_probe_generation = 0;
+    frontend->panel_coord->position_anchor_ready_generation = 0;
+    frontend->panel_coord->position_anchor_probe_generation = 0;
 }
 
 void typio_wl_panel_coordinator_note_caret_rect(TypioWlFrontend *frontend) {
     if (!frontend) return;
-    frontend->position_anchor_has_caret = true;
+    frontend->panel_coord->position_anchor_has_caret = true;
 }
 
 void typio_wl_panel_coordinator_clear_caret_rect(TypioWlFrontend *frontend) {
     if (!frontend) return;
-    frontend->position_anchor_has_caret = false;
+    frontend->panel_coord->position_anchor_has_caret = false;
 }
 
 void typio_wl_panel_coordinator_mark_anchor_ready(TypioWlFrontend *frontend,
                                                    const char *reason) {
-    if (!frontend || frontend->position_anchor_generation == 0) return;
+    if (!frontend || !frontend->panel_coord || frontend->panel_coord->position_anchor_generation == 0) return;
     if (typio_wl_panel_coordinator_anchor_ready(frontend)) return;
 
-    frontend->position_anchor_ready_generation =
-        frontend->position_anchor_generation;
+    frontend->panel_coord->position_anchor_ready_generation =
+        frontend->panel_coord->position_anchor_generation;
     typio_wl_trace(frontend,
                    "position",
                    "action=anchor_ready reason=%s generation=%" PRIu64,
                    reason ? reason : "unknown",
-                   frontend->position_anchor_generation);
+                   frontend->panel_coord->position_anchor_generation);
 }
 
 static bool anchor_probe_enabled(TypioWlFrontend *frontend) {
@@ -103,19 +103,19 @@ static void maybe_probe_position_anchor(TypioWlFrontend *frontend,
                                         TypioWlUiOwner owner) {
     if (!frontend || !frontend->input_method || !frontend->session) return;
     if (!anchor_probe_enabled(frontend)) return;
-    if (frontend->position_anchor_generation == 0) return;
-    if (frontend->position_anchor_probe_generation ==
-        frontend->position_anchor_generation) {
+    if (frontend->panel_coord->position_anchor_generation == 0) return;
+    if (frontend->panel_coord->position_anchor_probe_generation ==
+        frontend->panel_coord->position_anchor_generation) {
         return;
     }
 
-    frontend->position_anchor_probe_generation =
-        frontend->position_anchor_generation;
+    frontend->panel_coord->position_anchor_probe_generation =
+        frontend->panel_coord->position_anchor_generation;
     typio_wl_trace(frontend,
                    "ui",
                    "action=anchor_probe owner=%s generation=%" PRIu64,
                    ui_owner_name(owner),
-                   frontend->position_anchor_generation);
+                   frontend->panel_coord->position_anchor_generation);
     typio_wl_set_preedit(frontend, "", -1, -1);
     typio_wl_commit(frontend);
 }
@@ -136,10 +136,10 @@ static const char *ui_owner_name(TypioWlUiOwner owner) {
 
 void typio_wl_panel_coordinator_cancel_pending(TypioWlFrontend *frontend) {
     if (!frontend) return;
-    frontend->positioned_ui_pending = false;
-    frontend->positioned_ui_pending_owner = TYPIO_WL_UI_OWNER_NONE;
-    frontend->positioned_ui_pending_since_ms = 0;
-    frontend->positioned_ui_pending_label[0] = '\0';
+    frontend->panel_coord->positioned_ui_pending = false;
+    frontend->panel_coord->positioned_ui_pending_owner = TYPIO_WL_UI_OWNER_NONE;
+    frontend->panel_coord->positioned_ui_pending_since_ms = 0;
+    frontend->panel_coord->positioned_ui_pending_label[0] = '\0';
 }
 
 static bool has_focused_context(TypioWlFrontend *frontend) {
@@ -156,21 +156,21 @@ static bool queue_positioned_ui(TypioWlFrontend *frontend,
         return false;
     }
 
-    if (!frontend->positioned_ui_pending ||
-        frontend->positioned_ui_pending_owner != owner) {
-        frontend->positioned_ui_pending_since_ms = typio_wl_monotonic_ms();
+    if (!frontend->panel_coord->positioned_ui_pending ||
+        frontend->panel_coord->positioned_ui_pending_owner != owner) {
+        frontend->panel_coord->positioned_ui_pending_since_ms = typio_wl_monotonic_ms();
     }
-    frontend->positioned_ui_pending_owner = owner;
-    snprintf(frontend->positioned_ui_pending_label,
-             sizeof(frontend->positioned_ui_pending_label),
+    frontend->panel_coord->positioned_ui_pending_owner = owner;
+    snprintf(frontend->panel_coord->positioned_ui_pending_label,
+             sizeof(frontend->panel_coord->positioned_ui_pending_label),
              "%s",
              text);
-    frontend->positioned_ui_pending = true;
+    frontend->panel_coord->positioned_ui_pending = true;
     typio_wl_trace(frontend,
                    "ui",
                    "action=queue owner=%s reason=position_anchor_not_ready generation=%" PRIu64,
                    ui_owner_name(owner),
-                   frontend->position_anchor_generation);
+                   frontend->panel_coord->position_anchor_generation);
     maybe_probe_position_anchor(frontend, owner);
     return true;
 }
@@ -224,8 +224,8 @@ void typio_wl_panel_coordinator_hide(TypioWlFrontend *frontend,
                                       TypioWlUiOwner owner) {
     if (!frontend || !frontend->panel) return;
 
-    if (frontend->positioned_ui_pending &&
-        frontend->positioned_ui_pending_owner == owner) {
+    if (frontend->panel_coord->positioned_ui_pending &&
+        frontend->panel_coord->positioned_ui_pending_owner == owner) {
         typio_wl_panel_coordinator_cancel_pending(frontend);
     }
 
@@ -254,11 +254,11 @@ void typio_wl_panel_coordinator_flush_pending(TypioWlFrontend *frontend) {
     TypioWlUiOwner owner;
     char label[TYPIO_POSITIONED_UI_LABEL_CAP];
 
-    if (!frontend || !frontend->positioned_ui_pending) return;
+    if (!frontend || !frontend->panel_coord || !frontend->panel_coord->positioned_ui_pending) return;
     if (!typio_wl_panel_coordinator_anchor_ready(frontend)) return;
 
-    owner = frontend->positioned_ui_pending_owner;
-    snprintf(label, sizeof(label), "%s", frontend->positioned_ui_pending_label);
+    owner = frontend->panel_coord->positioned_ui_pending_owner;
+    snprintf(label, sizeof(label), "%s", frontend->panel_coord->positioned_ui_pending_label);
     typio_wl_panel_coordinator_cancel_pending(frontend);
     typio_wl_panel_coordinator_show_status(frontend, owner, label);
 }

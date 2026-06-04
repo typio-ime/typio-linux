@@ -9,30 +9,30 @@
 #include "internal.h"
 
 static inline TypioKeyTrackState key_get_state(TypioWlFrontend *fe, uint32_t key) {
-    return (key < TYPIO_WL_MAX_TRACKED_KEYS) ? fe->key_states[key] : TYPIO_KEY_TRACK_IDLE;
+    return (key < TYPIO_WL_MAX_TRACKED_KEYS) ? fe->tracker->states[key] : TYPIO_KEY_TRACK_IDLE;
 }
 
 static inline void key_set_state(TypioWlFrontend *fe, uint32_t key,
                                  TypioKeyTrackState st) {
     if (key < TYPIO_WL_MAX_TRACKED_KEYS) {
-        fe->key_states[key] = st;
+        fe->tracker->states[key] = st;
     }
 }
 
 static inline uint32_t key_get_generation(TypioWlFrontend *fe, uint32_t key) {
-    return (key < TYPIO_WL_MAX_TRACKED_KEYS) ? fe->key_generations[key] : 0;
+    return (key < TYPIO_WL_MAX_TRACKED_KEYS) ? fe->tracker->generations[key] : 0;
 }
 
 static inline void key_set_generation(TypioWlFrontend *fe, uint32_t key,
                                       uint32_t generation) {
     if (key < TYPIO_WL_MAX_TRACKED_KEYS) {
-        fe->key_generations[key] = generation;
+        fe->tracker->generations[key] = generation;
     }
 }
 
 static inline void key_claim_current_generation(TypioWlFrontend *fe, uint32_t key) {
-    key_set_generation(fe, key, fe->active_key_generation);
-    fe->active_generation_owned_keys = true;
+    key_set_generation(fe, key, fe->tracker->active_generation);
+    fe->tracker->active_generation_owned_keys = true;
 }
 
 static inline void key_clear_tracking(TypioWlFrontend *fe, uint32_t key) {
@@ -41,8 +41,8 @@ static inline void key_clear_tracking(TypioWlFrontend *fe, uint32_t key) {
 }
 
 static inline bool key_owned_by_active_generation(TypioWlFrontend *fe, uint32_t key) {
-    return fe && fe->active_key_generation != 0 &&
-           key_get_generation(fe, key) == fe->active_key_generation;
+    return fe && fe->tracker->active_generation != 0 &&
+           key_get_generation(fe, key) == fe->tracker->active_generation;
 }
 
 #endif /* TYPIO_WL_KEY_TRACKING_ACCESS_H */

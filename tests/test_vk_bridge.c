@@ -86,10 +86,12 @@ static void init_frontend(TypioWlFrontend *frontend, TypioWlKeyboard *keyboard) 
     memset(keyboard, 0, sizeof(*keyboard));
     keyboard->frontend = frontend;
     frontend->keyboard = keyboard;
-    frontend->virtual_keyboard = (struct zwp_virtual_keyboard_v1 *)0x1;
-    frontend->active_key_generation = 1;
+    frontend->vk = calloc(1, sizeof(TypioWlVirtualKeyboard));
+    frontend->vk->vk = (struct zwp_virtual_keyboard_v1 *)0x1;
+    frontend->tracker = calloc(1, sizeof(TypioWlKeyTracker));
+    frontend->tracker->active_generation = 1;
     frontend->running = true;
-    frontend->virtual_keyboard_state = TYPIO_WL_VK_STATE_ABSENT;
+    frontend->vk->state = TYPIO_WL_VK_STATE_ABSENT;
 }
 
 TEST(expect_keymap_sets_needs_keymap_state_and_deadline) {
@@ -100,9 +102,9 @@ TEST(expect_keymap_sets_needs_keymap_state_and_deadline) {
 
     typio_wl_vk_expect_keymap(&frontend, "test");
 
-    ASSERT(frontend.virtual_keyboard_state == TYPIO_WL_VK_STATE_NEEDS_KEYMAP);
-    ASSERT(!frontend.virtual_keyboard_has_keymap);
-    ASSERT(frontend.virtual_keyboard_keymap_deadline_ms > 0);
+    ASSERT(frontend.vk->state == TYPIO_WL_VK_STATE_NEEDS_KEYMAP);
+    ASSERT(!frontend.vk->has_keymap);
+    ASSERT(frontend.vk->keymap_deadline_ms > 0);
 }
 
 TEST(ready_state_clears_deadline_and_marks_keymap_present) {
@@ -110,14 +112,14 @@ TEST(ready_state_clears_deadline_and_marks_keymap_present) {
     TypioWlKeyboard keyboard;
 
     init_frontend(&frontend, &keyboard);
-    frontend.virtual_keyboard_keymap_deadline_ms = 1234;
-    frontend.virtual_keyboard_keymap_generation = frontend.active_key_generation;
+    frontend.vk->keymap_deadline_ms = 1234;
+    frontend.vk->keymap_generation = frontend.tracker->active_generation;
 
     typio_wl_vk_set_state(&frontend, TYPIO_WL_VK_STATE_READY, "test");
 
-    ASSERT(frontend.virtual_keyboard_state == TYPIO_WL_VK_STATE_READY);
-    ASSERT(frontend.virtual_keyboard_has_keymap);
-    ASSERT(frontend.virtual_keyboard_keymap_deadline_ms == 0);
+    ASSERT(frontend.vk->state == TYPIO_WL_VK_STATE_READY);
+    ASSERT(frontend.vk->has_keymap);
+    ASSERT(frontend.vk->keymap_deadline_ms == 0);
 }
 
 TEST(broken_state_triggers_fail_safe) {
@@ -125,7 +127,7 @@ TEST(broken_state_triggers_fail_safe) {
     TypioWlKeyboard keyboard;
 
     init_frontend(&frontend, &keyboard);
-    frontend.virtual_keyboard_state = TYPIO_WL_VK_STATE_BROKEN;
+    frontend.vk->state = TYPIO_WL_VK_STATE_BROKEN;
     reset_counts();
 
     ASSERT(!typio_wl_vk_is_ready(&frontend, "key"));
@@ -139,9 +141,9 @@ TEST(keymap_timeout_triggers_fail_safe) {
 
     init_frontend(&frontend, &keyboard);
     keyboard.grab = (struct zwp_input_method_keyboard_grab_v2 *)0x1;
-    frontend.virtual_keyboard_state = TYPIO_WL_VK_STATE_NEEDS_KEYMAP;
-    frontend.virtual_keyboard_keymap_deadline_ms = 1;
-    frontend.virtual_keyboard_state_since_ms = 0;
+    frontend.vk->state = TYPIO_WL_VK_STATE_NEEDS_KEYMAP;
+    frontend.vk->keymap_deadline_ms = 1;
+    frontend.vk->state_since_ms = 0;
     reset_counts();
 
     typio_wl_vk_health_check(&frontend);
@@ -155,16 +157,16 @@ TEST(cancelling_keymap_wait_restores_ready_state_after_grab_teardown) {
     TypioWlKeyboard keyboard;
 
     init_frontend(&frontend, &keyboard);
-    frontend.virtual_keyboard_state = TYPIO_WL_VK_STATE_NEEDS_KEYMAP;
-    frontend.virtual_keyboard_keymap_deadline_ms = 1234;
-    frontend.virtual_keyboard_keymap_generation = frontend.active_key_generation;
-    frontend.virtual_keyboard_last_keymap_ms = 42;
+    frontend.vk->state = TYPIO_WL_VK_STATE_NEEDS_KEYMAP;
+    frontend.vk->keymap_deadline_ms = 1234;
+    frontend.vk->keymap_generation = frontend.tracker->active_generation;
+    frontend.vk->last_keymap_ms = 42;
 
     typio_wl_vk_cancel_keymap_wait(&frontend, "test");
 
-    ASSERT(frontend.virtual_keyboard_state == TYPIO_WL_VK_STATE_READY);
-    ASSERT(frontend.virtual_keyboard_has_keymap);
-    ASSERT(frontend.virtual_keyboard_keymap_deadline_ms == 0);
+    ASSERT(frontend.vk->state == TYPIO_WL_VK_STATE_READY);
+    ASSERT(frontend.vk->has_keymap);
+    ASSERT(frontend.vk->keymap_deadline_ms == 0);
 }
 
 TEST(cancelling_keymap_wait_does_not_restore_stale_generation_keymap) {
@@ -172,17 +174,17 @@ TEST(cancelling_keymap_wait_does_not_restore_stale_generation_keymap) {
     TypioWlKeyboard keyboard;
 
     init_frontend(&frontend, &keyboard);
-    frontend.active_key_generation = 2;
-    frontend.virtual_keyboard_state = TYPIO_WL_VK_STATE_NEEDS_KEYMAP;
-    frontend.virtual_keyboard_keymap_deadline_ms = 1234;
-    frontend.virtual_keyboard_keymap_generation = 1;
-    frontend.virtual_keyboard_last_keymap_ms = 42;
+    frontend.tracker->active_generation = 2;
+    frontend.vk->state = TYPIO_WL_VK_STATE_NEEDS_KEYMAP;
+    frontend.vk->keymap_deadline_ms = 1234;
+    frontend.vk->keymap_generation = 1;
+    frontend.vk->last_keymap_ms = 42;
 
     typio_wl_vk_cancel_keymap_wait(&frontend, "test");
 
-    ASSERT(frontend.virtual_keyboard_state == TYPIO_WL_VK_STATE_NEEDS_KEYMAP);
-    ASSERT(!frontend.virtual_keyboard_has_keymap);
-    ASSERT(frontend.virtual_keyboard_keymap_deadline_ms == 0);
+    ASSERT(frontend.vk->state == TYPIO_WL_VK_STATE_NEEDS_KEYMAP);
+    ASSERT(!frontend.vk->has_keymap);
+    ASSERT(frontend.vk->keymap_deadline_ms == 0);
 }
 
 TEST(keymap_timeout_without_active_grab_is_ignored) {
@@ -190,8 +192,8 @@ TEST(keymap_timeout_without_active_grab_is_ignored) {
     TypioWlKeyboard keyboard;
 
     init_frontend(&frontend, &keyboard);
-    frontend.virtual_keyboard_state = TYPIO_WL_VK_STATE_NEEDS_KEYMAP;
-    frontend.virtual_keyboard_keymap_deadline_ms = 1;
+    frontend.vk->state = TYPIO_WL_VK_STATE_NEEDS_KEYMAP;
+    frontend.vk->keymap_deadline_ms = 1;
     frontend.keyboard = NULL;
     reset_counts();
 

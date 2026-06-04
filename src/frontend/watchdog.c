@@ -33,15 +33,15 @@ static const char *stage_name(TypioWlLoopStage stage) {
 void typio_wl_frontend_watchdog_heartbeat(TypioWlFrontend *frontend) {
     if (!frontend) return;
     uint64_t now = typio_wl_monotonic_ms();
-    atomic_store(&frontend->watchdog_heartbeat_ms, now);
-    atomic_store(&frontend->watchdog_stage_since_ms, now);
+    atomic_store(&frontend->watchdog->heartbeat_ms, now);
+    atomic_store(&frontend->watchdog->stage_since_ms, now);
 }
 
 void typio_wl_frontend_watchdog_set_stage(TypioWlFrontend *frontend,
                                            TypioWlLoopStage stage) {
     if (!frontend) return;
-    atomic_store(&frontend->watchdog_loop_stage, (int)stage);
-    atomic_store(&frontend->watchdog_stage_since_ms, typio_wl_monotonic_ms());
+    atomic_store(&frontend->watchdog->loop_stage, (int)stage);
+    atomic_store(&frontend->watchdog->stage_since_ms, typio_wl_monotonic_ms());
 }
 
 static uint32_t runtime_age_ms(uint64_t now_ms, uint64_t start_ms) {
@@ -62,31 +62,33 @@ static void *watchdog_thread(void *data) {
 
     typio_log_debug("Watchdog thread started");
 
-    while (!atomic_load(&frontend->watchdog_stop)) {
+    while (!atomic_load(&frontend->watchdog->stop)) {
         struct timespec ts = { .tv_sec = 0, .tv_nsec = 100000000 };
         nanosleep(&ts, nullptr);
 
-        if (!atomic_load(&frontend->watchdog_armed))
+        if (!atomic_load(&frontend->watchdog->armed))
             continue;
 
-        uint64_t heartbeat_ms = atomic_load(&frontend->watchdog_heartbeat_ms);
-        int stage = atomic_load(&frontend->watchdog_loop_stage);
-        uint64_t stage_since_ms = atomic_load(&frontend->watchdog_stage_since_ms);
+        uint64_t heartbeat_ms = atomic_load(&frontend->watchdog->heartbeat_ms);
+        int stage = atomic_load(&frontend->watchdog->loop_stage);
+        uint64_t stage_since_ms = atomic_load(&frontend->watchdog->stage_since_ms);
 
         if (heartbeat_ms == last_heartbeat_ms && stage == last_stage &&
             stage_since_ms == last_stage_since_ms) {
             uint64_t now = typio_wl_monotonic_ms();
             uint32_t stuck_ms = runtime_age_ms(now, heartbeat_ms);
             int32_t deadline_remaining = runtime_deadline_remaining_ms(
-                now, frontend->virtual_keyboard_keymap_deadline_ms);
+                now, frontend->vk ? frontend->vk->keymap_deadline_ms : 0);
 
             if (stuck_ms >= 3000) {
                 typio_log_error("Watchdog: loop stuck for %u ms in stage=%s "
                     "vk_state=%s vk_deadline=%d ms age=%u ms",
                     stuck_ms, stage_name(stage),
-                    typio_wl_vk_state_name(frontend->virtual_keyboard_state),
+                    typio_wl_vk_state_name(frontend->vk ? frontend->vk->state
+                                                        : TYPIO_WL_VK_STATE_ABSENT),
                     deadline_remaining,
-                    runtime_age_ms(now, frontend->virtual_keyboard_state_since_ms));
+                    runtime_age_ms(now, frontend->vk ? frontend->vk->state_since_ms
+                                                     : 0));
                 typio_dump_recent_log();
                 kill(getpid(), SIGKILL);
                 break;
@@ -103,26 +105,26 @@ static void *watchdog_thread(void *data) {
 }
 
 void typio_wl_frontend_watchdog_start(TypioWlFrontend *frontend) {
-    if (!frontend || frontend->watchdog_thread_started) return;
+    if (!frontend || frontend->watchdog->thread_started) return;
 
-    atomic_store(&frontend->watchdog_stop, false);
-    atomic_store(&frontend->watchdog_armed, false);
-    frontend->watchdog_heartbeat_ms = 0;
-    frontend->watchdog_stage_since_ms = 0;
-    frontend->watchdog_loop_stage = TYPIO_WL_LOOP_STAGE_IDLE;
+    atomic_store(&frontend->watchdog->stop, false);
+    atomic_store(&frontend->watchdog->armed, false);
+    frontend->watchdog->heartbeat_ms = 0;
+    frontend->watchdog->stage_since_ms = 0;
+    frontend->watchdog->loop_stage = TYPIO_WL_LOOP_STAGE_IDLE;
 
-    if (pthread_create(&frontend->watchdog_thread, nullptr,
+    if (pthread_create(&frontend->watchdog->thread, nullptr,
                        watchdog_thread, frontend) != 0) {
         typio_log_warning("Failed to start watchdog thread");
         return;
     }
-    frontend->watchdog_thread_started = true;
+    frontend->watchdog->thread_started = true;
 }
 
 void typio_wl_frontend_watchdog_stop(TypioWlFrontend *frontend) {
-    if (!frontend || !frontend->watchdog_thread_started) return;
+    if (!frontend || !frontend->watchdog->thread_started) return;
 
-    atomic_store(&frontend->watchdog_stop, true);
-    pthread_join(frontend->watchdog_thread, nullptr);
-    frontend->watchdog_thread_started = false;
+    atomic_store(&frontend->watchdog->stop, true);
+    pthread_join(frontend->watchdog->thread, nullptr);
+    frontend->watchdog->thread_started = false;
 }

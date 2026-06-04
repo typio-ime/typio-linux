@@ -70,8 +70,9 @@ static void reset_state(void) {
     g_engine_storage = 0;
     memset(g_vk_events, 0, sizeof(g_vk_events));
 
+    g_frontend.tracker = calloc(1, sizeof(TypioWlKeyTracker));
     g_frontend.instance = (TypioInstance *)&g_frontend;
-    g_frontend.active_key_generation = 1;
+    g_frontend.tracker->active_generation = 1;
     g_keyboard.frontend = &g_frontend;
     g_session.frontend = &g_frontend;
     g_session.ctx = (TypioInputContext *)&g_session;
@@ -308,7 +309,7 @@ TEST(basic_engine_bypasses_for_printable_text) {
     ASSERT(g_vk_event_count == 1);
     ASSERT(g_vk_events[0].key == 30);
     ASSERT(g_vk_events[0].state == WL_KEYBOARD_KEY_STATE_PRESSED);
-    ASSERT(g_frontend.key_states[30] == TYPIO_KEY_TRACK_BASIC_PASSTHROUGH);
+    ASSERT(g_frontend.tracker->states[30] == TYPIO_KEY_TRACK_BASIC_PASSTHROUGH);
 }
 
 TEST(basic_engine_forwards_printable_text_release_symmetrically) {
@@ -319,7 +320,7 @@ TEST(basic_engine_forwards_printable_text_release_symmetrically) {
     typio_wl_key_route_process_press(&g_keyboard, &g_session, 30,
                                      'a', TYPIO_MOD_NONE,
                                      'a', 1234);
-    ASSERT(g_frontend.key_states[30] == TYPIO_KEY_TRACK_BASIC_PASSTHROUGH);
+    ASSERT(g_frontend.tracker->states[30] == TYPIO_KEY_TRACK_BASIC_PASSTHROUGH);
     typio_wl_key_route_process_release(&g_keyboard, &g_session, 30,
                                        'a', TYPIO_MOD_NONE,
                                        'a', 1250);
@@ -332,7 +333,7 @@ TEST(basic_engine_forwards_printable_text_release_symmetrically) {
     ASSERT(g_vk_events[0].state == WL_KEYBOARD_KEY_STATE_PRESSED);
     ASSERT(g_vk_events[1].key == 30);
     ASSERT(g_vk_events[1].state == WL_KEYBOARD_KEY_STATE_RELEASED);
-    ASSERT(g_frontend.key_states[30] == TYPIO_KEY_TRACK_IDLE);
+    ASSERT(g_frontend.tracker->states[30] == TYPIO_KEY_TRACK_IDLE);
 }
 
 TEST(forwarded_shift_release_still_reaches_engine) {
@@ -349,7 +350,7 @@ TEST(forwarded_shift_release_still_reaches_engine) {
     ASSERT(g_process_key_release_calls == 0);
     ASSERT(g_vk_event_count == 1);
     ASSERT(g_vk_events[0].state == WL_KEYBOARD_KEY_STATE_PRESSED);
-    ASSERT(g_frontend.key_states[42] == TYPIO_KEY_TRACK_FORWARDED);
+    ASSERT(g_frontend.tracker->states[42] == TYPIO_KEY_TRACK_FORWARDED);
 
     typio_wl_key_route_process_release(&g_keyboard, &g_session, 42,
                                        XKB_KEY_Shift_L, TYPIO_MOD_NONE,
@@ -360,7 +361,7 @@ TEST(forwarded_shift_release_still_reaches_engine) {
     ASSERT(g_process_key_release_calls == 1);
     ASSERT(g_vk_event_count == 2);
     ASSERT(g_vk_events[1].state == WL_KEYBOARD_KEY_STATE_RELEASED);
-    ASSERT(g_frontend.key_states[42] == TYPIO_KEY_TRACK_IDLE);
+    ASSERT(g_frontend.tracker->states[42] == TYPIO_KEY_TRACK_IDLE);
 }
 
 TEST(non_basic_engine_keeps_engine_in_path) {
@@ -374,7 +375,7 @@ TEST(non_basic_engine_keeps_engine_in_path) {
 
     ASSERT(g_process_key_calls == 1);
     ASSERT(g_vk_event_count == 0);
-    ASSERT(g_frontend.key_states[30] == TYPIO_KEY_TRACK_IDLE);
+    ASSERT(g_frontend.tracker->states[30] == TYPIO_KEY_TRACK_IDLE);
 }
 
 TEST(basic_engine_commit_mode_keeps_engine_in_path) {
@@ -391,7 +392,7 @@ TEST(basic_engine_commit_mode_keeps_engine_in_path) {
     ASSERT(g_process_key_press_calls == 1);
     ASSERT(g_process_key_release_calls == 0);
     ASSERT(g_vk_event_count == 0);
-    ASSERT(g_frontend.key_states[30] == TYPIO_KEY_TRACK_IDLE);
+    ASSERT(g_frontend.tracker->states[30] == TYPIO_KEY_TRACK_IDLE);
 }
 
 TEST(basic_engine_compose_mode_keeps_engine_in_path) {
@@ -408,7 +409,7 @@ TEST(basic_engine_compose_mode_keeps_engine_in_path) {
     ASSERT(g_process_key_press_calls == 1);
     ASSERT(g_process_key_release_calls == 0);
     ASSERT(g_vk_event_count == 0);
-    ASSERT(g_frontend.key_states[30] == TYPIO_KEY_TRACK_IDLE);
+    ASSERT(g_frontend.tracker->states[30] == TYPIO_KEY_TRACK_IDLE);
 }
 
 /* Stubs for unified panel backend (ADR-0005) — these are not exercised by

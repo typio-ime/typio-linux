@@ -48,31 +48,31 @@ static void arm_indicator_timer(TypioWlFrontend *frontend) {
     int ms = indicator_duration_ms(frontend);
     its.it_value.tv_sec = ms / 1000;
     its.it_value.tv_nsec = (long)(ms % 1000) * 1000000L;
-    if (frontend->indicator_timer_fd >= 0) {
-        timerfd_settime(frontend->indicator_timer_fd, 0, &its, NULL);
+    if (frontend->indicator->timer_fd >= 0) {
+        timerfd_settime(frontend->indicator->timer_fd, 0, &its, NULL);
     }
 }
 
 bool typio_wl_frontend_init_indicator(TypioWlFrontend *frontend) {
     if (!frontend) return false;
-    frontend->indicator_timer_fd = timerfd_create(CLOCK_MONOTONIC,
+    frontend->indicator->timer_fd = timerfd_create(CLOCK_MONOTONIC,
                                                    TFD_CLOEXEC | TFD_NONBLOCK);
-    if (frontend->indicator_timer_fd < 0) {
+    if (frontend->indicator->timer_fd < 0) {
         typio_log_warning("Failed to create indicator timer: %s",
                           strerror(errno));
         return false;
     }
-    frontend->indicator_active = false;
+    frontend->indicator->active = false;
     return true;
 }
 
 static const char *mode_cache_lookup(TypioWlFrontend *frontend,
                                       const char *engine_name) {
     if (!frontend || !engine_name) return nullptr;
-    for (size_t i = 0; i < frontend->indicator_mode_cache_count; i++) {
-        if (strcmp(frontend->indicator_mode_cache[i].engine, engine_name) == 0) {
-            if (frontend->indicator_mode_cache[i].display_label[0]) {
-                return frontend->indicator_mode_cache[i].display_label;
+    for (size_t i = 0; i < frontend->indicator->mode_cache_count; i++) {
+        if (strcmp(frontend->indicator->mode_cache[i].engine, engine_name) == 0) {
+            if (frontend->indicator->mode_cache[i].display_label[0]) {
+                return frontend->indicator->mode_cache[i].display_label;
             }
             return nullptr;
         }
@@ -85,22 +85,22 @@ static void mode_cache_update(TypioWlFrontend *frontend,
                                const TypioKeyboardEngineMode *mode) {
     if (!frontend || !engine_name || !mode) return;
 
-    for (size_t i = 0; i < frontend->indicator_mode_cache_count; i++) {
-        if (strcmp(frontend->indicator_mode_cache[i].engine, engine_name) == 0) {
-            snprintf(frontend->indicator_mode_cache[i].display_label,
-                     sizeof(frontend->indicator_mode_cache[i].display_label),
+    for (size_t i = 0; i < frontend->indicator->mode_cache_count; i++) {
+        if (strcmp(frontend->indicator->mode_cache[i].engine, engine_name) == 0) {
+            snprintf(frontend->indicator->mode_cache[i].display_label,
+                     sizeof(frontend->indicator->mode_cache[i].display_label),
                      "%s", mode->display_label ? mode->display_label : "");
             return;
         }
     }
 
-    if (frontend->indicator_mode_cache_count < TYPIO_INDICATOR_MODE_CACHE_CAP) {
-        size_t idx = frontend->indicator_mode_cache_count++;
-        snprintf(frontend->indicator_mode_cache[idx].engine,
-                 sizeof(frontend->indicator_mode_cache[idx].engine),
+    if (frontend->indicator->mode_cache_count < TYPIO_INDICATOR_MODE_CACHE_CAP) {
+        size_t idx = frontend->indicator->mode_cache_count++;
+        snprintf(frontend->indicator->mode_cache[idx].engine,
+                 sizeof(frontend->indicator->mode_cache[idx].engine),
                  "%s", engine_name);
-        snprintf(frontend->indicator_mode_cache[idx].display_label,
-                 sizeof(frontend->indicator_mode_cache[idx].display_label),
+        snprintf(frontend->indicator->mode_cache[idx].display_label,
+                 sizeof(frontend->indicator->mode_cache[idx].display_label),
                  "%s", mode->display_label ? mode->display_label : "");
     }
 }
@@ -189,9 +189,9 @@ void typio_wl_frontend_show_indicator_on_focus(TypioWlFrontend *frontend,
      * Keying off the last *effective key* matches the user's "I was just typing
      * a moment ago" intuition better than keying off commits alone. */
     uint64_t now = typio_wl_monotonic_ms();
-    uint64_t acknowledged = frontend->last_key_activity_ms > frontend->last_indicator_ms
-                          ? frontend->last_key_activity_ms
-                          : frontend->last_indicator_ms;
+    uint64_t acknowledged = frontend->indicator->last_key_activity_ms > frontend->indicator->last_indicator_ms
+                          ? frontend->indicator->last_key_activity_ms
+                          : frontend->indicator->last_indicator_ms;
     if (acknowledged > 0 &&
         now - acknowledged < TYPIO_INDICATOR_RECENT_INPUT_COOLDOWN_MS) {
         return;
@@ -202,7 +202,7 @@ void typio_wl_frontend_show_indicator_on_focus(TypioWlFrontend *frontend,
 
 void typio_wl_frontend_record_key_activity(TypioWlFrontend *frontend) {
     if (!frontend) return;
-    frontend->last_key_activity_ms = typio_wl_monotonic_ms();
+    frontend->indicator->last_key_activity_ms = typio_wl_monotonic_ms();
 }
 
 void typio_wl_frontend_show_indicator(TypioWlFrontend *frontend,
@@ -216,8 +216,8 @@ void typio_wl_frontend_show_indicator(TypioWlFrontend *frontend,
     anchor_ready = typio_wl_panel_coordinator_anchor_ready(frontend);
     if (typio_wl_panel_coordinator_show_status(frontend, TYPIO_WL_UI_OWNER_INDICATOR, text) &&
         anchor_ready) {
-        frontend->indicator_active = true;
-        frontend->last_indicator_ms = typio_wl_monotonic_ms();
+        frontend->indicator->active = true;
+        frontend->indicator->last_indicator_ms = typio_wl_monotonic_ms();
         arm_indicator_timer(frontend);
     }
 }
@@ -227,24 +227,24 @@ void typio_wl_frontend_hide_indicator(TypioWlFrontend *frontend) {
 
     if (!frontend) return;
     typio_wl_panel_coordinator_hide(frontend, TYPIO_WL_UI_OWNER_INDICATOR);
-    frontend->indicator_active = false;
+    frontend->indicator->active = false;
 
-    if (frontend->indicator_timer_fd >= 0) {
+    if (frontend->indicator->timer_fd >= 0) {
         memset(&its, 0, sizeof(its));
-        timerfd_settime(frontend->indicator_timer_fd, 0, &its, NULL);
+        timerfd_settime(frontend->indicator->timer_fd, 0, &its, NULL);
     }
 }
 
 int typio_wl_frontend_get_indicator_fd(TypioWlFrontend *frontend) {
-    return frontend ? frontend->indicator_timer_fd : -1;
+    return frontend ? frontend->indicator->timer_fd : -1;
 }
 
 void typio_wl_frontend_dispatch_indicator_timer(TypioWlFrontend *frontend) {
     uint64_t expirations;
 
-    if (!frontend || frontend->indicator_timer_fd < 0) return;
+    if (!frontend || frontend->indicator->timer_fd < 0) return;
 
-    if (read(frontend->indicator_timer_fd, &expirations, sizeof(expirations)) < 0) {
+    if (read(frontend->indicator->timer_fd, &expirations, sizeof(expirations)) < 0) {
         return;
     }
     typio_wl_frontend_hide_indicator(frontend);
@@ -252,9 +252,9 @@ void typio_wl_frontend_dispatch_indicator_timer(TypioWlFrontend *frontend) {
 
 void typio_wl_frontend_destroy_indicator(TypioWlFrontend *frontend) {
     if (!frontend) return;
-    if (frontend->indicator_timer_fd >= 0) {
-        close(frontend->indicator_timer_fd);
-        frontend->indicator_timer_fd = -1;
+    if (frontend->indicator->timer_fd >= 0) {
+        close(frontend->indicator->timer_fd);
+        frontend->indicator->timer_fd = -1;
     }
-    frontend->indicator_active = false;
+    frontend->indicator->active = false;
 }

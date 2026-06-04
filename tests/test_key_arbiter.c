@@ -88,7 +88,7 @@ void typio_wl_keyboard_process_key_press(TypioWlKeyboard *keyboard,
     /* Simulate what real key_route does for modifiers: set tracking-forwarded */
     TypioWlFrontend *fe = keyboard->frontend;
     if (key < TYPIO_WL_MAX_TRACKED_KEYS)
-        fe->key_states[key] = TYPIO_KEY_TRACK_FORWARDED;
+        fe->tracker->states[key] = TYPIO_KEY_TRACK_FORWARDED;
 }
 
 void typio_wl_keyboard_process_key_release(TypioWlKeyboard *keyboard,
@@ -105,7 +105,7 @@ void typio_wl_keyboard_process_key_release(TypioWlKeyboard *keyboard,
     }
     TypioWlFrontend *fe = keyboard->frontend;
     if (key < TYPIO_WL_MAX_TRACKED_KEYS)
-        fe->key_states[key] = TYPIO_KEY_TRACK_IDLE;
+        fe->tracker->states[key] = TYPIO_KEY_TRACK_IDLE;
 }
 
 /* Called by arbiter_release_orphaned_keys */
@@ -174,6 +174,7 @@ static void setup(void) {
     memset(&test_frontend, 0, sizeof(test_frontend));
     memset(&test_keyboard, 0, sizeof(test_keyboard));
     memset(&test_session, 0, sizeof(test_session));
+    test_frontend.tracker = calloc(1, sizeof(TypioWlKeyTracker));
     test_keyboard.frontend = &test_frontend;
     /* Default engine-switch chord is Ctrl+Shift (modifier-only). Set it
      * directly so the test stays independent of the config loader. */
@@ -256,7 +257,7 @@ TEST(chord_consume_releases_orphaned_key) {
     setup();
     /* Ctrl↓ (forwarded) → Shift↓ (buffered) → Shift↑ → Ctrl↑ (consume) */
     press(KC_CTRL, TYPIO_KEY_Control_L, 100);
-    ASSERT(test_frontend.key_states[KC_CTRL] == TYPIO_KEY_TRACK_FORWARDED);
+    ASSERT(test_frontend.tracker->states[KC_CTRL] == TYPIO_KEY_TRACK_FORWARDED);
 
     press(KC_SHIFT, TYPIO_KEY_Shift_L, 110);
     release(KC_SHIFT, TYPIO_KEY_Shift_L, 200);
@@ -266,7 +267,7 @@ TEST(chord_consume_releases_orphaned_key) {
     ASSERT(recorded_vk_count == 1);
     ASSERT(recorded_vk[0].key == KC_CTRL);
     /* Key state should be cleared */
-    ASSERT(test_frontend.key_states[KC_CTRL] == TYPIO_KEY_TRACK_IDLE);
+    ASSERT(test_frontend.tracker->states[KC_CTRL] == TYPIO_KEY_TRACK_IDLE);
 }
 
 TEST(chord_reverse_order) {

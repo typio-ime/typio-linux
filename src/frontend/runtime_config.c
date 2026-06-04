@@ -112,7 +112,7 @@ static void runtime_config_rearm_watch(TypioWlFrontend *frontend) {
     char engines_dir[512];
     const char *config_dir;
 
-    if (!frontend || frontend->config_watch_fd < 0 || !frontend->instance) {
+    if (!frontend || frontend->config->watch_fd < 0 || !frontend->instance) {
         return;
     }
 
@@ -121,16 +121,16 @@ static void runtime_config_rearm_watch(TypioWlFrontend *frontend) {
         return;
     }
 
-    if (frontend->config_dir_watch >= 0) {
-        inotify_rm_watch(frontend->config_watch_fd, frontend->config_dir_watch);
-        frontend->config_dir_watch = -1;
+    if (frontend->config->dir_watch >= 0) {
+        inotify_rm_watch(frontend->config->watch_fd, frontend->config->dir_watch);
+        frontend->config->dir_watch = -1;
     }
-    if (frontend->config_engines_watch >= 0) {
-        inotify_rm_watch(frontend->config_watch_fd, frontend->config_engines_watch);
-        frontend->config_engines_watch = -1;
+    if (frontend->config->engines_watch >= 0) {
+        inotify_rm_watch(frontend->config->watch_fd, frontend->config->engines_watch);
+        frontend->config->engines_watch = -1;
     }
 
-    frontend->config_dir_watch = inotify_add_watch(frontend->config_watch_fd,
+    frontend->config->dir_watch = inotify_add_watch(frontend->config->watch_fd,
                                                    config_dir,
                                                    IN_CLOSE_WRITE | IN_MOVED_TO |
                                                    IN_CREATE | IN_DELETE |
@@ -138,7 +138,7 @@ static void runtime_config_rearm_watch(TypioWlFrontend *frontend) {
                                                    IN_ATTRIB);
     if (snprintf(engines_dir, sizeof(engines_dir), "%s/engines", config_dir) <
         (int)sizeof(engines_dir)) {
-        frontend->config_engines_watch = inotify_add_watch(frontend->config_watch_fd,
+        frontend->config->engines_watch = inotify_add_watch(frontend->config->watch_fd,
                                                            engines_dir,
                                                            IN_CLOSE_WRITE | IN_MOVED_TO |
                                                            IN_CREATE | IN_DELETE |
@@ -154,21 +154,21 @@ static void runtime_config_schedule_reload(TypioWlFrontend *frontend) {
         return;
     }
 
-    frontend->config_reload_pending = true;
-    if (frontend->config_reload_timer_fd < 0) {
+    frontend->config->reload_pending = true;
+    if (frontend->config->reload_timer_fd < 0) {
         runtime_config_refresh(frontend);
-        frontend->config_reload_pending = false;
+        frontend->config->reload_pending = false;
         return;
     }
 
     timer.it_value.tv_sec = TYPIO_CONFIG_RELOAD_DEBOUNCE_MS / 1000;
     timer.it_value.tv_nsec =
         (long)(TYPIO_CONFIG_RELOAD_DEBOUNCE_MS % 1000) * 1000000L;
-    if (timerfd_settime(frontend->config_reload_timer_fd, 0, &timer, NULL) != 0) {
+    if (timerfd_settime(frontend->config->reload_timer_fd, 0, &timer, NULL) != 0) {
         typio_log_warning(
             "Config reload: failed to arm debounce timer; reloading immediately");
         runtime_config_refresh(frontend);
-        frontend->config_reload_pending = false;
+        frontend->config->reload_pending = false;
     }
 }
 
@@ -178,11 +178,11 @@ void typio_wl_frontend_handle_config_watch(TypioWlFrontend *frontend) {
     bool should_reload = false;
     bool should_rearm = false;
 
-    if (!frontend || frontend->config_watch_fd < 0) {
+    if (!frontend || frontend->config->watch_fd < 0) {
         return;
     }
 
-    while ((nread = read(frontend->config_watch_fd, buffer, sizeof(buffer))) > 0) {
+    while ((nread = read(frontend->config->watch_fd, buffer, sizeof(buffer))) > 0) {
         ssize_t offset = 0;
 
         while (offset < nread) {
@@ -208,26 +208,26 @@ void typio_wl_frontend_handle_config_watch(TypioWlFrontend *frontend) {
 }
 
 int typio_wl_frontend_get_config_reload_fd(TypioWlFrontend *frontend) {
-    return frontend ? frontend->config_reload_timer_fd : -1;
+    return frontend ? frontend->config->reload_timer_fd : -1;
 }
 
 void typio_wl_frontend_dispatch_config_reload(TypioWlFrontend *frontend) {
     uint64_t expirations;
 
-    if (!frontend || frontend->config_reload_timer_fd < 0) {
+    if (!frontend || frontend->config->reload_timer_fd < 0) {
         return;
     }
 
-    if (read(frontend->config_reload_timer_fd,
+    if (read(frontend->config->reload_timer_fd,
              &expirations,
              sizeof(expirations)) < 0) {
         return;
     }
 
-    if (!frontend->config_reload_pending) {
+    if (!frontend->config->reload_pending) {
         return;
     }
 
-    frontend->config_reload_pending = false;
+    frontend->config->reload_pending = false;
     runtime_config_refresh(frontend);
 }
