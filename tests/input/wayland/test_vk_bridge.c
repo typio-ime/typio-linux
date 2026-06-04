@@ -76,6 +76,20 @@ const char *typio_wl_key_tracking_state_name([[maybe_unused]] TypioKeyTrackState
     return "idle";
 }
 
+void typio_dump_recent_log(void) {
+}
+
+const char *typio_wl_grab_resource_state_name(TypioWlGrabResourceState state) {
+    (void)state;
+    return "absent";
+}
+
+TypioWlActualState typio_wl_session_observe(const TypioWlFrontend *frontend) {
+    TypioWlActualState state = { .grab = TYPIO_WL_GRAB_RES_ABSENT };
+    (void)frontend;
+    return state;
+}
+
 static void reset_counts(void) {
     stop_count = 0;
     release_count = 0;

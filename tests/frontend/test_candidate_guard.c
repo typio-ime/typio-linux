@@ -3,8 +3,8 @@
  * @brief Tests for candidate navigation passthrough guard
  */
 
-#include "guard.h"
-#include "typio/abi/input_context.h"
+#include "candidate_guard.h"
+#include "frontend/internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,29 +44,15 @@ TEST(does_not_consume_without_candidates) {
 }
 
 TEST(consumes_arrow_keys_when_candidates_exist) {
-    TypioCandidate candidate = {
-        .text = "ni",
-        .comment = "",
-        .label = "1",
-    };
-    TypioInputContext *ctx = typio_input_context_new(NULL);
+    TypioWlSession session = {0};
 
-    ASSERT(ctx != NULL);
-    TypioComposition comp = {
-        .struct_size = sizeof(TypioComposition),
-        .candidates = &candidate,
-        .candidate_count = 1,
-        .selected = 0,
-    };
-    typio_input_context_set_composition(ctx, &comp);
+    session.last_candidate_count = 1;
 
-    ASSERT(typio_wl_candidate_guard_should_consume(ctx, XKB_KEY_Up));
-    ASSERT(typio_wl_candidate_guard_should_consume(ctx, XKB_KEY_Down));
-    ASSERT(typio_wl_candidate_guard_should_consume(ctx, XKB_KEY_Left));
-    ASSERT(typio_wl_candidate_guard_should_consume(ctx, XKB_KEY_Right));
-    ASSERT(!typio_wl_candidate_guard_should_consume(ctx, XKB_KEY_Return));
-
-    typio_input_context_free(ctx);
+    ASSERT(typio_wl_candidate_guard_should_consume(&session, XKB_KEY_Up));
+    ASSERT(typio_wl_candidate_guard_should_consume(&session, XKB_KEY_Down));
+    ASSERT(typio_wl_candidate_guard_should_consume(&session, XKB_KEY_Left));
+    ASSERT(typio_wl_candidate_guard_should_consume(&session, XKB_KEY_Right));
+    ASSERT(!typio_wl_candidate_guard_should_consume(&session, XKB_KEY_Return));
 }
 
 int main(void) {

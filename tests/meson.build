@@ -3,13 +3,14 @@
 # pulled in by source + include path.
 #
 # Tests are organised by the subsystem they exercise, mirroring the
-# src/ layout. Several additional tests (test_identity, test_key_route,
-# test_vk_bridge, test_candidate_guard, test_uds_ipc, test_server_app,
-# test_recent_log_dump, test_startup_health) live as source files under
-# the appropriate subdirs but are not yet wired into the build; they
-# depend on the TypioRegistry plugin-only registration path that the
-# daemon has not yet adopted. Re-enable on a per-test basis once each
-# one is ported.
+# src/ layout. The four integration tests (test_key_route, test_uds_ipc,
+# test_server_app, test_recent_log_dump, test_startup_health) need the
+# TypioRegistry plugin-only registration path that the daemon has not
+# yet adopted, and are not wired into the build. test_key_route
+# additionally still references the old `TypioEngineManager` API
+# (replaced by `TypioRegistry`) and the removed
+# `TypioWlTextUiBackend` shim, so it needs a port before it can
+# compile.
 
 wayland_test_inc = [
     include_directories('../src'),
@@ -137,3 +138,17 @@ test_glyph_pack = executable('test_glyph_pack',
     dependencies: libtypio_dep,
 )
 test('glyph_pack', test_glyph_pack)
+
+test_vk_bridge = executable('test_vk_bridge',
+    ['input/wayland/test_vk_bridge.c', '../src/input/wayland/bridge.c'],
+    include_directories: [wayland_test_inc, top_inc],
+    dependencies: [libtypio_dep, wayland_client_dep, xkbcommon_dep],
+)
+test('vk_bridge', test_vk_bridge)
+
+test_candidate_guard = executable('test_candidate_guard',
+    ['frontend/test_candidate_guard.c', '../src/frontend/candidate_guard.c'],
+    include_directories: [wayland_test_inc, top_inc],
+    dependencies: libtypio_dep,
+)
+test('candidate_guard', test_candidate_guard)
