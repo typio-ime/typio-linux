@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-06-04
+
+### Fixed
+
+- **Shortcuts stopped working after committing on Enter.** A focus-out that
+  retains the keyboard grab (soft pause, to skip the expensive rebuild on
+  re-focus) only zeroed the xkb modifier mask, leaving `physical_modifiers`,
+  `saw_blocking_modifier`, and the shortcut arbiter untouched. A modifier held
+  at defocus stayed phantom-held — its release is dropped by the routing guard —
+  and corrupted the Ctrl+Shift engine-switch chord detection on the next
+  activation. `typio_wl_keyboard_pause()` now also scrubs that host-side
+  arbitration state.
+
+### Removed
+
+- **`--list` / `-l` CLI option.** Engine inspection now lives in the separate
+  `typioctl` client, which queries a running daemon over its UDS socket. The
+  in-process `typio_app_list_engines` path and its flag have been removed.
+
 ## [0.1.14] - 2026-06-04
 
 ### Changed
