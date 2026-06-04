@@ -16,7 +16,6 @@ wayland_test_inc = [
     include_directories('../src/ui'),
     include_directories('../src/ui/panel'),
     include_directories('../src/engine'),
-    include_directories('../src/bridge'),
     include_directories('../src/platform'),
 ]
 
@@ -29,14 +28,14 @@ test('preedit_format', test_preedit_format)
 
 test_startup_guard = executable('test_startup_guard',
     ['test_startup_guard.c', '../src/engine/startup.c',
-     '../src/bridge/boundary.c'],
+     '../src/engine/boundary.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )
 test('startup_guard', test_startup_guard)
 
 test_boundary_bridge = executable('test_boundary_bridge',
-    ['test_boundary_bridge.c', '../src/bridge/boundary.c'],
+    ['test_boundary_bridge.c', '../src/engine/boundary.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )

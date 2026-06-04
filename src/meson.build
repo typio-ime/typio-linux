@@ -48,8 +48,8 @@ host_sources = files(
 
 if enable_wayland
     host_sources += files(
-        'bridge/boundary.c',
-        'bridge/candidate_guard.c',
+        'engine/boundary.c',
+        'frontend/candidate_guard.c',
         'frontend/frontend_aux.c',
         'engine/niri/identity.c',
         'input/arbiter.c',
@@ -160,7 +160,6 @@ if enable_wayland
         include_directories('ui'),
         include_directories('ui/panel'),
         include_directories('engine'),
-        include_directories('bridge'),
         include_directories('platform'),
     ]
 endif

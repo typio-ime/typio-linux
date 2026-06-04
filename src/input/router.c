@@ -11,7 +11,7 @@
 #include "typio/abi/voice.h"
 #endif
 
-#include "boundary.h"
+#include "engine/boundary.h"
 #include "candidate_guard.h"
 #include "panel.h"
 #include "preedit.h"
