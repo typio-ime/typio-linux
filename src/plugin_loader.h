@@ -23,7 +23,7 @@ int typio_plugin_load_dir(TypioRegistry *registry,
  *
  * Precedence (earlier shadows later; duplicates are skipped by the
  * registry): explicit @p cli_override, then $TYPIO_ENGINE_DIR, then the
- * per-user XDG data engines dir, then the compile-time system dir.
+ * compile-time system dir.
  *
  * Returns a NULL-terminated, heap-allocated array of heap-allocated
  * strings suitable for TypioInstanceConfig.engine_dirs. Free with

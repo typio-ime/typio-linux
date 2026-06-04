@@ -174,5 +174,5 @@ typio_exe = executable('typio',
     dependencies: host_deps,
     include_directories: host_inc,
     install: true,
-    install_dir: libexecdir,
+    install_dir: bindir,
 )

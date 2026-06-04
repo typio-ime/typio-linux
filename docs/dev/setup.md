@@ -138,8 +138,7 @@ For plugin engine work, point the daemon at a specific engine directory
 below), this runs it directly:
 
 ```bash
-export TYPIO_ENGINE_DIR=~/.local/lib/typio/engines
-./build/src/typio --engine-dir ~/.local/lib/typio/engines --engine basic --verbose
+./build/src/typio --engine-dir build/engines --verbose
 ```
 
 Both `TYPIO_ENGINE_DIR` and `--engine-dir` accept a single path. If you
@@ -163,12 +162,12 @@ fallback, as the concrete example:
 
 This produces `../typio-engine-basic/target/release/libtypio_engine_basic.so`.
 
-Copy it into the user engine directory:
+Copy it into a development engine directory:
 
 ```bash
-mkdir -p ~/.local/lib/typio/engines
+mkdir -p build/engines
 cp ../typio-engine-basic/target/release/libtypio_engine_basic.so \
-   ~/.local/lib/typio/engines/
+   build/engines/
 ```
 
 The file name suffix (`basic`) becomes the engine identifier exposed to
@@ -192,15 +191,15 @@ required capability.
 ## Engine discovery
 
 At startup `typio` scans a fixed, ordered list of directories and registers
-the **first** engine of each name it finds — so earlier directories win: a
-user-installed engine shadows a system one of the same name.
+the **first** engine of each name it finds. Production builds scan only the
+system engine directory unless a development or test directory is enabled
+explicitly.
 
 | Order | Source | Path |
 |---|---|---|
 | 1 | `-E` / `--engine-dir DIR` | directory passed on the command line |
 | 2 | `$TYPIO_ENGINE_DIR` | value of that environment variable |
-| 3 | **User** | `~/.local/lib/typio/engines` |
-| 4 | **System** | compile-time `<prefix>/<libdir>/typio/engines` (typically `/usr/lib/typio/engines`) |
+| 3 | **System** | compile-time `<prefix>/<libdir>/typio/engines` (typically `/usr/lib/typio/engines`) |
 
 In each directory it loads only files named `libtypio_engine_<name>.so`,
 `dlopen`s each, and registers it with libtypio via the engine ABI. The

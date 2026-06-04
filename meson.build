@@ -102,9 +102,9 @@ endif
 
 # ── Install paths ──────────────────────────────────────────────────────────
 prefix = get_option('prefix')
+bindir = get_option('bindir')
 libdir = get_option('libdir')
 datadir = get_option('datadir')
-libexecdir = get_option('libexecdir') / 'typio'
 top_inc = include_directories('.')
 
 # ── Build config header ────────────────────────────────────────────────────
@@ -139,7 +139,7 @@ endif
 
 # ── Data files ─────────────────────────────────────────────────────────────
 service_conf = configuration_data()
-service_conf.set('TYPIO_HOST_DIR', prefix / get_option('libexecdir') / 'typio')
+service_conf.set('TYPIO_HOST_DIR', prefix / bindir)
 
 configure_file(
     input: 'data/typio.service.in',

@@ -293,23 +293,9 @@ int typio_plugin_load_dir(TypioRegistry *registry,
 
 /* ── Engine directory resolution ──────────────────────────────────────── */
 
-static char *typio_user_engine_dir(void) {
-    const char *home = getenv("HOME");
-    if (!home || !home[0]) {
-        return nullptr;
-    }
-    const char *suffix = "/.local/lib/typio/engines";
-    size_t len = strlen(home) + strlen(suffix) + 1;
-    char *result = malloc(len);
-    if (result) {
-        snprintf(result, len, "%s%s", home, suffix);
-    }
-    return result;
-}
-
 const char *const *typio_engine_dirs_build(const char *cli_override) {
-    /* At most 4 entries + NULL terminator. */
-    char **dirs = calloc(5, sizeof(char *));
+    /* At most 3 entries + NULL terminator. */
+    char **dirs = calloc(4, sizeof(char *));
     if (!dirs) {
         return nullptr;
     }
@@ -324,15 +310,11 @@ const char *const *typio_engine_dirs_build(const char *cli_override) {
         dirs[n++] = strdup(env_dir);
     }
 
-    /* System directory takes precedence over user directory for production use.
-     * User directory is for development/testing overrides. */
+    /* Production defaults only load system-installed engines. Development and
+     * test engines must be enabled explicitly via --engine-dir or
+     * TYPIO_ENGINE_DIR. */
     if (TYPIO_ENGINE_DIR[0]) {
         dirs[n++] = strdup(TYPIO_ENGINE_DIR);
-    }
-
-    char *user_dir = typio_user_engine_dir();
-    if (user_dir) {
-        dirs[n++] = user_dir;
     }
 
     dirs[n] = nullptr;

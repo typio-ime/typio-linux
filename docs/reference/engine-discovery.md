@@ -8,12 +8,11 @@ How `typio` locates and loads engine plugins at startup.
 |---|---|---|
 | 1 | `-E` / `--engine-dir DIR` | directory given on the command line |
 | 2 | `$TYPIO_ENGINE_DIR` | value of the environment variable |
-| 3 | User lib dir | `~/.local/lib/typio/engines` |
-| 4 | System lib dir | compile-time `<prefix>/<libdir>/typio/engines` (e.g. `/usr/lib/typio/engines`, or `/usr/local/lib/typio/engines` for a `/usr/local` prefix) |
+| 3 | System lib dir | compile-time `<prefix>/<libdir>/typio/engines` (e.g. `/usr/lib/typio/engines`, or `/usr/local/lib/typio/engines` for a `/usr/local` prefix) |
 
 - All existing directories in the list are scanned, in the order above.
 - The **first** engine of a given `<name>` registers; a later duplicate is rejected (`AlreadyExists`).
-- Consequence: a user-directory engine **shadows** a system engine of the same name.
+- Consequence: development and test engines shadow system engines only when enabled explicitly with `--engine-dir` or `$TYPIO_ENGINE_DIR`.
 
 ## File name convention
 

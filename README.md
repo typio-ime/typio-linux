@@ -58,10 +58,11 @@ systemctl --user enable --now typio.service
 journalctl --user -u typio -f
 ```
 
-Engines are discovered from `~/.local/lib/typio/engines` and
-`/usr/local/lib/typio/engines`. Build the [basic engine](../typio-engine-basic)
-with `cargo build --release` and copy the `.so`
-(`libtypio_engine_*.so`) into one of those directories.
+Engines are discovered from the system engine directory
+`<prefix>/<libdir>/typio/engines`. Build the [basic engine](../typio-engine-basic)
+with `cargo build --release` and install the `.so`
+(`libtypio_engine_*.so`) into that directory. For development and testing,
+pass `--engine-dir DIR` or set `TYPIO_ENGINE_DIR`.
 
-Control it from a separate terminal with the [typio-cli](../typio-cli)
-client (`typio status`, `typio engine`, …).
+Control it from a separate terminal with the [typioctl](../typioctl)
+client (`typioctl daemon status`, `typioctl engine list`, ...).

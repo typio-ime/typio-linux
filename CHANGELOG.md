@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Install `typio` into PATH.** The daemon binary now installs to
+  `<prefix>/<bindir>/typio`; the systemd user unit points at that path.
+- **Production engine discovery excludes the user lib directory by default.**
+  `typio_engine_dirs_build()` now returns CLI override, `TYPIO_ENGINE_DIR`, and
+  the compile-time system directory only. Development and test engines must be
+  enabled explicitly with `--engine-dir` or `TYPIO_ENGINE_DIR`.
+
 ## [0.1.13] - 2026-06-05
 
 ### Fixed

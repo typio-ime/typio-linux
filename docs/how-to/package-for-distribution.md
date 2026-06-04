@@ -38,7 +38,7 @@ meson setup build --prefix=/usr --buildtype=release
 
 | File | Destination | Purpose |
 |------|-------------|---------|
-| `typio` | `<prefix>/libexec/typio/` | Main daemon binary |
+| `typio` | `<prefix>/<bindir>/` | Main daemon binary |
 | `typio.service` | `<prefix>/<libdir>/systemd/user/` | systemd user service unit that runs the daemon |
 | `hicolor/*` | `<datadir>/icons/` | Status and tray icons |
 | `core.toml.example` | `<datadir>/typio/` | Example core configuration |
@@ -57,8 +57,7 @@ The binary itself requires:
 ## Engine plugins
 
 `typio` does not ship with input engines. At minimum, install one engine plugin
-into `<libdir>/typio/engines/` (or `~/.local/lib/typio/engines/` for per-user
-installs). The file must match `libtypio_engine_*.so`.
+into `<libdir>/typio/engines/`. The file must match `libtypio_engine_*.so`.
 
 Common engines:
 
@@ -69,7 +68,9 @@ Common engines:
 Package each engine as a separate package so users choose only the ones they need.
 
 See the [Engine Discovery Reference](../reference/engine-discovery.md) for the
-search-path order, file-name rules, and bundled-icon layout.
+search-path order, file-name rules, and bundled-icon layout. Per-user or
+development engine directories are explicit runtime overrides, not packaged
+defaults.
 
 ## Configuration
 

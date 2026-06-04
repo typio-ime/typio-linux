@@ -10,12 +10,14 @@ naming natively, so no rename should be needed.
 Confirm the plugin sits in a scanned directory and is readable:
 
 ```bash
-ls ~/.local/lib/typio/engines
+ls /usr/lib/typio/engines
 ls /usr/local/lib/typio/engines
 ```
 
 The [basic engine](../../typio-engine-basic) is a separate repository: build it
 with `cargo build --release`, then install the `.so` into an engine directory.
+For development-only engines, run `typio --engine-dir DIR --list` or set
+`TYPIO_ENGINE_DIR=DIR`; `~/.local/lib/typio/engines` is not scanned by default.
 
 See the [Engine Discovery Reference](../reference/engine-discovery.md) for the
 full search-path order and naming rules.
