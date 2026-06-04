@@ -157,3 +157,8 @@ endif
 if import('fs').is_file('data/wayland.toml.example')
     install_data('data/wayland.toml.example', install_dir: datadir / 'typio')
 endif
+
+# ── Post-install hook ──────────────────────────────────────────────────────
+# Restart typio.service if it's running after installation
+meson.add_install_script('meson_post_install.sh')
+endif
