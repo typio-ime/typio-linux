@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Deferred engine availability query at init.** `typio_wl_frontend_new` now
+  defaults `keyboard_availability` to `TYPIO_ENGINE_PREPARING` instead of
+  eagerly calling `typio_registry_get_active_keyboard_availability`. This
+  prevents the daemon from crashing if a third-party engine plugin is buggy
+  during startup. The push-based availability callback transitions to
+  `TYPIO_ENGINE_READY` when the engine finishes warm-up.
+
 ## [0.1.11] — 2026-06-04
 
 ### Added

@@ -425,14 +425,13 @@ TypioWlFrontend *typio_wl_frontend_new(TypioInstance *instance,
     }
 
     frontend->instance = instance;
-    frontend->keyboard_availability = TYPIO_ENGINE_READY;
-    {
-        TypioRegistry *registry = typio_instance_get_registry(instance);
-        if (registry) {
-            frontend->keyboard_availability =
-                typio_registry_get_active_keyboard_availability(registry);
-        }
-    }
+    /* Default to PREPARING: do NOT query engine availability eagerly during
+     * init. Third-party engine plugins may be buggy or slow to initialise;
+     * calling into their vtable here could crash the daemon. Instead, rely
+     * on the push-based availability callback to transition to READY when
+     * the engine finishes warm-up. The key router already handles
+     * ENGINE_NOT_READY by consuming keys silently. */
+    frontend->keyboard_availability = TYPIO_ENGINE_PREPARING;
 
     /* Load shortcut bindings from config */
     typio_shortcut_config_load(&frontend->shortcuts,
