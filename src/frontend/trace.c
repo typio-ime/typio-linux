@@ -58,6 +58,6 @@ void typio_wl_trace(struct TypioWlFrontend *frontend,
     va_list args;
 
     va_start(args, format);
-    wl_trace_format(TYPIO_LOG_DEBUG, frontend, topic, format, args);
+    wl_trace_format(TYPIO_LOG_TRACE, frontend, topic, format, args);
     va_end(args);
 }
