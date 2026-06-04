@@ -533,20 +533,13 @@ static void frontend_init_voice(TypioWlFrontend *frontend, TypioInstance *instan
     TypioPwCapture *capture = nullptr;
 
     if (voice) {
-        capture = typio_pw_capture_new(instance);
+        capture = typio_pw_capture_new(pw_audio_cb, voice);
         if (capture) {
-            typio_voice_session_set_audio_source(voice, pw_audio_cb, capture);
+            typio_voice_session_set_audio_source(voice,
+                                                 typio_pw_capture_as_audio_source(capture));
         }
-        typio_voice_session_set_event_callback(voice, voice_event_cb, frontend);
+        typio_voice_session_set_callback(voice, voice_event_cb, frontend);
         typio_instance_set_voice_session(instance, voice);
-    }
-    if (capture) {
-        size_t cap = sizeof(frontend->aux_handlers) / sizeof(frontend->aux_handlers[0]);
-        if (frontend->aux_handler_count < cap) {
-            TypioWlAuxHandler *h = typio_wl_aux_handler_for_voice(capture, frontend);
-            if (h)
-                frontend->aux_handlers[frontend->aux_handler_count++] = h;
-        }
     }
     if (voice && typio_voice_session_is_available(voice))
         typio_log_info("Voice input service ready");
