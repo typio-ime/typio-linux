@@ -12,6 +12,7 @@ if enable_wayland
         'virtual-keyboard-unstable-v1': meson.project_source_root() / 'protocols' / 'virtual-keyboard-unstable-v1.xml',
         'fractional-scale-v1': meson.project_source_root() / 'protocols' / 'fractional-scale-v1.xml',
         'viewporter': meson.project_source_root() / 'protocols' / 'viewporter.xml',
+        'ext-foreign-toplevel-list-v1': meson.project_source_root() / 'protocols' / 'ext-foreign-toplevel-list-v1.xml',
     }
 
     foreach name, xml : protocol_xmls
@@ -51,7 +52,7 @@ if enable_wayland
         'frontend/frontend_aux.c',
         'frontend/candidate_guard.c',
         'engine/boundary.c',
-        'engine/niri/identity.c',
+        'frontend/foreign/identity.c',
         'input/wayland/arbiter.c',
         'input/wayland/debug.c',
         'input/policy/tracker.c',

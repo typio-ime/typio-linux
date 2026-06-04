@@ -13,7 +13,7 @@
 #include "shortcut.h"
 #include "engine/session_controller.h"
 #include "input/wayland/repeat.h"
-#include "engine/niri/identity.h"
+#include "frontend/foreign/identity.h"
 #include "panel.h"
 #include "engine/logind/resume.h"
 #include "startup.h"

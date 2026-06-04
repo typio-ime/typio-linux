@@ -6,7 +6,7 @@
 #include "typio/runtime/instance.h"
 #include "typio/abi/config.h"
 #include "typio/abi/string.h"
-#include "engine/niri/identity.h"
+#include "frontend/foreign/identity.h"
 #include "frontend/internal.h"
 
 #include <stdio.h>
@@ -52,16 +52,12 @@ static char *hex_encode(const char *text) {
     return encoded;
 }
 
-TEST(parses_niri_focused_window_app_id) {
-    TypioWlIdentity identity = {};
-    ASSERT(typio_wl_identity_parse_niri_focused_window(
-        "{\"Ok\":{\"FocusedWindow\":{\"id\":12,\"app_id\":\"Alacritty\"}}}\n",
-        &identity));
-    ASSERT(strcmp(identity.provider_name, "niri") == 0);
-    ASSERT(strcmp(identity.app_id, "Alacritty") == 0);
-    ASSERT(strcmp(identity.stable_key, "niri:Alacritty") == 0);
-
-    typio_wl_identity_clear(&identity);
+TEST(provider_name_is_ext_foreign_toplevel_list_v1) {
+    TypioWlIdentityProvider *provider = typio_wl_identity_provider_new(NULL);
+    ASSERT(provider != NULL);
+    ASSERT(strcmp(typio_wl_identity_provider_name(provider),
+                  "ext_foreign_toplevel_list_v1") == 0);
+    typio_wl_identity_provider_free(provider);
 }
 
 TEST(remember_active_engine_writes_identity_mapping) {
@@ -80,9 +76,11 @@ TEST(remember_active_engine_writes_identity_mapping) {
     ASSERT(instance != NULL);
 
     frontend.instance = instance;
-    frontend.current_identity.provider_name = typio_strdup("niri");
+    frontend.current_identity.provider_name =
+        typio_strdup("ext_foreign_toplevel_list_v1");
     frontend.current_identity.app_id = typio_strdup("org.example.Editor");
-    frontend.current_identity.stable_key = typio_strdup("niri:org.example.Editor");
+    frontend.current_identity.stable_key =
+        typio_strdup("ext_foreign_toplevel_list_v1:org.example.Editor");
 
     typio_wl_frontend_remember_active_engine(&frontend, "rime");
 
@@ -91,7 +89,7 @@ TEST(remember_active_engine_writes_identity_mapping) {
     saved = typio_config_load_file(state_path);
     ASSERT(saved != NULL);
 
-    encoded_key = hex_encode("niri:org.example.Editor");
+    encoded_key = hex_encode("ext_foreign_toplevel_list_v1:org.example.Editor");
     full_key = typio_strjoin3("identities.", encoded_key, "");
     ASSERT(full_key != NULL);
     ASSERT(strcmp(typio_config_get_string(saved, full_key, ""), "rime") == 0);
@@ -121,9 +119,11 @@ TEST(remember_active_mode_writes_identity_mapping) {
     ASSERT(instance != NULL);
 
     frontend.instance = instance;
-    frontend.current_identity.provider_name = typio_strdup("niri");
+    frontend.current_identity.provider_name =
+        typio_strdup("ext_foreign_toplevel_list_v1");
     frontend.current_identity.app_id = typio_strdup("org.example.Editor");
-    frontend.current_identity.stable_key = typio_strdup("niri:org.example.Editor");
+    frontend.current_identity.stable_key =
+        typio_strdup("ext_foreign_toplevel_list_v1:org.example.Editor");
 
     typio_wl_frontend_remember_active_mode(&frontend, "rime", "ascii");
 
@@ -132,7 +132,7 @@ TEST(remember_active_mode_writes_identity_mapping) {
     saved = typio_config_load_file(state_path);
     ASSERT(saved != NULL);
 
-    encoded_key = hex_encode("niri:org.example.Editor");
+    encoded_key = hex_encode("ext_foreign_toplevel_list_v1:org.example.Editor");
     mode_engine_key = typio_strjoin3("identities.", encoded_key, ".mode_engine");
     mode_id_key = typio_strjoin3("identities.", encoded_key, ".mode_id");
     ASSERT(mode_engine_key != NULL);
@@ -152,7 +152,7 @@ TEST(remember_active_mode_writes_identity_mapping) {
 int main(void) {
     printf("Running identity tests:\n");
 
-    run_test_parses_niri_focused_window_app_id();
+    run_test_provider_name_is_ext_foreign_toplevel_list_v1();
     run_test_remember_active_engine_writes_identity_mapping();
     run_test_remember_active_mode_writes_identity_mapping();
 

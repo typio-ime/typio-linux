@@ -36,7 +36,7 @@
 
 #include "internal.h"
 #include "input/wayland/bridge.h"
-#include "engine/niri/identity.h"
+#include "frontend/foreign/identity.h"
 #include "panel.h"
 #include "monotonic.h"
 #include "typio/abi/instance.h"

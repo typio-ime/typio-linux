@@ -20,6 +20,7 @@
 #include "internal.h"
 #include "monotonic.h"
 #include "panel.h"
+#include "foreign/identity.h"
 
 #include "typio/abi/log.h"
 #include "typio/typio.h"
@@ -154,6 +155,16 @@ bool typio_wl_frontend_wayland_bind(TypioWlFrontend *frontend) {
         typio_log_warning("Failed to initialize text UI backend");
     }
 
+    /* The identity provider tracks the focused toplevel's app_id via the
+     * ext_foreign_toplevel_list_v1 staging protocol. Bind it once the
+     * display is fully connected and the registry has been enumerated. */
+    if (frontend->identity_provider) {
+        if (typio_wl_identity_provider_bind(frontend->identity_provider,
+                                            frontend->display) != 0) {
+            typio_log_warning("Failed to bind focused-app identity provider");
+        }
+    }
+
     return true;
 }
 
@@ -162,6 +173,9 @@ bool typio_wl_frontend_wayland_bind(TypioWlFrontend *frontend) {
  * aux handlers, config watch, and the resume signal untouched. Safe to call
  * with any subset already NULL. */
 void typio_wl_frontend_wayland_unbind(TypioWlFrontend *frontend) {
+    if (frontend->identity_provider) {
+        typio_wl_identity_provider_unbind(frontend->identity_provider);
+    }
     if (frontend->keyboard) {
         typio_wl_keyboard_destroy(frontend->keyboard);
         frontend->keyboard = nullptr;

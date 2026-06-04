@@ -45,11 +45,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`typio_wl_input_method_handle_resume`** is gone; the resume-signal
   callback records `session_facts.suspend_gap_detected` directly, and the
   per-tick driver picks it up in the same iteration.
+- **Generic focused-app identity via `ext_foreign_toplevel_list_v1`.**
+  The niri-IPC adapter in `src/engine/niri/identity.c` is replaced by a
+  Wayland-bound provider in `src/frontend/foreign/identity.c` that
+  binds the staging `ext_foreign_toplevel_list_v1` protocol, tracks
+  every mapped toplevel's `app_id` / `title` / `identifier`, and uses
+  the most-recently-activated toplevel as the "current" identity for
+  per-app engine and mode restoration. The previous niri-specific JSON
+  parser and `niri_socket_request` are gone. The new provider works
+  for any wlroots-based compositor (sway, river, hyprland, labwc,
+  niri, etc.) that advertises the staging protocol; the stable
+  identity key now has the form
+  `ext_foreign_toplevel_list_v1:<app_id>` (or `:<identifier>` when
+  the compositor emits one).
 - **Source layout reorganised by responsibility.** `src/frontend/frontend.c`
   split into lifecycle, Wayland bind/unbind, and IPC runtime-state
-  serialisation. The niri and logind adapters moved from
-  `src/engine/` into `src/engine/niri/` and `src/engine/logind/`
-  respectively. The former `src/bridge/` directory was dissolved:
+  serialisation. The logind adapter moved from `src/engine/` into
+  `src/engine/logind/`. The former `src/bridge/` directory was dissolved:
   `boundary.{c,h}` (pure) moved to `src/engine/`, and
   `candidate_guard.{c,h}` (Wayland-aware) moved to `src/frontend/`.
   `src/input/` was split into `src/input/policy/` (pure: tracker,
@@ -68,6 +80,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`TypioWlDoneAction` enum** with `NOOP`, `FIRST_ACTIVATE`, `DEACTIVATE`,
   and `REACTIVATE` cases, replacing the old `TYPIO_WL_DONE_*` values from
   `lifecycle.h`.
+
+### Fixed
+
+- **Per-event trace logs were flooding DEBUG output.** `typio_wl_trace`
+  (the per-key, per-grab, per-session-event tracer) was hard-coded to
+  emit at `TYPIO_LOG_DEBUG`. At the default development verbosity this
+  pushed genuine diagnostic output off the screen. The trace string
+  already carried the literal `TRACE` prefix; the level is now aligned
+  with the prefix (`TYPIO_LOG_TRACE`).
+- **Tray icon disappeared after state changes.** The SNI
+  `NewIcon`/`NewStatus`/`NewToolTip`/`LayoutUpdated` signals were
+  sent with `dbus_connection_send` but never flushed. The tray's
+  connection is only dispatched on incoming traffic from the host,
+  so on a quiet connection the outgoing queue sat indefinitely and
+  the host never saw the update. An explicit
+  `dbus_connection_flush` now follows every signal send.
 
 ## [0.1.15] - 2026-06-04
 
