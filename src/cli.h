@@ -12,7 +12,6 @@ typedef struct TypioOptions {
     /** Engine directory from -E/--engine-dir, or NULL. The full
      *  engine_dirs list is assembled in the host before init. */
     const char *engine_dir_override;
-    bool list_only;
     bool verbose;
 } TypioOptions;
 

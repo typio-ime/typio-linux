@@ -39,7 +39,6 @@ void typio_print_help(const char *prog) {
     printf("  -c, --config DIR    Configuration directory\n");
     printf("  -d, --data DIR      Data directory\n");
     printf("  -E, --engine-dir DIR Engine directory\n");
-    printf("  -l, --list          List available engines and exit\n");
     printf("  -v, --verbose       Enable verbose logging\n");
     printf("  -h, --help          Show this help message\n");
     printf("  --version           Show version information\n");
@@ -50,7 +49,6 @@ int typio_parse_args(TypioOptions *options, int argc, char *argv[]) {
         {"config", required_argument, 0, 'c'},
         {"data", required_argument, 0, 'd'},
         {"engine-dir", required_argument, 0, 'E'},
-        {"list", no_argument, 0, 'l'},
         {"verbose", no_argument, 0, 'v'},
         {"help", no_argument, 0, 'h'},
         {"version", no_argument, 0, 'V'},
@@ -63,7 +61,7 @@ int typio_parse_args(TypioOptions *options, int argc, char *argv[]) {
         return 1;
     }
 
-    while ((opt = getopt_long(argc, argv, "c:d:E:lvhV", long_options, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "c:d:E:vhV", long_options, nullptr)) != -1) {
         switch (opt) {
             case 'c':
                 options->instance_config.config_dir = optarg;
@@ -73,9 +71,6 @@ int typio_parse_args(TypioOptions *options, int argc, char *argv[]) {
                 break;
             case 'E':
                 options->engine_dir_override = optarg;
-                break;
-            case 'l':
-                options->list_only = true;
                 break;
             case 'v':
                 options->verbose = true;

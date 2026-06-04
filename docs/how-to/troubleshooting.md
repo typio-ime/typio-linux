@@ -1,9 +1,12 @@
 # Troubleshooting
 
-## `typio --list` shows no engines
+## The daemon discovers no engines
 
-Most often the plugin is installed in a directory that is not on the search
-path, or the file name does not match the expected pattern. The scanner
+The daemon logs how many engines it loaded at startup (`Host loader
+registered N engine(s) from …`); run `typio --verbose` to see it. If the
+count is zero, the plugin is usually installed in a directory that is not on
+the search path, or the file name does not match the expected pattern. The
+scanner
 looks for `libtypio_engine_<name>.so` (underscores). Cargo produces this
 naming natively, so no rename should be needed.
 
@@ -16,8 +19,9 @@ ls /usr/local/lib/typio/engines
 
 The [basic engine](../../typio-engine-basic) is a separate repository: build it
 with `cargo build --release`, then install the `.so` into an engine directory.
-For development-only engines, run `typio --engine-dir DIR --list` or set
-`TYPIO_ENGINE_DIR=DIR`; `~/.local/lib/typio/engines` is not scanned by default.
+For development-only engines, start the daemon with `typio --engine-dir DIR`
+or set `TYPIO_ENGINE_DIR=DIR`; `~/.local/lib/typio/engines` is not scanned by
+default.
 
 See the [Engine Discovery Reference](../reference/engine-discovery.md) for the
 full search-path order and naming rules.
@@ -262,7 +266,6 @@ ldd /usr/local/bin/typio
 When reporting a problem, include:
 
 - `typio --version`
-- `typio --list`
-- full `--verbose` output
+- full `typio --verbose` output
 - compositor name and version
 - whether another input method was already running

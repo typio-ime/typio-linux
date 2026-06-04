@@ -669,60 +669,6 @@ bool typio_app_init(TypioApp *app,
     return true;
 }
 
-static void typio_list_engines_of_kind(TypioRegistry *registry,
-                                        char **engines,
-                                        size_t count,
-                                        const char *kind_label) {
-    for (size_t i = 0; i < count; i++) {
-        const TypioEngineInfo *info =
-            typio_registry_get_engine_info(registry, engines[i]);
-
-        if (!info) {
-            continue;
-        }
-
-        printf("  %s\n", info->name);
-        printf("    Display name: %s\n", info->display_name ? info->display_name : "");
-        printf("    Description:  %s\n", info->description ? info->description : "");
-        printf("    Author:       %s\n", info->author ? info->author : "");
-        printf("    Type:         %s\n", kind_label);
-        printf("    Language:     %s\n", info->language ? info->language : "");
-        printf("\n");
-        typio_engine_info_free((TypioEngineInfo *)info);
-    }
-}
-
-void typio_app_list_engines(TypioApp *app) {
-    TypioRegistry *registry;
-    size_t kb_count = 0;
-    size_t voice_count = 0;
-    char **keyboards;
-    char **voices;
-
-    if (!app || !app->instance) {
-        printf("No engine registry available\n");
-        return;
-    }
-
-    registry = typio_instance_get_registry(app->instance);
-    if (!registry) {
-        printf("No engine registry available\n");
-        return;
-    }
-
-    keyboards = typio_registry_list_keyboards(registry, &kb_count);
-    voices = typio_registry_list_voices(registry, &voice_count);
-
-    printf("Available engines (%zu keyboards, %zu voice):\n\n",
-           kb_count, voice_count);
-
-    typio_list_engines_of_kind(registry, keyboards, kb_count, "Keyboard");
-    typio_list_engines_of_kind(registry, voices, voice_count, "Voice");
-
-    typio_free_string_array(keyboards, kb_count);
-    typio_free_string_array(voices, voice_count);
-}
-
 static void typio_init_ipc_bus(TypioApp *app) {
     app->ipc_bus = typio_ipc_bus_new(app->instance);
     if (app->ipc_bus) {

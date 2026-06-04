@@ -47,9 +47,12 @@ only enables the host-side PipeWire capture infrastructure.
 
 ```sh
 export LD_LIBRARY_PATH=/path/to/libtypio/target/release:$LD_LIBRARY_PATH
-typio --list                   # list discovered engines
-typio --verbose                # run with debug logging
+typio --verbose                # run the daemon with debug logging
 ```
+
+`typio` is the daemon. Inspecting and controlling a running instance (engines,
+config, status) is the job of the separate `typioctl` client, which talks to
+the daemon over its UDS socket.
 
 Installed packages start the daemon through the systemd user service:
 
@@ -64,5 +67,4 @@ with `cargo build --release` and install the `.so`
 (`libtypio_engine_*.so`) into that directory. For development and testing,
 pass `--engine-dir DIR` or set `TYPIO_ENGINE_DIR`.
 
-Control it from a separate terminal with the [typioctl](../typioctl)
-client (`typioctl daemon status`, `typioctl engine list`, ...).
+Control it from a separate terminal with the [typioctl](../typioctl) client.

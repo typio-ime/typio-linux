@@ -30,12 +30,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (options.list_only) {
-        typio_app_list_engines(&app);
-        typio_app_shutdown(&app);
-        return 0;
-    }
-
     exit_code = typio_app_run(&app);
     typio_app_shutdown(&app);
     return typio_app_finish(&app, exit_code);

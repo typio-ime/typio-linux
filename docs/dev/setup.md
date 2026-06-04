@@ -129,9 +129,11 @@ you must add that **same** directory to the dynamic linker path at runtime:
 
 ```bash
 export LD_LIBRARY_PATH=../libtypio/target/release:${LD_LIBRARY_PATH}
-./build/src/typio --list
 ./build/src/typio --verbose
 ```
+
+The verbose log reports how many engines were discovered at startup
+(`Host loader registered N engine(s) from …`).
 
 For plugin engine work, point the daemon at a specific engine directory
 (overriding the default scan list). Once you've installed an engine (see

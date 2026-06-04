@@ -41,7 +41,6 @@ bool typio_app_init(TypioApp *app,
                            const TypioInstanceConfig *config,
                            bool verbose,
                            char *argv[]);
-void typio_app_list_engines(TypioApp *app);
 int typio_app_run(TypioApp *app);
 void typio_app_shutdown(TypioApp *app);
 int typio_app_finish(TypioApp *app, int exit_code);
