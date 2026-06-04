@@ -67,30 +67,32 @@ TEST(cleans_up_orphan_release_for_enter_without_modifiers) {
         TYPIO_MOD_NONE, false));
 }
 
-TEST(resets_carried_modifiers_outside_deactivating) {
+TEST(resets_carried_modifiers_outside_soft_pause) {
     ASSERT(typio_wl_boundary_bridge_should_reset_carried_modifiers(
-        TYPIO_WL_PHASE_ACTIVE, true));
+        TYPIO_WL_GRAB_WANT_YES, true));
     ASSERT(typio_wl_boundary_bridge_should_reset_carried_modifiers(
-        TYPIO_WL_PHASE_ACTIVATING, true));
+        TYPIO_WL_GRAB_WANT_NONE, true));
     ASSERT(!typio_wl_boundary_bridge_should_reset_carried_modifiers(
-        TYPIO_WL_PHASE_DEACTIVATING, true));
+        TYPIO_WL_GRAB_WANT_SOFT_PAUSE, true));
     ASSERT(!typio_wl_boundary_bridge_should_reset_carried_modifiers(
-        TYPIO_WL_PHASE_INACTIVE, false));
+        TYPIO_WL_GRAB_WANT_NONE, false));
+    ASSERT(!typio_wl_boundary_bridge_should_reset_carried_modifiers(
+        TYPIO_WL_GRAB_WANT_YES, false));
 }
 
-TEST(carries_modifiers_only_for_owned_deactivation_with_mask) {
+TEST(carries_modifiers_only_for_owned_soft_pause_with_mask) {
     ASSERT(typio_wl_boundary_bridge_should_carry_modifiers(
-        TYPIO_WL_PHASE_DEACTIVATING, true, 1, 0, 0));
+        TYPIO_WL_GRAB_WANT_SOFT_PAUSE, true, 1, 0, 0));
     ASSERT(typio_wl_boundary_bridge_should_carry_modifiers(
-        TYPIO_WL_PHASE_DEACTIVATING, true, 0, 1, 0));
+        TYPIO_WL_GRAB_WANT_SOFT_PAUSE, true, 0, 1, 0));
     ASSERT(typio_wl_boundary_bridge_should_carry_modifiers(
-        TYPIO_WL_PHASE_DEACTIVATING, true, 0, 0, 1));
+        TYPIO_WL_GRAB_WANT_SOFT_PAUSE, true, 0, 0, 1));
     ASSERT(!typio_wl_boundary_bridge_should_carry_modifiers(
-        TYPIO_WL_PHASE_ACTIVE, true, 1, 0, 0));
+        TYPIO_WL_GRAB_WANT_YES, true, 1, 0, 0));
     ASSERT(!typio_wl_boundary_bridge_should_carry_modifiers(
-        TYPIO_WL_PHASE_DEACTIVATING, false, 1, 0, 0));
+        TYPIO_WL_GRAB_WANT_SOFT_PAUSE, false, 1, 0, 0));
     ASSERT(!typio_wl_boundary_bridge_should_carry_modifiers(
-        TYPIO_WL_PHASE_DEACTIVATING, true, 0, 0, 0));
+        TYPIO_WL_GRAB_WANT_SOFT_PAUSE, true, 0, 0, 0));
 }
 
 int main(void) {
@@ -99,8 +101,8 @@ int main(void) {
     run_test_cleans_up_orphan_release_for_shortcut_modifiers();
     run_test_cleans_up_orphan_release_after_modifier_was_seen();
     run_test_cleans_up_orphan_release_for_enter_without_modifiers();
-    run_test_resets_carried_modifiers_outside_deactivating();
-    run_test_carries_modifiers_only_for_owned_deactivation_with_mask();
+    run_test_resets_carried_modifiers_outside_soft_pause();
+    run_test_carries_modifiers_only_for_owned_soft_pause_with_mask();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;

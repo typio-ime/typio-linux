@@ -7,7 +7,7 @@
  * and guard / tracking utilities live in input/tracker.c.  Only grab
  * lifecycle and the top-level Wayland dispatcher remain here.
  *
- * @see docs/explanation/timing-model.md
+ * @see docs/explanation/input-method-session.md
  * @see ADR-003: Keyboard grab lifecycle
  */
 
@@ -56,7 +56,7 @@ static void trace_key(TypioWlKeyboard *kb, const char *stage,
         typio_wl_key_tracking_state_name(state),
         modifiers, kb->physical_modifiers, xkb_mods,
         key_get_generation(kb->frontend, key),
-        kb->frontend->active_key_generation,
+        kb->frontend->tracker->active_generation,
         unicode_desc, detail ? detail : "-");
 }
 
@@ -65,7 +65,8 @@ static void trace_key(TypioWlKeyboard *kb, const char *stage,
 static const char *guard_reason(TypioWlFrontend *fe) {
     if (!fe) return "no_frontend";
     if (!fe->session) return "no_session";
-    if (!typio_wl_lifecycle_phase_allows_key_events(fe->lifecycle_phase))
+    TypioWlActualState actual = typio_wl_session_observe(fe);
+    if (!typio_wl_session_can_route_keys(&actual))
         return "lifecycle_not_active";
     if (!fe->session->ctx) return "no_context";
     if (!typio_input_context_is_focused(fe->session->ctx)) return "not_focused";
@@ -83,10 +84,11 @@ static void guard_trigger_failsafe(TypioWlKeyboard *kb, const char *reason,
                                    uint32_t modifiers) {
     if (!kb || !kb->frontend) return;
     TypioWlFrontend *fe = kb->frontend;
+    TypioWlActualState actual = typio_wl_session_observe(fe);
     typio_log_error(
         "Guard stuck: reason=%s phase=%s key=%u keysym=0x%x mods=0x%x streak=%" PRIu64
         "; releasing grab and stopping",
-        reason, typio_wl_lifecycle_phase_name(fe->lifecycle_phase),
+        reason, typio_wl_grab_resource_state_name(actual.grab),
         key, keysym, modifiers, fe->guard_reject_press_streak);
     typio_dump_recent_log();
     typio_wl_keyboard_release_grab(kb);
@@ -102,7 +104,8 @@ static void guard_note_reject(TypioWlKeyboard *kb, uint32_t key,
 
     typio_logf(state == WL_KEYBOARD_KEY_STATE_PRESSED ? TYPIO_LOG_WARNING : TYPIO_LOG_DEBUG,
         "Key rejected: reason=%s phase=%s key=%u keysym=0x%x mods=0x%x",
-        reason, typio_wl_lifecycle_phase_name(fe->lifecycle_phase),
+        reason, typio_wl_grab_resource_state_name(
+            typio_wl_session_observe(fe).grab),
         key, keysym, modifiers);
 
     if (state != WL_KEYBOARD_KEY_STATE_PRESSED) return;
@@ -116,9 +119,11 @@ static void guard_note_reject(TypioWlKeyboard *kb, uint32_t key,
         fe->guard_reject_press_streak++;
     }
 
-    if (fe->guard_reject_press_streak >= GUARD_FAILSAFE_THRESHOLD &&
-        fe->lifecycle_phase != TYPIO_WL_PHASE_ACTIVATING) {
-        guard_trigger_failsafe(kb, reason, key, keysym, modifiers);
+    if (fe->guard_reject_press_streak >= GUARD_FAILSAFE_THRESHOLD) {
+        TypioWlActualState actual = typio_wl_session_observe(fe);
+        if (!typio_wl_session_is_transitioning(&actual)) {
+            guard_trigger_failsafe(kb, reason, key, keysym, modifiers);
+        }
     }
 }
 
@@ -126,8 +131,8 @@ static void guard_note_reject(TypioWlKeyboard *kb, uint32_t key,
 
 static void tracking_reset(TypioWlFrontend *fe) {
     if (!fe) return;
-    typio_wl_key_tracking_reset(fe->key_states, TYPIO_WL_MAX_TRACKED_KEYS);
-    typio_wl_key_tracking_reset_generations(fe->key_generations,
+    typio_wl_key_tracking_reset(fe->tracker->states, TYPIO_WL_MAX_TRACKED_KEYS);
+    typio_wl_key_tracking_reset_generations(fe->tracker->generations,
                                             TYPIO_WL_MAX_TRACKED_KEYS);
     guard_reset(fe);
 }
@@ -201,11 +206,11 @@ TypioWlKeyboard *typio_wl_keyboard_create(TypioWlFrontend *frontend) {
     TypioWlKeyboard *kb = calloc(1, sizeof(TypioWlKeyboard));
     if (!kb) return nullptr;
 
-    frontend->active_key_generation++;
-    if (frontend->active_key_generation == 0) frontend->active_key_generation = 1;
-    frontend->active_generation_owned_keys = false;
-    frontend->active_generation_vk_dirty = false;
-    atomic_store(&frontend->watchdog_armed, true);
+    frontend->tracker->active_generation++;
+    if (frontend->tracker->active_generation == 0) frontend->tracker->active_generation = 1;
+    frontend->tracker->active_generation_owned_keys = false;
+    if (frontend->vk) frontend->vk->active_generation_dirty = false;
+    atomic_store(&frontend->watchdog->armed, true);
     tracking_reset(frontend);
 
     kb->frontend = frontend;
@@ -243,7 +248,7 @@ fail:
 
 void typio_wl_keyboard_destroy(TypioWlKeyboard *keyboard) {
     if (!keyboard) return;
-    atomic_store(&keyboard->frontend->watchdog_armed, false);
+    atomic_store(&keyboard->frontend->watchdog->armed, false);
     typio_wl_vk_release_forwarded_keys(keyboard->frontend,
                                         typio_wl_key_tracking_state_name);
     typio_wl_keyboard_release_grab(keyboard);
@@ -341,7 +346,7 @@ static void on_key(void *data,
         modifiers = typio_wl_modifier_policy_effective_modifiers(
             keyboard->physical_modifiers,
             typio_wl_xkb_effective_modifiers(keyboard),
-            frontend->active_generation_owned_keys,
+            frontend->tracker->active_generation_owned_keys,
             keysym, state);
 
     /* Emergency exit shortcut */
@@ -353,7 +358,8 @@ static void on_key(void *data,
         typio_log_warning(
             "Emergency exit: key=%u keysym=0x%x mods=0x%x phase=%s",
             key, keysym, modifiers,
-            typio_wl_lifecycle_phase_name(frontend->lifecycle_phase));
+            typio_wl_grab_resource_state_name(
+                typio_wl_session_observe(frontend).grab));
         typio_dump_recent_log();
         typio_wl_keyboard_release_grab(keyboard);
         typio_wl_frontend_stop(frontend);
@@ -367,7 +373,8 @@ static void on_key(void *data,
                   state == WL_KEYBOARD_KEY_STATE_PRESSED ? "guard-reject-press" : "guard-reject-release",
                   key, keysym, modifiers, unicode,
                   key_get_state(frontend, key),
-                  typio_wl_lifecycle_phase_name(frontend->lifecycle_phase));
+                  typio_wl_grab_resource_state_name(
+                      typio_wl_session_observe(frontend).grab));
         if (state == WL_KEYBOARD_KEY_STATE_RELEASED &&
             keyboard->repeating && keyboard->repeat_key == key)
             typio_wl_keyboard_repeat_stop(keyboard);

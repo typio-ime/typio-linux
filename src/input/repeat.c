@@ -23,7 +23,7 @@
 static TypioKeyTrackState keyboard_repeat_key_state(TypioWlFrontend *frontend,
                                                     uint32_t key) {
     return key < TYPIO_WL_MAX_TRACKED_KEYS
-        ? frontend->key_states[key]
+        ? frontend->tracker->states[key]
         : TYPIO_KEY_TRACK_IDLE;
 }
 
@@ -62,8 +62,8 @@ static void keyboard_repeat_trace(TypioWlKeyboard *keyboard,
                    modifiers,
                    keyboard->physical_modifiers,
                    xkb_mods,
-                   key < TYPIO_WL_MAX_TRACKED_KEYS ? keyboard->frontend->key_generations[key] : 0,
-                   keyboard->frontend->active_key_generation,
+                   key < TYPIO_WL_MAX_TRACKED_KEYS ? keyboard->frontend->tracker->generations[key] : 0,
+                   keyboard->frontend->tracker->active_generation,
                    unicode_desc,
                    detail ? detail : "-");
 }
@@ -126,8 +126,8 @@ void typio_wl_keyboard_dispatch_repeat(TypioWlKeyboard *keyboard) {
     if (!keyboard || !keyboard->repeating || keyboard->repeat_timer_fd < 0)
         return;
 
-    if (!typio_wl_lifecycle_phase_allows_key_events(
-            keyboard->frontend->lifecycle_phase)) {
+    TypioWlActualState actual = typio_wl_session_observe(keyboard->frontend);
+    if (!typio_wl_session_can_route_keys(&actual)) {
         typio_wl_keyboard_repeat_stop(keyboard);
         return;
     }
@@ -245,7 +245,7 @@ void typio_wl_keyboard_dispatch_repeat(TypioWlKeyboard *keyboard) {
                                     WL_KEYBOARD_KEY_STATE_PRESSED,
                                     event.unicode);
             if (keyboard->repeat_key < TYPIO_WL_MAX_TRACKED_KEYS)
-                keyboard->frontend->key_states[keyboard->repeat_key] = TYPIO_KEY_TRACK_FORWARDED;
+                keyboard->frontend->tracker->states[keyboard->repeat_key] = TYPIO_KEY_TRACK_FORWARDED;
         }
     }
 }

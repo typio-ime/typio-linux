@@ -11,7 +11,7 @@
 #include "tracker.h"
 #include "typio/abi/shortcut.h"
 #include "shortcut.h"
-#include "lifecycle.h"
+#include "engine/session_controller.h"
 #include "repeat.h"
 #include "identity.h"
 #include "panel.h"
@@ -58,6 +58,12 @@ typedef struct TypioWlSession TypioWlSession;
 typedef struct TypioWlKeyboard TypioWlKeyboard;
 typedef struct TypioPanel TypioPanel;
 typedef struct TypioWlOutput TypioWlOutput;
+typedef struct TypioWlPanelCoordinator TypioWlPanelCoordinator;
+typedef struct TypioWlVirtualKeyboard TypioWlVirtualKeyboard;
+typedef struct TypioWlWatchdog TypioWlWatchdog;
+typedef struct TypioWlKeyTracker TypioWlKeyTracker;
+typedef struct TypioWlIndicator TypioWlIndicator;
+typedef struct TypioWlConfigWatcher TypioWlConfigWatcher;
 
 typedef enum TypioWlUiOwner {
     TYPIO_WL_UI_OWNER_NONE = 0,
@@ -225,35 +231,12 @@ struct TypioWlFrontend {
     struct wp_viewporter *viewporter;
 
     /* Virtual keyboard for forwarding unhandled keys */
-    struct zwp_virtual_keyboard_manager_v1 *vk_manager;
-    struct zwp_virtual_keyboard_v1 *virtual_keyboard;
-    TypioWlVirtualKeyboardState virtual_keyboard_state;
-    bool virtual_keyboard_has_keymap;
-    uint32_t virtual_keyboard_keymap_generation;
-    uint64_t virtual_keyboard_drop_count;
-    uint64_t virtual_keyboard_keymap_cancel_count;
-    uint64_t virtual_keyboard_keymap_cancel_window_start_ms;
-    uint64_t virtual_keyboard_state_since_ms;
-    uint64_t virtual_keyboard_last_keymap_ms;
-    uint64_t virtual_keyboard_last_forward_ms;
-    uint64_t virtual_keyboard_keymap_deadline_ms;
+    TypioWlVirtualKeyboard *vk;
     uint64_t guard_reject_press_streak;
     uint64_t guard_reject_press_window_start_ms;
-    TYPIO_ATOMIC(uint64_t) watchdog_heartbeat_ms;
-    TYPIO_ATOMIC(uint64_t) watchdog_stage_since_ms;
-    TYPIO_ATOMIC(bool) watchdog_stop;
-    TYPIO_ATOMIC(bool) watchdog_armed;
-    TYPIO_ATOMIC(int) watchdog_loop_stage;
-    pthread_t watchdog_thread;
-    bool watchdog_thread_started;
-    TypioKeyTrackState key_states[TYPIO_WL_MAX_TRACKED_KEYS];
-    uint32_t key_generations[TYPIO_WL_MAX_TRACKED_KEYS];
-    uint32_t active_key_generation;
+    TypioWlWatchdog *watchdog;
+    TypioWlKeyTracker *tracker;
     uint64_t trace_sequence;
-    bool active_generation_owned_keys;
-    bool active_generation_vk_dirty;
-    bool carried_vk_modifiers;
-
     /* Session and keyboard state */
     TypioWlSession *session;
     TypioWlKeyboard *keyboard;
@@ -298,27 +281,28 @@ struct TypioWlFrontend {
 
     /* Event loop state */
     volatile bool running;
-    TypioWlLifecyclePhase lifecycle_phase;
-    /* Set when an input-method `activate` arrives; consumed and cleared by the
-     * next `done` to tell a genuine (re)activation from a text-state update. */
-    bool activate_seen;
 
-    /* Reconciler: monotonic timestamp when the declared phase first
-     * diverged from observed reality, or 0 when they agree. The reconciler
-     * forces a recovery once a divergence outlives its threshold. */
-    uint64_t reconcile_divergence_since_ms;
+    /* Session controller: raw input facts recorded this tick.
+     * Written by input_method event handlers, consumed by the per-tick driver
+     * in event_loop.c, then cleared. */
+    TypioWlInputFacts session_facts;
+    /* Previous tick's desired state, used by reduce() for edge detection
+     * on focus_in / focus_out / reactivate. */
+    TypioWlDesiredState session_prev_desired;
 
+    TypioWlPanelCoordinator *panel_coord;
+    TypioWlConfigWatcher *config;
+    TypioWlIndicator *indicator;
+
+    /* Configurable shortcut bindings */
+    TypioShortcutConfig shortcuts;
+
+    /* Error message buffer */
+    char error_msg[256];
+};
+
+struct TypioWlPanelCoordinator {
     TypioWlPanelScheduleState panel_schedule_state;
-    int config_watch_fd;
-    int config_dir_watch;
-    int config_engines_watch;
-    int config_reload_timer_fd;
-    bool config_reload_pending;
-
-    int indicator_timer_fd;
-    bool indicator_active;
-    uint64_t last_key_activity_ms;
-    uint64_t last_indicator_ms;
     uint64_t position_anchor_generation;
     uint64_t position_anchor_ready_generation;
     uint64_t position_anchor_probe_generation;
@@ -328,25 +312,72 @@ struct TypioWlFrontend {
      * rect when an anchor probe times out (terminals do not re-emit the rect on
      * the no-op probe commit, unlike browsers). */
     bool position_anchor_has_caret;
-
-    #define TYPIO_POSITIONED_UI_LABEL_CAP 256
     bool positioned_ui_pending;
     TypioWlUiOwner positioned_ui_pending_owner;
     uint64_t positioned_ui_pending_since_ms;
+    #define TYPIO_POSITIONED_UI_LABEL_CAP 256
     char positioned_ui_pending_label[TYPIO_POSITIONED_UI_LABEL_CAP];
+    TypioWlFrontend *frontend;
+};
 
+struct TypioWlVirtualKeyboard {
+    struct zwp_virtual_keyboard_manager_v1 *manager;
+    struct zwp_virtual_keyboard_v1 *vk;
+    TypioWlVirtualKeyboardState state;
+    bool has_keymap;
+    uint32_t keymap_generation;
+    uint64_t drop_count;
+    uint64_t keymap_cancel_count;
+    uint64_t keymap_cancel_window_start_ms;
+    uint64_t state_since_ms;
+    uint64_t last_keymap_ms;
+    uint64_t last_forward_ms;
+    uint64_t keymap_deadline_ms;
+    bool active_generation_dirty;
+    bool carried_modifiers;
+    TypioWlFrontend *frontend;
+};
+
+struct TypioWlWatchdog {
+    TYPIO_ATOMIC(uint64_t) heartbeat_ms;
+    TYPIO_ATOMIC(uint64_t) stage_since_ms;
+    TYPIO_ATOMIC(bool) stop;
+    TYPIO_ATOMIC(bool) armed;
+    TYPIO_ATOMIC(int) loop_stage;
+    pthread_t thread;
+    bool thread_started;
+    TypioWlFrontend *frontend;
+};
+
+struct TypioWlKeyTracker {
+    TypioKeyTrackState states[TYPIO_WL_MAX_TRACKED_KEYS];
+    uint32_t generations[TYPIO_WL_MAX_TRACKED_KEYS];
+    uint32_t active_generation;
+    bool active_generation_owned_keys;
+    TypioWlFrontend *frontend;
+};
+
+struct TypioWlIndicator {
+    int timer_fd;
+    bool active;
+    uint64_t last_key_activity_ms;
+    uint64_t last_indicator_ms;
     #define TYPIO_INDICATOR_MODE_CACHE_CAP 8
     struct {
         char engine[64];
         char display_label[64];
-    } indicator_mode_cache[TYPIO_INDICATOR_MODE_CACHE_CAP];
-    size_t indicator_mode_cache_count;
+    } mode_cache[TYPIO_INDICATOR_MODE_CACHE_CAP];
+    size_t mode_cache_count;
+    TypioWlFrontend *frontend;
+};
 
-    /* Configurable shortcut bindings */
-    TypioShortcutConfig shortcuts;
-
-    /* Error message buffer */
-    char error_msg[256];
+struct TypioWlConfigWatcher {
+    int watch_fd;
+    int dir_watch;
+    int engines_watch;
+    int reload_timer_fd;
+    bool reload_pending;
+    TypioWlFrontend *frontend;
 };
 
 struct TypioWlOutput {
@@ -407,9 +438,6 @@ void typio_wl_frontend_destroy_indicator(TypioWlFrontend *frontend);
 
 /* Input method functions (input_method.c) */
 void typio_wl_input_method_setup(TypioWlFrontend *frontend);
-void typio_wl_input_method_handle_resume(TypioWlFrontend *frontend,
-                                         const char *reason,
-                                         uint64_t sleep_ms);
 
 /* Reconnect after a lost Wayland display (frontend.c). Tears down and
  * re-establishes all Wayland objects with capped backoff, preserving engine

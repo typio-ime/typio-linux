@@ -10,8 +10,7 @@
  * threshold boundaries) that hand-written cases tend to miss.
  */
 
-#include "lifecycle_state.h"
-#include "reconciler.h"
+#include "session_controller.h"
 #include "backoff.h"
 #include "resume_model.h"
 
@@ -55,78 +54,106 @@ static uint32_t rng_below(uint32_t bound) {
 
 #define ITERATIONS 20000
 
-/* ---- reconcile_model -------------------------------------------------- */
+/* ---- session_controller pure predicates ------------------------------ */
 /*
- * Property: typio_wl_reconcile_decide matches an independent re-derivation
- * of the debounced divergence rule across long random sequences, and the
- * structural invariants (REPAIR only at/after threshold; timer reset on OK
- * and REPAIR) always hold.
+ * Property: every pure predicate is a total function of the actual state
+ * and an independent re-derivation must agree, across the full Cartesian
+ * product of small axis spaces. The exhaustive enumeration over the
+ * 2*2*4 = 16 input-context/grab states is the strongest possible test for
+ * a branch-only function: if it ever disagrees, the spec and the code have
+ * drifted.
  */
-TEST(reconcile_decide_matches_spec) {
-    for (uint32_t seed = 1; seed <= 8; ++seed) {
-        rng_state = seed * 2654435761u;
-        uint64_t lib_since = 0;     /* state owned by the library */
-        uint64_t spec_since = 0;    /* our independent shadow */
-        uint64_t now = 0;
-        const uint64_t threshold = 1000 + rng_below(3000);
-
-        for (int i = 0; i < ITERATIONS; ++i) {
-            now += rng_below(800); /* non-decreasing clock, sometimes ties */
-            bool agree = (rng_below(3) == 0); /* skew toward divergence */
-
-            TypioWlReconcileAction got =
-                typio_wl_reconcile_decide(agree, now, &lib_since, threshold);
-
-            /* Re-derive the expected action + shadow state. */
-            TypioWlReconcileAction want;
-            if (agree) {
-                want = TYPIO_WL_RECONCILE_OK;
-                spec_since = 0;
-            } else if (spec_since == 0) {
-                want = TYPIO_WL_RECONCILE_ARM;
-                spec_since = now;
-            } else if (now >= spec_since && now - spec_since >= threshold) {
-                want = TYPIO_WL_RECONCILE_REPAIR;
-                spec_since = 0;
-            } else {
-                want = TYPIO_WL_RECONCILE_WAIT;
-            }
-
+TEST(can_route_keys_exhaustive) {
+    for (int focused = 0; focused < 2; ++focused) {
+        for (int g = 0; g < 4; ++g) {
+            TypioWlActualState actual = {
+                .ic_focused = (bool)focused,
+                .grab = (TypioWlGrabResourceState)g,
+            };
+            bool got = typio_wl_session_can_route_keys(&actual);
+            /* Spec: routed iff focused AND grab is READY. */
+            bool want = focused && g == TYPIO_WL_GRAB_RES_READY;
             ASSERT(got == want);
-            ASSERT(lib_since == spec_since);
-
-            /* Structural invariants independent of the shadow. */
-            if (got == TYPIO_WL_RECONCILE_OK || got == TYPIO_WL_RECONCILE_REPAIR)
-                ASSERT(lib_since == 0);
-            if (got == TYPIO_WL_RECONCILE_ARM)
-                ASSERT(lib_since == now);
         }
     }
 }
 
-/* A divergence that persists without interruption must REPAIR within one
- * threshold window — the reconciler can never get permanently stuck. */
-TEST(reconcile_always_converges_under_persistent_divergence) {
-    for (uint32_t seed = 1; seed <= 8; ++seed) {
-        rng_state = seed * 40503u + 7u;
-        uint64_t since = 0;
-        uint64_t now = 1; /* avoid 0 so ARM's since!=0 */
-        const uint64_t threshold = 500 + rng_below(2000);
-        int saw_repair = 0;
+TEST(can_route_modifiers_exhaustive) {
+    for (int focused = 0; focused < 2; ++focused) {
+        for (int g = 0; g < 4; ++g) {
+            TypioWlActualState actual = {
+                .ic_focused = (bool)focused,
+                .grab = (TypioWlGrabResourceState)g,
+            };
+            bool got = typio_wl_session_can_route_modifiers(&actual);
+            /* Spec: routed iff grab is not ABSENT and not BROKEN. */
+            bool want = g != TYPIO_WL_GRAB_RES_ABSENT &&
+                        g != TYPIO_WL_GRAB_RES_BROKEN;
+            ASSERT(got == want);
+        }
+    }
+}
 
-        /* Feed only disagreements; with a positive time step each loop,
-         * REPAIR must occur and then re-arm. */
-        for (int i = 0; i < 64; ++i) {
-            now += threshold; /* guarantee threshold crossed each step after arm */
-            TypioWlReconcileAction a =
-                typio_wl_reconcile_decide(false, now, &since, threshold);
-            ASSERT(a == TYPIO_WL_RECONCILE_ARM || a == TYPIO_WL_RECONCILE_REPAIR);
-            if (a == TYPIO_WL_RECONCILE_REPAIR) {
-                saw_repair = 1;
-                ASSERT(since == 0);
+TEST(is_transitioning_exhaustive) {
+    for (int focused = 0; focused < 2; ++focused) {
+        for (int g = 0; g < 4; ++g) {
+            TypioWlActualState actual = {
+                .ic_focused = (bool)focused,
+                .grab = (TypioWlGrabResourceState)g,
+            };
+            bool got = typio_wl_session_is_transitioning(&actual);
+            /* Spec: transitioning iff focused AND grab is ABSENT, NEEDS_KEYMAP,
+             * or BROKEN. The "focused but no grab" case is the start of the
+             * activation handshake. */
+            bool want = focused &&
+                        (g == TYPIO_WL_GRAB_RES_ABSENT ||
+                         g == TYPIO_WL_GRAB_RES_NEEDS_KEYMAP ||
+                         g == TYPIO_WL_GRAB_RES_BROKEN);
+            ASSERT(got == want);
+        }
+    }
+}
+
+/* Property: classify_done is total and matches the documented truth table
+ * over all 2^3 = 8 (was_active, now_active, activate_seen) combinations. */
+TEST(classify_done_exhaustive) {
+    static const TypioWlDoneAction truth[2][2][2] = {
+        /* was_active=false */
+        { /* now_active=false */ { TYPIO_WL_DONE_NOOP,           TYPIO_WL_DONE_NOOP },
+          /* now_active=true  */ { TYPIO_WL_DONE_FIRST_ACTIVATE, TYPIO_WL_DONE_FIRST_ACTIVATE } },
+        /* was_active=true */
+        { /* now_active=false */ { TYPIO_WL_DONE_DEACTIVATE,     TYPIO_WL_DONE_DEACTIVATE },
+          /* now_active=true  */ { TYPIO_WL_DONE_NOOP,           TYPIO_WL_DONE_REACTIVATE } },
+    };
+    for (int w = 0; w < 2; ++w) {
+        for (int n = 0; n < 2; ++n) {
+            for (int a = 0; a < 2; ++a) {
+                TypioWlDoneAction got = typio_wl_session_classify_done(
+                    (bool)w, (bool)n, (bool)a);
+                ASSERT(got == truth[w][n][a]);
             }
         }
-        ASSERT(saw_repair);
+    }
+}
+
+/* Property: the predicates are mutually consistent with each other.
+ * can_route_keys ⇒ !is_transitioning (we never route while transitioning). */
+TEST(predicates_are_mutually_consistent) {
+    for (int focused = 0; focused < 2; ++focused) {
+        for (int g = 0; g < 4; ++g) {
+            TypioWlActualState actual = {
+                .ic_focused = (bool)focused,
+                .grab = (TypioWlGrabResourceState)g,
+            };
+            bool routed = typio_wl_session_can_route_keys(&actual);
+            bool transit = typio_wl_session_is_transitioning(&actual);
+            if (routed)
+                ASSERT(!transit);
+            /* The focus-required pair is also consistent: no route when !focused. */
+            if (!focused) {
+                ASSERT(!routed);
+            }
+        }
     }
 }
 
@@ -196,53 +223,6 @@ TEST(resume_detector_respects_cooldown_window) {
     }
 }
 
-/* ---- lifecycle_state (exhaustive over the small axis space) ---------- */
-TEST(lifecycle_projection_and_agreement_exhaustive) {
-    const TypioWlConnState conns[] = { TYPIO_WL_CONN_DISCONNECTED, TYPIO_WL_CONN_CONNECTED };
-    const TypioWlFocusState focuses[] = { TYPIO_WL_FOCUS_UNFOCUSED, TYPIO_WL_FOCUS_FOCUSED };
-    const TypioWlGrabState grabs[] = { TYPIO_WL_GRAB_NONE, TYPIO_WL_GRAB_PENDING_KEYMAP, TYPIO_WL_GRAB_READY };
-    const TypioWlCompState comps[] = { TYPIO_WL_COMP_IDLE, TYPIO_WL_COMP_COMPOSING };
-    const TypioWlLifecyclePhase phases[] = {
-        TYPIO_WL_PHASE_INACTIVE, TYPIO_WL_PHASE_ACTIVATING,
-        TYPIO_WL_PHASE_ACTIVE, TYPIO_WL_PHASE_DEACTIVATING
-    };
-
-    for (size_t a = 0; a < 2; ++a)
-    for (size_t b = 0; b < 2; ++b)
-    for (size_t c = 0; c < 3; ++c)
-    for (size_t d = 0; d < 2; ++d) {
-        TypioWlLifecycleState s = {
-            .conn = conns[a], .focus = focuses[b],
-            .grab = grabs[c], .comp = comps[d]
-        };
-
-        TypioWlLifecyclePhase projected = typio_wl_lifecycle_project_phase(&s);
-
-        /* Independent re-derivation of the projection. */
-        TypioWlLifecyclePhase want;
-        if (s.conn != TYPIO_WL_CONN_CONNECTED || s.focus != TYPIO_WL_FOCUS_FOCUSED)
-            want = TYPIO_WL_PHASE_INACTIVE;
-        else if (s.grab == TYPIO_WL_GRAB_READY)
-            want = TYPIO_WL_PHASE_ACTIVE;
-        else
-            want = TYPIO_WL_PHASE_ACTIVATING;
-        ASSERT(projected == want);
-        /* The projection is never a transient phase. */
-        ASSERT(projected != TYPIO_WL_PHASE_DEACTIVATING);
-
-        for (size_t p = 0; p < 4; ++p) {
-            TypioWlLifecyclePhase declared = phases[p];
-            bool agrees = typio_wl_lifecycle_state_agrees(&s, declared);
-            bool want_agree =
-                (declared == TYPIO_WL_PHASE_ACTIVATING ||
-                 declared == TYPIO_WL_PHASE_DEACTIVATING)
-                    ? true
-                    : (projected == declared);
-            ASSERT(agrees == want_agree);
-        }
-    }
-}
-
 /* ---- reconnect_backoff ---------------------------------------------- */
 TEST(backoff_is_monotonic_and_bounded_random) {
     for (int i = 0; i < ITERATIONS; ++i) {
@@ -262,12 +242,14 @@ TEST(backoff_is_monotonic_and_bounded_random) {
 int main(void) {
     printf("Running state machine property tests:\n");
 
-    run_test_reconcile_decide_matches_spec();
-    run_test_reconcile_always_converges_under_persistent_divergence();
+    run_test_can_route_keys_exhaustive();
+    run_test_can_route_modifiers_exhaustive();
+    run_test_is_transitioning_exhaustive();
+    run_test_classify_done_exhaustive();
+    run_test_predicates_are_mutually_consistent();
     run_test_resume_gap_matches_spec();
     run_test_resume_cooldown_matches_spec();
     run_test_resume_detector_respects_cooldown_window();
-    run_test_lifecycle_projection_and_agreement_exhaustive();
     run_test_backoff_is_monotonic_and_bounded_random();
 
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);

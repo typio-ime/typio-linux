@@ -6,7 +6,7 @@
 #include "trace.h"
 
 #include "internal.h"
-#include "lifecycle.h"
+#include "session_controller.h"
 #include "typio/abi/log.h"
 
 #include <inttypes.h>
@@ -26,7 +26,8 @@ static void wl_trace_format(TypioLogLevel level,
     if (frontend) {
         frontend->trace_sequence++;
         seq = frontend->trace_sequence;
-        phase = typio_wl_lifecycle_phase_name(frontend->lifecycle_phase);
+        phase = typio_wl_grab_resource_state_name(
+            typio_wl_session_observe(frontend).grab);
     }
 
     vsnprintf(detail, sizeof(detail), format, args);

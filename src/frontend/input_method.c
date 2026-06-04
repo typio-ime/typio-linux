@@ -1,6 +1,18 @@
 /**
  * @file input_method.c
- * @brief zwp_input_method_v2 event handlers
+ * @brief zwp_input_method_v2 event handlers — record facts and apply them
+ *        at done time.
+ *
+ * The event handlers in this file do exactly one thing per protocol event:
+ * record a fact into `frontend->session_facts` (or the session's `pending`
+ * buffer for the engine state). The session controller consumes the facts
+ * at the end of the event-loop tick, derives the desired resource
+ * configuration, observes the live state, and applies the minimal
+ * idempotent effect set. See `docs/explanation/session-controller.md`.
+ *
+ * The serial chokepoint lives in `typio_wl_commit()`: a commit before the
+ * first `done` is silently dropped to keep the compositor from receiving
+ * preedit text without an established input-method connection.
  */
 
 #include "internal.h"
@@ -164,106 +176,6 @@ void typio_wl_input_method_setup(TypioWlFrontend *frontend) {
                                      &input_method_listener, frontend);
 }
 
-static bool session_is_focused(TypioWlFrontend *frontend) {
-    return frontend && frontend->session && frontend->session->ctx &&
-           typio_input_context_is_focused(frontend->session->ctx);
-}
-
-static bool frontend_has_non_routable_grab(TypioWlFrontend *frontend,
-                                           bool now_active) {
-    if (!frontend || !frontend->keyboard) {
-        return false;
-    }
-
-    return !now_active || !session_is_focused(frontend) ||
-           frontend->lifecycle_phase != TYPIO_WL_PHASE_ACTIVE;
-}
-
-static bool has_active_engine(TypioWlFrontend *frontend) {
-    TypioRegistry *registry;
-    char *name;
-    bool has;
-
-    if (!frontend || !frontend->instance) {
-        return false;
-    }
-
-    registry = typio_instance_get_registry(frontend->instance);
-    if (!registry) {
-        return false;
-    }
-
-    name = typio_registry_get_active_keyboard(registry);
-    has = name && *name;
-    typio_free_string(name);
-    return has;
-}
-
-static void trace_session_state(TypioWlFrontend *frontend, const char *event) {
-    bool focused;
-    bool pending_active;
-    uint32_t serial;
-
-    if (!frontend) {
-        return;
-    }
-
-    focused = session_is_focused(frontend);
-    pending_active = frontend->session ? frontend->session->pending.active : false;
-    serial = frontend->im_serial;
-
-    typio_wl_trace(frontend,
-                   "im_state",
-                   "event=%s phase=%s focused=%s pending_active=%s activate_seen=%s session=%s keyboard=%s serial=%u",
-                   event ? event : "unknown",
-                   typio_wl_lifecycle_phase_name(frontend->lifecycle_phase),
-                   focused ? "yes" : "no",
-                   pending_active ? "yes" : "no",
-                   frontend->activate_seen ? "yes" : "no",
-                   frontend->session ? "yes" : "no",
-                   frontend->keyboard ? "yes" : "no",
-                   serial);
-}
-
-static bool rebuild_keyboard_grab(TypioWlFrontend *frontend,
-                                  const char *reset_reason,
-                                  const char *failure_reason) {
-    if (!frontend) {
-        return false;
-    }
-
-    bool had_keyboard = frontend->keyboard != NULL;
-    typio_wl_trace(frontend,
-                   "keyboard_grab",
-                   "action=rebuild begin reason=%s phase=%s focused=%s existing_keyboard=%s",
-                   reset_reason ? reset_reason : "keyboard rebuild",
-                   typio_wl_lifecycle_phase_name(frontend->lifecycle_phase),
-                   session_is_focused(frontend) ? "yes" : "no",
-                   had_keyboard ? "yes" : "no");
-    typio_wl_lifecycle_hard_reset_keyboard(frontend,
-                                           reset_reason ? reset_reason : "keyboard rebuild");
-    frontend->keyboard = typio_wl_keyboard_create(frontend);
-    if (!frontend->keyboard) {
-        typio_log_error("%s", failure_reason ? failure_reason : "Failed to rebuild keyboard grab");
-        typio_wl_trace_level(TYPIO_LOG_ERROR,
-                             frontend,
-                             "keyboard_grab",
-                             "action=rebuild result=failed reason=%s phase=%s focused=%s",
-                             failure_reason ? failure_reason : "Failed to rebuild keyboard grab",
-                             typio_wl_lifecycle_phase_name(frontend->lifecycle_phase),
-                             session_is_focused(frontend) ? "yes" : "no");
-        return false;
-    }
-
-    typio_wl_vk_expect_keymap(frontend, "keyboard grab rebuilt");
-
-    typio_wl_trace(frontend,
-                   "keyboard_grab",
-                   "action=rebuild result=ok created_at_epoch=%" PRIu64,
-                   frontend->keyboard->created_at_epoch);
-    return true;
-}
-
 /* Session management */
 TypioWlSession *typio_wl_session_create(TypioWlFrontend *frontend) {
     TypioWlSession *session = calloc(1, sizeof(TypioWlSession));
@@ -396,21 +308,22 @@ void typio_wl_commit(TypioWlFrontend *frontend) {
     if (frontend->im_serial == 0) {
         typio_wl_trace(frontend,
                        "commit",
-                       "action=skip reason=no_done_yet serial=0 phase=%s",
-                       typio_wl_lifecycle_phase_name(frontend->lifecycle_phase));
+                       "action=skip reason=no_done_yet serial=0");
         return;
     }
 
     zwp_input_method_v2_commit(frontend->input_method, frontend->im_serial);
-    frontend->last_committed_serial = frontend->im_serial;
 }
 
-/* Input method event handlers */
+/* Input method event handlers
+ *
+ * Each handler records a fact. The session controller's per-tick pipeline
+ * (event_loop.c) reads the facts and applies the right effects. There are
+ * no imperative transitions here. */
 static void im_handle_activate(void *data, [[maybe_unused]] struct zwp_input_method_v2 *im) {
     TypioWlFrontend *frontend = data;
 
     typio_wl_trace(frontend, "im", "event=activate");
-    trace_session_state(frontend, "activate_begin");
 
     /* Create session if needed */
     if (!frontend->session) {
@@ -431,27 +344,24 @@ static void im_handle_activate(void *data, [[maybe_unused]] struct zwp_input_met
     /* Record that an activate arrived in this batch. The next `done` consumes
      * this to tell a genuine (re)activation apart from a plain text-state
      * update done (which must not rebuild focus state mid-composition). */
-    frontend->activate_seen = true;
-    typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_ACTIVATING,
-                                 "activate event");
+    frontend->session_facts.im_activate_seen = true;
 
-    /* Reset session state for new activation */
+    /* Reset session state for new activation. session_reset() clears
+     * pending.active; the activate fact recorded above drives the
+     * controller to want grab=YES at the next done. */
     typio_wl_session_reset(frontend->session);
     frontend->session->pending.active = true;
-    trace_session_state(frontend, "activate_end");
 }
 
 static void im_handle_deactivate(void *data, [[maybe_unused]] struct zwp_input_method_v2 *im) {
     TypioWlFrontend *frontend = data;
 
     typio_wl_trace(frontend, "im", "event=deactivate");
-    trace_session_state(frontend, "deactivate_begin");
-    typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_DEACTIVATING, "deactivate event");
+    frontend->session_facts.im_deactivate_seen = true;
 
     if (frontend->session) {
         frontend->session->pending.active = false;
     }
-    trace_session_state(frontend, "deactivate_end");
 }
 
 static void im_handle_surrounding_text(void *data, [[maybe_unused]] struct zwp_input_method_v2 *im,
@@ -500,135 +410,6 @@ static void im_handle_content_type(void *data, [[maybe_unused]] struct zwp_input
     }
 }
 
-static void transition_to_active(TypioWlFrontend *frontend) {
-    typio_log_info("Input context focused");
-    typio_input_context_focus_in(frontend->session->ctx);
-    typio_wl_frontend_refresh_identity(frontend);
-    typio_wl_frontend_restore_identity_engine(frontend);
-
-    if (!has_active_engine(frontend)) {
-        typio_log_warning("No active engine, skipping keyboard grab");
-        typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_ACTIVE,
-                                     "focus in without active engine");
-        return;
-    }
-
-    /* Reuse existing keyboard if available. The compositor resumes sending
-     * key events on the existing grab; no rebuild needed. This avoids the
-     * expensive xkb_keymap compile, Wayland grab create, and the
-     * NEEDS_KEYMAP window that drops keys. */
-    if (!frontend->keyboard) {
-        if (!rebuild_keyboard_grab(frontend,
-                                   "focus in before new grab",
-                                   "Failed to create keyboard grab on activation")) {
-            typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_INACTIVE,
-                                         "focus in keyboard create failed");
-            return;
-        }
-    } else {
-        typio_log_debug("Reusing existing keyboard grab (skip rebuild)");
-    }
-
-    typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_ACTIVE, "focus in complete");
-    typio_wl_panel_coordinator_reset_anchor(frontend);
-
-    {
-        const TypioKeyboardEngineMode *mode =
-            typio_instance_get_last_keyboard_mode(frontend->instance);
-        if (mode && mode->display_label && mode->display_label[0]) {
-            typio_wl_frontend_show_indicator_on_focus(frontend, mode);
-        }
-    }
-
-    trace_session_state(frontend, "done_focus_in_complete");
-}
-
-static void transition_to_reactivate(TypioWlFrontend *frontend) {
-    /* Re-activated while staying active: the compositor moved us to a
-     * (possibly different) text field without an intervening deactivate. The
-     * keyboard grab and the engine's input context persist for the same
-     * input-method, so they are left intact — we only settle the phase back to
-     * ACTIVE and re-anchor to the new caret. The indicator is not re-shown:
-     * the engine state has not changed across a reactivation, so the old
-     * indicator (already hidden by im_handle_activate) should not carry over.
-     * Any deliberate mode/engine change during reactivation is announced via
-     * show_indicator_for_state, not this path. */
-    typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_ACTIVE, "reactivate complete");
-    typio_wl_panel_coordinator_reset_anchor(frontend);
-
-    trace_session_state(frontend, "done_reactivate_complete");
-}
-
-static void transition_to_inactive(TypioWlFrontend *frontend, const char *reason) {
-    typio_log_info("Input context unfocused");
-    typio_wl_panel_coordinator_reset_anchor(frontend);
-    typio_wl_panel_coordinator_clear_caret_rect(frontend);
-    typio_wl_session_cancel_ui_tracking(frontend->session);
-    typio_input_context_focus_out(frontend->session->ctx);
-    typio_input_context_reset(frontend->session->ctx);
-    typio_wl_panel_coordinator_hide_all(frontend);
-
-    /* Soft pause: release forwarded keys, reset tracking, disarm repeat,
-     * reset XKB modifier state. Keep keyboard grab and XKB objects alive
-     * so the next activation skips the expensive rebuild (xkb_keymap compile,
-     * Wayland grab create, NEEDS_KEYMAP window). The compositor stops routing
-     * key events on deactivate but does not invalidate the grab resource. */
-    if (frontend->keyboard) {
-        typio_wl_keyboard_pause(frontend->keyboard);
-    }
-    typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_INACTIVE, "focus out complete");
-    typio_wl_frontend_clear_identity(frontend);
-    trace_session_state(frontend, "done_focus_out_complete");
-}
-
-void typio_wl_input_method_handle_resume(TypioWlFrontend *frontend,
-                                         const char *reason,
-                                         uint64_t sleep_ms) {
-    bool was_active;
-
-    if (!frontend) {
-        return;
-    }
-
-    /* Capture intent before the scrub clears it: were we actively
-     * composing in a focused client when the machine went to sleep? */
-    was_active = session_is_focused(frontend) &&
-                 frontend->lifecycle_phase == TYPIO_WL_PHASE_ACTIVE;
-
-    /* Pure scrub: drop the grab, stale modifiers, key tracking, and the
-     * compositor preedit; force the phase to INACTIVE. */
-    typio_wl_lifecycle_on_resume(frontend, reason, sleep_ms);
-
-    if (!was_active) {
-        /* Not composing at suspend time. The next compositor activate
-         * runs the full path; nothing more to do here. */
-        return;
-    }
-
-    /* We *were* composing. Some compositors redeliver the full IM
-     * handshake on wake, but many keep their view of focus unchanged and
-     * send nothing — which would leave us deaf with no grab. Rebuild the
-     * grab proactively. The input context was never focus_out'd, so the
-     * engine's in-flight composition survives. */
-    if (!has_active_engine(frontend)) {
-        typio_log_warning("Resume: no active engine, leaving input method inactive");
-        return;
-    }
-
-    typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_ACTIVATING,
-                                 "resume regrab");
-    if (!rebuild_keyboard_grab(frontend,
-                               "resume regrab",
-                               "Failed to recreate keyboard grab on resume")) {
-        typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_INACTIVE,
-                                     "resume regrab failed");
-        return;
-    }
-    typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_ACTIVE,
-                                 "resume regrab complete");
-    trace_session_state(frontend, "resume_regrab_complete");
-}
-
 static void im_handle_done(void *data, [[maybe_unused]] struct zwp_input_method_v2 *im) {
     TypioWlFrontend *frontend = data;
 
@@ -637,62 +418,33 @@ static void im_handle_done(void *data, [[maybe_unused]] struct zwp_input_method_
     if (!frontend->session) {
         typio_log_warning("Received done event without session (serial=%u)",
                   frontend->im_serial);
-        frontend->activate_seen = false;
         return;
     }
 
-    trace_session_state(frontend, "done_begin");
-    bool was_active = session_is_focused(frontend);
-    bool now_active = frontend->session->pending.active;
-    bool activate_seen = frontend->activate_seen;
-    frontend->activate_seen = false;
+    /* The done batch is the atomic commit point: it consumes the activate /
+     * deactivate facts accumulated since the previous done and records a
+     * single boolean for the controller to reduce. */
+    bool was_active = typio_input_context_is_focused(frontend->session->ctx);
+    frontend->session_facts.im_done_had_activate =
+        frontend->session_facts.im_activate_seen;
+    frontend->session_facts.im_done_serial = frontend->im_serial;
 
-    TypioWlDoneAction action =
-        typio_wl_lifecycle_classify_done(was_active, now_active, activate_seen);
+    /* Apply pending engine-context state (surrounding text, content type)
+     * atomically. The activate_seen / im_done_had_activate / pending.active
+     * facts are consumed by the session controller on the next pipeline run. */
+    typio_wl_session_apply_pending(frontend->session);
+
+    /* Clear the per-event activate / deactivate facts; the per-batch
+     * im_done_had_activate flag survives until reduce() consumes it. */
+    frontend->session_facts.im_activate_seen = false;
+    frontend->session_facts.im_deactivate_seen = false;
 
     typio_wl_trace(frontend,
                    "im_done",
-                   "was_active=%s now_active=%s activate_seen=%s action=%d phase=%s",
+                   "was_active=%s now_active=%s serial=%u",
                    was_active ? "yes" : "no",
-                   now_active ? "yes" : "no",
-                   activate_seen ? "yes" : "no",
-                   (int)action,
-                   typio_wl_lifecycle_phase_name(frontend->lifecycle_phase));
-
-    /* Apply pending state */
-    typio_wl_session_apply_pending(frontend->session);
-
-    switch (action) {
-    case TYPIO_WL_DONE_ACTIVATE:
-        transition_to_active(frontend);
-        break;
-    case TYPIO_WL_DONE_REACTIVATE:
-        transition_to_reactivate(frontend);
-        break;
-    case TYPIO_WL_DONE_DEACTIVATE:
-        transition_to_inactive(frontend, "focus out");
-        break;
-    case TYPIO_WL_DONE_NONE:
-        /* A `done` with no state change — typically a text-state update. Guard
-         * against a keyboard grab that is somehow still active in a state that
-         * cannot route keys, and recover it. */
-        if (frontend_has_non_routable_grab(frontend, now_active)) {
-            typio_log_warning("Done without state transition but keyboard grab is non-routable: phase=%s was_active=%s now_active=%s focused=%s",
-                      typio_wl_lifecycle_phase_name(frontend->lifecycle_phase),
-                      was_active ? "yes" : "no",
-                      now_active ? "yes" : "no",
-                      session_is_focused(frontend) ? "yes" : "no");
-            if (!now_active || !session_is_focused(frontend)) {
-                typio_log_warning("Recovering from stale non-routable keyboard grab after done without transition");
-                typio_wl_lifecycle_hard_reset_keyboard(
-                    frontend, "done no transition stale grab");
-                typio_wl_lifecycle_set_phase(frontend, TYPIO_WL_PHASE_INACTIVE,
-                                             "done no transition stale grab");
-            }
-        }
-        trace_session_state(frontend, "done_no_transition");
-        break;
-    }
+                   frontend->session->pending.active ? "yes" : "no",
+                   frontend->im_serial);
 }
 
 static void im_handle_unavailable(void *data, [[maybe_unused]] struct zwp_input_method_v2 *im) {
@@ -784,9 +536,11 @@ void typio_wl_session_request_ui_update(TypioWlSession *session) {
         return;
     }
 
-    session->frontend->panel_schedule_state =
-        typio_wl_panel_scheduler_mark_dirty(
-            session->frontend->panel_schedule_state);
+    if (session->frontend->panel_coord) {
+        session->frontend->panel_coord->panel_schedule_state =
+            typio_wl_panel_scheduler_mark_dirty(
+                session->frontend->panel_coord->panel_schedule_state);
+    }
 }
 
 void typio_wl_session_cancel_ui_tracking(TypioWlSession *session) {
@@ -794,8 +548,8 @@ void typio_wl_session_cancel_ui_tracking(TypioWlSession *session) {
         return;
     }
 
-    if (session->frontend) {
-        session->frontend->panel_schedule_state =
+    if (session->frontend && session->frontend->panel_coord) {
+        session->frontend->panel_coord->panel_schedule_state =
             typio_wl_panel_scheduler_cancel();
     }
     typio_wl_text_ui_reset_tracking(&session->last_preedit_text,
@@ -846,8 +600,10 @@ static void update_wayland_text_ui(TypioWlSession *session, TypioInputContext *c
         typio_wl_panel_coordinator_show_candidates(session->frontend, ctx);
     panel_done_ms = typio_wl_monotonic_ms();
 
-    session->frontend->panel_schedule_state =
-        typio_wl_panel_scheduler_complete(panel_result);
+    if (session->frontend->panel_coord) {
+        session->frontend->panel_coord->panel_schedule_state =
+            typio_wl_panel_scheduler_complete(panel_result);
+    }
     if (panel_result == TYPIO_PANEL_UPDATE_OK &&
                session->candidate_snapshot.count > 0) {
         typio_wl_panel_coordinator_mark_anchor_ready(session->frontend,

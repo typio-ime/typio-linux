@@ -19,18 +19,18 @@ bool typio_wl_boundary_bridge_should_forward_orphan_release_cleanup(
 }
 
 bool typio_wl_boundary_bridge_should_reset_carried_modifiers(
-    TypioWlLifecyclePhase phase,
+    TypioWlGrabWant want,
     bool carried_vk_modifiers) {
-    return carried_vk_modifiers && phase != TYPIO_WL_PHASE_DEACTIVATING;
+    return carried_vk_modifiers && want != TYPIO_WL_GRAB_WANT_SOFT_PAUSE;
 }
 
 bool typio_wl_boundary_bridge_should_carry_modifiers(
-    TypioWlLifecyclePhase phase,
+    TypioWlGrabWant want,
     bool own_current_generation,
     uint32_t mods_depressed,
     uint32_t mods_latched,
     uint32_t mods_locked) {
-    if (!own_current_generation || phase != TYPIO_WL_PHASE_DEACTIVATING)
+    if (!own_current_generation || want != TYPIO_WL_GRAB_WANT_SOFT_PAUSE)
         return false;
 
     return mods_depressed != 0 || mods_latched != 0 || mods_locked != 0;

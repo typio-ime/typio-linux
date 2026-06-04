@@ -1,6 +1,14 @@
 /**
  * @file frontend.c
- * @brief Wayland input method frontend implementation
+ * @brief Wayland input method frontend — lifecycle (new, destroy, stop, reconnect).
+ *
+ * This file owns the public TypioWlFrontend object: its allocation and
+ * cross-cutting resources (sub-struct alloc/free, config watch, resume
+ * signal, voice service, IPC bus wiring, reconnect orchestration). The
+ * Wayland-specific bind/unbind and the IPC runtime-state serialization
+ * live in sibling files (frontend_bind.c, frontend_runtime.c) so this
+ * file is the right place to read when asking "what does the daemon do
+ * at startup, teardown, and on disconnect".
  */
 
 #include "frontend.h"
@@ -34,97 +42,12 @@
 #include <unistd.h>
 #include <stdio.h>
 
-/* Registry listener */
-static void registry_handle_global(void *data, struct wl_registry *registry,
-                                   uint32_t name, const char *interface,
-                                   uint32_t version);
-static void registry_handle_global_remove(void *data, struct wl_registry *registry,
-                                          uint32_t name);
-static void output_handle_geometry(void *data, struct wl_output *wl_output,
-                                   int32_t x, int32_t y,
-                                   int32_t physical_width,
-                                   int32_t physical_height,
-                                   int32_t subpixel, const char *make,
-                                   const char *model, int32_t transform);
-static void output_handle_mode(void *data, struct wl_output *wl_output,
-                               uint32_t flags, int32_t width,
-                               int32_t height, int32_t refresh);
-static void output_handle_done(void *data, struct wl_output *wl_output);
-static void output_handle_scale(void *data, struct wl_output *wl_output,
-                                int32_t factor);
+/* Extern from frontend_bind.c: declared there so this file is the only
+ * place that needs the public lifecycle API. */
+bool typio_wl_frontend_wayland_bind(TypioWlFrontend *frontend);
+void typio_wl_frontend_wayland_unbind(TypioWlFrontend *frontend);
 
-static const struct wl_registry_listener registry_listener = {
-    .global = registry_handle_global,
-    .global_remove = registry_handle_global_remove,
-};
-
-/* Seat listener */
-static void seat_handle_capabilities(void *data, struct wl_seat *seat,
-                                     uint32_t capabilities);
-static void seat_handle_name(void *data, struct wl_seat *seat, const char *name);
-
-static const struct wl_seat_listener seat_listener = {
-    .capabilities = seat_handle_capabilities,
-    .name = seat_handle_name,
-};
-
-static const struct wl_output_listener output_listener = {
-    .geometry = output_handle_geometry,
-    .mode = output_handle_mode,
-    .done = output_handle_done,
-    .scale = output_handle_scale,
-};
-
-static uint32_t frontend_runtime_age_ms(uint64_t now_ms, uint64_t since_ms) {
-    if (since_ms == 0 || now_ms <= since_ms) return 0;
-    uint64_t delta = now_ms - since_ms;
-    return (delta > UINT32_MAX) ? UINT32_MAX : (uint32_t)delta;
-}
-
-static int32_t frontend_runtime_deadline_remaining_ms(uint64_t now_ms,
-                                                      uint64_t deadline_ms) {
-    if (deadline_ms == 0) return 0;
-    int64_t delta = (int64_t)deadline_ms - (int64_t)now_ms;
-    if (delta > INT32_MAX) return INT32_MAX;
-    if (delta < INT32_MIN) return INT32_MIN;
-    return (int32_t)delta;
-}
-
-static void frontend_fill_runtime_state(void *user_data,
-                                        TypioIpcBusRuntimeState *state) {
-    TypioWlFrontend *frontend = user_data;
-    if (!frontend || !state) return;
-
-    uint64_t now_ms = typio_wl_monotonic_ms();
-    state->frontend_backend = "wayland";
-    state->lifecycle_phase = typio_wl_lifecycle_phase_name(frontend->lifecycle_phase);
-    state->virtual_keyboard_state = typio_wl_vk_state_name(frontend->virtual_keyboard_state);
-    state->keyboard_grab_active = frontend->keyboard && frontend->keyboard->grab;
-    state->virtual_keyboard_has_keymap = frontend->virtual_keyboard_has_keymap;
-    state->watchdog_armed = atomic_load(&frontend->watchdog_armed);
-    state->active_key_generation = frontend->active_key_generation;
-    state->virtual_keyboard_keymap_generation = frontend->virtual_keyboard_keymap_generation;
-    state->virtual_keyboard_drop_count =
-        frontend->virtual_keyboard_drop_count > UINT32_MAX
-            ? UINT32_MAX
-            : (uint32_t)frontend->virtual_keyboard_drop_count;
-    state->virtual_keyboard_state_age_ms =
-        frontend_runtime_age_ms(now_ms, frontend->virtual_keyboard_state_since_ms);
-    state->virtual_keyboard_keymap_age_ms =
-        frontend_runtime_age_ms(now_ms, frontend->virtual_keyboard_last_keymap_ms);
-    state->virtual_keyboard_forward_age_ms =
-        frontend_runtime_age_ms(now_ms, frontend->virtual_keyboard_last_forward_ms);
-    state->virtual_keyboard_keymap_deadline_remaining_ms =
-        frontend_runtime_deadline_remaining_ms(now_ms,
-                                               frontend->virtual_keyboard_keymap_deadline_ms);
-}
-
-void typio_wl_frontend_emit_runtime_state_changed(TypioWlFrontend *frontend) {
-    /* Runtime state changes are pushed via the state controller listener on
-     * the IPC bus (events.subscribe; topic "runtime.changed"); no explicit
-     * fan-out is needed here. */
-    (void)frontend;
-}
+/* ── Helpers ───────────────────────────────────────────────────────────── */
 
 static TypioWlFrontend *frontend_init_failed(TypioWlFrontend *frontend,
                                              const char *message) {
@@ -144,30 +67,30 @@ static void frontend_setup_config_watch(TypioWlFrontend *frontend) {
         return;
     }
 
-    frontend->config_watch_fd = -1;
-    frontend->config_dir_watch = -1;
-    frontend->config_engines_watch = -1;
-    frontend->config_reload_timer_fd = -1;
-    frontend->config_reload_pending = false;
+    frontend->config->watch_fd = -1;
+    frontend->config->dir_watch = -1;
+    frontend->config->engines_watch = -1;
+    frontend->config->reload_timer_fd = -1;
+    frontend->config->reload_pending = false;
 
     config_dir = typio_instance_get_config_dir(frontend->instance);
     if (!config_dir || !*config_dir) {
         return;
     }
 
-    frontend->config_watch_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
-    if (frontend->config_watch_fd < 0) {
+    frontend->config->watch_fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (frontend->config->watch_fd < 0) {
         typio_log_warning("Failed to initialize configuration watch");
         return;
     }
 
-    frontend->config_reload_timer_fd = timerfd_create(CLOCK_MONOTONIC,
+    frontend->config->reload_timer_fd = timerfd_create(CLOCK_MONOTONIC,
                                                       TFD_NONBLOCK | TFD_CLOEXEC);
-    if (frontend->config_reload_timer_fd < 0) {
+    if (frontend->config->reload_timer_fd < 0) {
         typio_log_warning("Failed to initialize configuration reload debounce timer");
     }
 
-    frontend->config_dir_watch = inotify_add_watch(frontend->config_watch_fd,
+    frontend->config->dir_watch = inotify_add_watch(frontend->config->watch_fd,
                                                    config_dir,
                                                    IN_CLOSE_WRITE | IN_MOVED_TO |
                                                    IN_CREATE | IN_DELETE |
@@ -176,7 +99,7 @@ static void frontend_setup_config_watch(TypioWlFrontend *frontend) {
 
     if (snprintf(engines_dir, sizeof(engines_dir), "%s/engines", config_dir) <
         (int)sizeof(engines_dir)) {
-        frontend->config_engines_watch = inotify_add_watch(frontend->config_watch_fd,
+        frontend->config->engines_watch = inotify_add_watch(frontend->config->watch_fd,
                                                            engines_dir,
                                                            IN_CLOSE_WRITE | IN_MOVED_TO |
                                                            IN_CREATE | IN_DELETE |
@@ -184,6 +107,43 @@ static void frontend_setup_config_watch(TypioWlFrontend *frontend) {
                                                            IN_ATTRIB);
     }
 }
+
+/* ── Resume signal ─────────────────────────────────────────────────────── */
+
+static void frontend_on_resume(void *user_data, const char *reason,
+                               uint64_t sleep_ms) {
+    TypioWlFrontend *frontend = user_data;
+    (void)reason;
+    (void)sleep_ms;
+    if (!frontend)
+        return;
+    /* The per-tick driver in event_loop.c clears session_facts at the start
+     * of every iteration; a fact recorded here is consumed by the same tick
+     * once the resume-signal fd has been polled and reduce() runs. */
+    frontend->session_facts.suspend_gap_detected = true;
+}
+
+static void frontend_init_resume_signal(TypioWlFrontend *frontend) {
+    if (!frontend)
+        return;
+
+    frontend->resume_signal =
+        typio_wl_resume_signal_create(frontend_on_resume, frontend);
+    if (!frontend->resume_signal) {
+        typio_log_warning("Failed to create resume signal detector");
+        return;
+    }
+
+    if (frontend->aux_handler_count <
+        sizeof(frontend->aux_handlers) / sizeof(frontend->aux_handlers[0])) {
+        TypioWlAuxHandler *h =
+            typio_wl_aux_handler_for_resume_signal(frontend->resume_signal);
+        if (h)
+            frontend->aux_handlers[frontend->aux_handler_count++] = h;
+    }
+}
+
+/* ── Voice service (HAVE_VOICE) ────────────────────────────────────────── */
 
 #ifdef HAVE_VOICE
 static void frontend_init_voice(TypioWlFrontend *frontend, TypioInstance *instance);
@@ -241,177 +201,8 @@ static void voice_event_cb(const TypioVoiceSessionEvent *event, void *user_data)
     }
 }
 #endif
-static void frontend_init_resume_signal(TypioWlFrontend *frontend);
 
-/*
- * Bind (or rebind) every Wayland-derived object: connect the display, bind
- * globals, create the input method + virtual keyboard, and build the text
- * UI backend. Used both at startup and on reconnect; it touches nothing
- * that must survive a compositor restart (engine/session state, aux
- * handlers, config watch, resume signal). On a hard failure it writes
- * frontend->error_msg and returns false WITHOUT tearing down — the caller
- * decides whether to abort (startup) or retry (reconnect). Assumes all
- * Wayland pointers start NULL (true after calloc or unbind).
- */
-static bool frontend_wayland_bind(TypioWlFrontend *frontend) {
-    frontend->display = wl_display_connect(frontend->display_name);
-    if (!frontend->display) {
-        snprintf(frontend->error_msg, sizeof(frontend->error_msg),
-                 "Failed to connect to Wayland display: %s",
-                 frontend->display_name ? frontend->display_name : "(default)");
-        typio_log_error("%s", frontend->error_msg);
-        return false;
-    }
-    typio_log_info("Connected to Wayland display");
-
-    frontend->registry = wl_display_get_registry(frontend->display);
-    if (!frontend->registry) {
-        snprintf(frontend->error_msg, sizeof(frontend->error_msg),
-                 "Failed to get Wayland registry");
-        typio_log_error("%s", frontend->error_msg);
-        return false;
-    }
-    wl_registry_add_listener(frontend->registry, &registry_listener, frontend);
-
-    if (wl_display_roundtrip(frontend->display) < 0) {
-        snprintf(frontend->error_msg, sizeof(frontend->error_msg),
-                 "Wayland roundtrip failed");
-        typio_log_error("%s", frontend->error_msg);
-        return false;
-    }
-
-    if (!frontend->im_manager) {
-        snprintf(frontend->error_msg, sizeof(frontend->error_msg),
-                 "Session does not provide the required Wayland input-method/text-input protocol stack");
-        typio_log_error("Compositor does not support zwp_input_method_manager_v2");
-        return false;
-    }
-    if (!frontend->seat) {
-        snprintf(frontend->error_msg, sizeof(frontend->error_msg),
-                 "No seat available");
-        typio_log_error("No seat available");
-        return false;
-    }
-    if (!frontend->compositor || !frontend->shm) {
-        typio_log_warning("Compositor missing wl_compositor or wl_shm; panel candidates disabled");
-    }
-
-    frontend->input_method = zwp_input_method_manager_v2_get_input_method(
-        frontend->im_manager, frontend->seat);
-    if (!frontend->input_method) {
-        snprintf(frontend->error_msg, sizeof(frontend->error_msg),
-                 "Failed to create input method");
-        typio_log_error("Failed to create input method");
-        return false;
-    }
-    typio_wl_input_method_setup(frontend);
-
-    if (frontend->vk_manager && frontend->seat) {
-        frontend->virtual_keyboard =
-            zwp_virtual_keyboard_manager_v1_create_virtual_keyboard(
-                frontend->vk_manager, frontend->seat);
-        if (frontend->virtual_keyboard) {
-            typio_wl_vk_set_state(frontend, TYPIO_WL_VK_STATE_NEEDS_KEYMAP,
-                                  "virtual keyboard object created");
-            typio_log_info("Virtual keyboard created for key forwarding");
-        } else {
-            typio_wl_vk_set_state(frontend, TYPIO_WL_VK_STATE_BROKEN,
-                                  "create_virtual_keyboard returned null");
-            typio_log_warning("Failed to create virtual keyboard; unhandled keys will be lost");
-        }
-    } else {
-        typio_wl_vk_set_state(frontend, TYPIO_WL_VK_STATE_ABSENT,
-                              "virtual keyboard manager unavailable");
-        typio_log_warning("No virtual keyboard manager; unhandled keys will be lost");
-    }
-
-    frontend->panel = typio_panel_create(frontend);
-    if (frontend->panel) {
-        if (typio_panel_is_available(frontend->panel)) {
-            typio_log_info("Candidate panel surface ready");
-        } else if (!frontend->compositor || !frontend->shm) {
-            typio_log_warning("Panel disabled: compositor=%p, shm=%p",
-                      (void *)frontend->compositor, (void *)frontend->shm);
-        } else {
-            typio_log_warning("Failed to initialize candidate panel surface; keeping candidate state inline");
-        }
-    } else {
-        typio_log_warning("Failed to initialize text UI backend");
-    }
-
-    return true;
-}
-
-/*
- * Destroy every Wayland-derived object and disconnect the display, nulling
- * each pointer so a subsequent bind starts clean. Leaves engine/session,
- * aux handlers, config watch, and the resume signal untouched. Safe to call
- * with any subset already NULL.
- */
-static void frontend_wayland_unbind(TypioWlFrontend *frontend) {
-    if (frontend->keyboard) {
-        typio_wl_keyboard_destroy(frontend->keyboard);
-        frontend->keyboard = nullptr;
-    }
-    if (frontend->panel) {
-        typio_panel_destroy(frontend->panel);
-        frontend->panel = nullptr;
-    }
-    if (frontend->virtual_keyboard) {
-        typio_wl_vk_set_state(frontend, TYPIO_WL_VK_STATE_ABSENT,
-                              "wayland unbind");
-        zwp_virtual_keyboard_v1_destroy(frontend->virtual_keyboard);
-        frontend->virtual_keyboard = nullptr;
-    }
-    if (frontend->vk_manager) {
-        zwp_virtual_keyboard_manager_v1_destroy(frontend->vk_manager);
-        frontend->vk_manager = nullptr;
-    }
-    if (frontend->input_method) {
-        zwp_input_method_v2_destroy(frontend->input_method);
-        frontend->input_method = nullptr;
-    }
-    if (frontend->im_manager) {
-        zwp_input_method_manager_v2_destroy(frontend->im_manager);
-        frontend->im_manager = nullptr;
-    }
-    if (frontend->seat) {
-        wl_seat_destroy(frontend->seat);
-        frontend->seat = nullptr;
-    }
-    if (frontend->shm) {
-        wl_shm_destroy(frontend->shm);
-        frontend->shm = nullptr;
-    }
-    if (frontend->viewporter) {
-        wp_viewporter_destroy(frontend->viewporter);
-        frontend->viewporter = nullptr;
-    }
-    if (frontend->fractional_scale_manager) {
-        wp_fractional_scale_manager_v1_destroy(frontend->fractional_scale_manager);
-        frontend->fractional_scale_manager = nullptr;
-    }
-    if (frontend->compositor) {
-        wl_compositor_destroy(frontend->compositor);
-        frontend->compositor = nullptr;
-    }
-    if (frontend->registry) {
-        wl_registry_destroy(frontend->registry);
-        frontend->registry = nullptr;
-    }
-    while (frontend->outputs) {
-        TypioWlOutput *output = frontend->outputs;
-        frontend->outputs = output->next;
-        if (output->output) {
-            wl_output_destroy(output->output);
-        }
-        free(output);
-    }
-    if (frontend->display) {
-        wl_display_disconnect(frontend->display);
-        frontend->display = nullptr;
-    }
-}
+/* ── Public lifecycle API ──────────────────────────────────────────────── */
 
 TypioWlFrontend *typio_wl_frontend_new(TypioInstance *instance,
                                         const TypioWlFrontendConfig *config) {
@@ -423,6 +214,68 @@ TypioWlFrontend *typio_wl_frontend_new(TypioInstance *instance,
     if (!frontend) {
         return nullptr;
     }
+
+    frontend->panel_coord = calloc(1, sizeof(TypioWlPanelCoordinator));
+    if (!frontend->panel_coord) {
+        free(frontend);
+        return nullptr;
+    }
+    frontend->panel_coord->frontend = frontend;
+
+    frontend->vk = calloc(1, sizeof(TypioWlVirtualKeyboard));
+    if (!frontend->vk) {
+        free(frontend->panel_coord);
+        free(frontend);
+        return nullptr;
+    }
+    frontend->vk->frontend = frontend;
+
+    frontend->watchdog = calloc(1, sizeof(TypioWlWatchdog));
+    if (!frontend->watchdog) {
+        free(frontend->vk);
+        free(frontend->panel_coord);
+        free(frontend);
+        return nullptr;
+    }
+    frontend->watchdog->frontend = frontend;
+
+    frontend->tracker = calloc(1, sizeof(TypioWlKeyTracker));
+    if (!frontend->tracker) {
+        free(frontend->watchdog);
+        free(frontend->vk);
+        free(frontend->panel_coord);
+        free(frontend);
+        return nullptr;
+    }
+    frontend->tracker->frontend = frontend;
+
+    frontend->indicator = calloc(1, sizeof(TypioWlIndicator));
+    if (!frontend->indicator) {
+        free(frontend->tracker);
+        free(frontend->watchdog);
+        free(frontend->vk);
+        free(frontend->panel_coord);
+        free(frontend);
+        return nullptr;
+    }
+    frontend->indicator->frontend = frontend;
+    frontend->indicator->timer_fd = -1;
+
+    frontend->config = calloc(1, sizeof(TypioWlConfigWatcher));
+    if (!frontend->config) {
+        free(frontend->indicator);
+        free(frontend->tracker);
+        free(frontend->watchdog);
+        free(frontend->vk);
+        free(frontend->panel_coord);
+        free(frontend);
+        return nullptr;
+    }
+    frontend->config->frontend = frontend;
+    frontend->config->watch_fd = -1;
+    frontend->config->dir_watch = -1;
+    frontend->config->engines_watch = -1;
+    frontend->config->reload_timer_fd = -1;
 
     frontend->instance = instance;
     /* Default to PREPARING: do NOT query engine availability eagerly during
@@ -443,7 +296,7 @@ TypioWlFrontend *typio_wl_frontend_new(TypioInstance *instance,
     frontend->display_name = display_name ? typio_strdup(display_name) : nullptr;
 
     /* Bind all Wayland-derived objects. */
-    if (!frontend_wayland_bind(frontend)) {
+    if (!typio_wl_frontend_wayland_bind(frontend)) {
         return frontend_init_failed(frontend, frontend->error_msg);
     }
 
@@ -460,86 +313,24 @@ TypioWlFrontend *typio_wl_frontend_new(TypioInstance *instance,
 }
 
 void typio_wl_frontend_set_keyboard_availability(TypioWlFrontend *frontend,
-                                                 TypioEngineAvailability availability,
-                                                 const char *reason) {
-    if (!frontend) {
+                                                  TypioEngineAvailability availability,
+                                                  const char *reason) {
+    if (!frontend) return;
+    if (frontend->keyboard_availability == availability &&
+        (reason == nullptr ||
+         strcmp(frontend->keyboard_availability_reason, reason) == 0)) {
         return;
     }
-
     frontend->keyboard_availability = availability;
-    if (reason && reason[0]) {
+    if (reason) {
         snprintf(frontend->keyboard_availability_reason,
                  sizeof(frontend->keyboard_availability_reason),
-                 "%s",
-                 reason);
+                 "%s", reason);
     } else {
         frontend->keyboard_availability_reason[0] = '\0';
     }
-
-    typio_log_debug("Keyboard engine availability: state=%d reason=%s",
-                    (int)availability,
-                    frontend->keyboard_availability_reason[0]
-                        ? frontend->keyboard_availability_reason
-                        : "-");
+    typio_wl_frontend_emit_runtime_state_changed(frontend);
 }
-
-static void frontend_on_resume(void *user_data, const char *reason,
-                               uint64_t sleep_ms) {
-    TypioWlFrontend *frontend = user_data;
-    typio_wl_input_method_handle_resume(frontend, reason, sleep_ms);
-}
-
-static void frontend_init_resume_signal(TypioWlFrontend *frontend) {
-    if (!frontend)
-        return;
-
-    frontend->resume_signal =
-        typio_wl_resume_signal_create(frontend_on_resume, frontend);
-    if (!frontend->resume_signal) {
-        typio_log_warning("Failed to create resume signal detector");
-        return;
-    }
-
-    if (frontend->aux_handler_count <
-        sizeof(frontend->aux_handlers) / sizeof(frontend->aux_handlers[0])) {
-        TypioWlAuxHandler *h =
-            typio_wl_aux_handler_for_resume_signal(frontend->resume_signal);
-        if (h)
-            frontend->aux_handlers[frontend->aux_handler_count++] = h;
-    }
-}
-
-#ifdef HAVE_VOICE
-static void frontend_init_voice(TypioWlFrontend *frontend,
-                                 TypioInstance *instance) {
-    TypioVoiceSession *voice = typio_voice_session_new(instance);
-    if (voice) {
-        TypioPwCapture *pw = typio_pw_capture_new(pw_audio_cb, voice);
-        if (pw) {
-            typio_voice_session_set_audio_source(voice,
-                typio_pw_capture_as_audio_source(pw));
-        }
-        typio_voice_session_set_callback(voice, voice_event_cb, frontend);
-
-        typio_instance_set_voice_session(instance, voice);
-    }
-    if (voice && typio_voice_session_is_available(voice))
-        typio_log_info("Voice input service ready");
-    else if (voice)
-        typio_log_info("Voice input service created but no model");
-    else
-        typio_log_warning("Failed to create voice input service");
-
-    if (voice) {
-        size_t cap = sizeof(frontend->aux_handlers) / sizeof(frontend->aux_handlers[0]);
-        if (frontend->aux_handler_count < cap) {
-            TypioWlAuxHandler *h = typio_wl_aux_handler_for_voice(voice, frontend);
-            if (h)
-                frontend->aux_handlers[frontend->aux_handler_count++] = h;
-        }
-    }
-}
-#endif
 
 void typio_wl_frontend_stop(TypioWlFrontend *frontend) {
     if (frontend) {
@@ -558,26 +349,23 @@ bool typio_wl_frontend_reconnect(TypioWlFrontend *frontend) {
     /* No event-loop progress happens during the blocking backoff, so park
      * the watchdog. Destroying the keyboard in unbind also disarms it; this
      * is belt-and-suspenders for the case where no grab existed. */
-    atomic_store(&frontend->watchdog_armed, false);
+    atomic_store(&frontend->watchdog->armed, false);
 
     /* Drop every Wayland-derived object. Engine/session state, aux handlers,
      * config watch, and the resume signal are intentionally preserved, so an
      * in-flight composition survives the compositor restart. */
-    frontend_wayland_unbind(frontend);
+    typio_wl_frontend_wayland_unbind(frontend);
 
     /* Reset the input-method state to a clean disconnected baseline. A held
      * key during the outage produced no key-up, so fence the key generation
      * and clear tracking; the fresh grab after reconnect starts from zero. */
-    frontend->lifecycle_phase = TYPIO_WL_PHASE_INACTIVE;
-    frontend->activate_seen = false;
-    frontend->reconcile_divergence_since_ms = 0;
-    frontend->active_generation_owned_keys = false;
-    frontend->carried_vk_modifiers = false;
-    frontend->active_key_generation++;
-    if (frontend->active_key_generation == 0)
-        frontend->active_key_generation = 1;
-    typio_wl_key_tracking_reset(frontend->key_states, TYPIO_WL_MAX_TRACKED_KEYS);
-    typio_wl_key_tracking_reset_generations(frontend->key_generations,
+    frontend->tracker->active_generation_owned_keys = false;
+    if (frontend->vk) frontend->vk->carried_modifiers = false;
+    frontend->tracker->active_generation++;
+    if (frontend->tracker->active_generation == 0)
+        frontend->tracker->active_generation = 1;
+    typio_wl_key_tracking_reset(frontend->tracker->states, TYPIO_WL_MAX_TRACKED_KEYS);
+    typio_wl_key_tracking_reset_generations(frontend->tracker->generations,
                                             TYPIO_WL_MAX_TRACKED_KEYS);
 
     while (typio_wl_reconnect_should_retry(attempt)) {
@@ -596,7 +384,7 @@ bool typio_wl_frontend_reconnect(TypioWlFrontend *frontend) {
         if (!frontend->running)
             return false;
 
-        if (frontend_wayland_bind(frontend)) {
+        if (typio_wl_frontend_wayland_bind(frontend)) {
             typio_log_info("Reconnected to Wayland display after %u attempt(s)",
                       attempt + 1);
             /* The fatal path that called us may have cleared running; the
@@ -606,7 +394,7 @@ bool typio_wl_frontend_reconnect(TypioWlFrontend *frontend) {
         }
 
         /* Bind left partial state; clear it before the next attempt. */
-        frontend_wayland_unbind(frontend);
+        typio_wl_frontend_wayland_unbind(frontend);
         attempt++;
     }
 
@@ -647,19 +435,19 @@ void typio_wl_frontend_destroy(TypioWlFrontend *frontend) {
         frontend->panel = nullptr;
     }
 
-    if (frontend->config_dir_watch >= 0 && frontend->config_watch_fd >= 0) {
-        inotify_rm_watch(frontend->config_watch_fd, frontend->config_dir_watch);
+    if (frontend->config->dir_watch >= 0 && frontend->config->watch_fd >= 0) {
+        inotify_rm_watch(frontend->config->watch_fd, frontend->config->dir_watch);
     }
-    if (frontend->config_engines_watch >= 0 && frontend->config_watch_fd >= 0) {
-        inotify_rm_watch(frontend->config_watch_fd, frontend->config_engines_watch);
+    if (frontend->config->engines_watch >= 0 && frontend->config->watch_fd >= 0) {
+        inotify_rm_watch(frontend->config->watch_fd, frontend->config->engines_watch);
     }
-    if (frontend->config_watch_fd >= 0) {
-        close(frontend->config_watch_fd);
-        frontend->config_watch_fd = -1;
+    if (frontend->config->watch_fd >= 0) {
+        close(frontend->config->watch_fd);
+        frontend->config->watch_fd = -1;
     }
-    if (frontend->config_reload_timer_fd >= 0) {
-        close(frontend->config_reload_timer_fd);
-        frontend->config_reload_timer_fd = -1;
+    if (frontend->config->reload_timer_fd >= 0) {
+        close(frontend->config->reload_timer_fd);
+        frontend->config->reload_timer_fd = -1;
     }
     typio_wl_frontend_destroy_indicator(frontend);
 
@@ -690,11 +478,17 @@ void typio_wl_frontend_destroy(TypioWlFrontend *frontend) {
 
     /* Clean up all Wayland-derived objects (keyboard already destroyed
      * above; unbind tolerates the NULL). */
-    frontend_wayland_unbind(frontend);
+    typio_wl_frontend_wayland_unbind(frontend);
 
     free(frontend->display_name);
 
     typio_log_info("Wayland frontend destroyed");
+    free(frontend->panel_coord);
+    free(frontend->vk);
+    free(frontend->watchdog);
+    free(frontend->tracker);
+    free(frontend->indicator);
+    free(frontend->config);
     free(frontend);
 }
 
@@ -703,154 +497,6 @@ const char *typio_wl_frontend_get_error(TypioWlFrontend *frontend) {
         return nullptr;
     }
     return frontend->error_msg;
-}
-
-/* Registry handlers */
-static void registry_handle_global(void *data, struct wl_registry *registry,
-                                   uint32_t name, const char *interface,
-                                   [[maybe_unused]] uint32_t version) {
-    TypioWlFrontend *frontend = data;
-
-    if (strcmp(interface, zwp_input_method_manager_v2_interface.name) == 0) {
-        frontend->im_manager = wl_registry_bind(registry, name,
-                                                &zwp_input_method_manager_v2_interface, 1);
-        typio_log_info("Bound zwp_input_method_manager_v2");
-    } else if (strcmp(interface, wl_compositor_interface.name) == 0) {
-        /* v6 enables wl_surface.preferred_buffer_scale (used as an
-         * integer fallback when wp_fractional_scale_v1 is absent). */
-        uint32_t want = version >= 6 ? 6u : version;
-        frontend->compositor = wl_registry_bind(registry, name,
-                                                &wl_compositor_interface, want);
-        typio_log_info("Bound wl_compositor v%u", want);
-    } else if (strcmp(interface, wl_shm_interface.name) == 0) {
-        frontend->shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
-        typio_log_info("Bound wl_shm");
-    } else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
-        frontend->fractional_scale_manager = wl_registry_bind(
-            registry, name, &wp_fractional_scale_manager_v1_interface, 1);
-        typio_log_info("Bound wp_fractional_scale_manager_v1");
-    } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
-        frontend->viewporter = wl_registry_bind(
-            registry, name, &wp_viewporter_interface, 1);
-        typio_log_info("Bound wp_viewporter");
-    } else if (strcmp(interface, zwp_virtual_keyboard_manager_v1_interface.name) == 0) {
-        frontend->vk_manager = wl_registry_bind(registry, name,
-                                                &zwp_virtual_keyboard_manager_v1_interface, 1);
-        typio_log_info("Bound zwp_virtual_keyboard_manager_v1");
-    } else if (strcmp(interface, wl_seat_interface.name) == 0) {
-        /* Only bind first seat */
-        if (!frontend->seat) {
-            frontend->seat = wl_registry_bind(registry, name,
-                                              &wl_seat_interface, 1);
-            wl_seat_add_listener(frontend->seat, &seat_listener, frontend);
-            typio_log_info("Bound wl_seat");
-        }
-    } else if (strcmp(interface, wl_output_interface.name) == 0) {
-        TypioWlOutput *output = calloc(1, sizeof(*output));
-        if (!output) {
-            typio_log_warning("Failed to allocate wl_output tracking");
-            return;
-        }
-
-        output->name = name;
-        output->frontend = frontend;
-        output->scale = 1;
-        output->output = wl_registry_bind(registry, name, &wl_output_interface,
-                                          version >= 2 ? 2u : version);
-        if (!output->output) {
-            free(output);
-            typio_log_warning("Failed to bind wl_output");
-            return;
-        }
-
-        wl_output_add_listener(output->output, &output_listener, output);
-        output->next = frontend->outputs;
-        frontend->outputs = output;
-        typio_log_info("Bound wl_output %u", name);
-    }
-}
-
-static void registry_handle_global_remove(void *data,
-                                          [[maybe_unused]] struct wl_registry *registry,
-                                          uint32_t name) {
-    TypioWlFrontend *frontend = data;
-    TypioWlOutput **link;
-
-    if (!frontend) {
-        return;
-    }
-
-    link = &frontend->outputs;
-    while (*link) {
-        TypioWlOutput *output = *link;
-        if (output->name == name) {
-            *link = output->next;
-            if (output->output) {
-                typio_panel_handle_output_change(frontend->panel,
-                                                              output->output);
-                wl_output_destroy(output->output);
-            }
-            free(output);
-            return;
-        }
-        link = &output->next;
-    }
-}
-
-/* Seat handlers */
-static void seat_handle_capabilities([[maybe_unused]] void *data,
-                                     [[maybe_unused]] struct wl_seat *seat,
-                                     uint32_t capabilities) {
-    typio_log_debug("Seat capabilities: 0x%x", capabilities);
-}
-
-static void seat_handle_name([[maybe_unused]] void *data,
-                             [[maybe_unused]] struct wl_seat *seat,
-                             const char *name) {
-    typio_log_debug("Seat name: %s", name);
-}
-
-static void output_handle_geometry([[maybe_unused]] void *data,
-                                   [[maybe_unused]] struct wl_output *wl_output,
-                                   [[maybe_unused]] int32_t x,
-                                   [[maybe_unused]] int32_t y,
-                                   [[maybe_unused]] int32_t physical_width,
-                                   [[maybe_unused]] int32_t physical_height,
-                                   [[maybe_unused]] int32_t subpixel,
-                                   [[maybe_unused]] const char *make,
-                                   [[maybe_unused]] const char *model,
-                                   [[maybe_unused]] int32_t transform) {
-}
-
-static void output_handle_mode([[maybe_unused]] void *data,
-                               [[maybe_unused]] struct wl_output *wl_output,
-                               [[maybe_unused]] uint32_t flags,
-                               [[maybe_unused]] int32_t width,
-                               [[maybe_unused]] int32_t height,
-                               [[maybe_unused]] int32_t refresh) {
-}
-
-static void output_handle_done(void *data, [[maybe_unused]] struct wl_output *wl_output) {
-    TypioWlOutput *output = data;
-
-    if (!output) {
-        return;
-    }
-
-    typio_log_debug("wl_output %u scale=%d", output->name, output->scale);
-}
-
-static void output_handle_scale(void *data, [[maybe_unused]] struct wl_output *wl_output,
-                                int32_t factor) {
-    TypioWlOutput *output = data;
-
-    if (!output) {
-        return;
-    }
-
-    output->scale = factor > 0 ? factor : 1;
-    typio_panel_handle_output_change(output->frontend->panel,
-                                                  output->output);
 }
 
 void typio_wl_frontend_set_tray([[maybe_unused]] TypioWlFrontend *frontend,
@@ -864,12 +510,15 @@ void typio_wl_frontend_set_tray([[maybe_unused]] TypioWlFrontend *frontend,
 #endif
 }
 
-
 void typio_wl_frontend_set_ipc_bus(TypioWlFrontend *frontend, void *ipc_bus) {
+    /* The runtime-state callback lives in frontend_runtime.c as a static
+     * function. The cast to the public callback type is the established
+     * pattern in this file (no need to expose the symbol). */
+    extern void frontend_fill_runtime_state(void *, TypioIpcBusRuntimeState *);
     if (!frontend || !ipc_bus) return;
     frontend->ipc_bus = (struct TypioIpcBus *)ipc_bus;
     typio_ipc_bus_set_runtime_state_callback(frontend->ipc_bus,
-                                              (TypioIpcBusRuntimeStateCallback)frontend_fill_runtime_state,
+                                              frontend_fill_runtime_state,
                                               frontend);
     size_t cap = sizeof(frontend->aux_handlers) / sizeof(frontend->aux_handlers[0]);
     if (frontend->aux_handler_count >= cap) return;
@@ -877,3 +526,42 @@ void typio_wl_frontend_set_ipc_bus(TypioWlFrontend *frontend, void *ipc_bus) {
         typio_wl_aux_handler_for_ipc_bus((struct TypioIpcBus *)ipc_bus);
     if (h) frontend->aux_handlers[frontend->aux_handler_count++] = h;
 }
+
+#ifdef HAVE_VOICE
+static void frontend_init_voice(TypioWlFrontend *frontend, TypioInstance *instance) {
+    TypioVoiceSession *voice = typio_voice_session_new(instance);
+    TypioPwCapture *capture = nullptr;
+
+    if (voice) {
+        capture = typio_pw_capture_new(instance);
+        if (capture) {
+            typio_voice_session_set_audio_source(voice, pw_audio_cb, capture);
+        }
+        typio_voice_session_set_event_callback(voice, voice_event_cb, frontend);
+        typio_instance_set_voice_session(instance, voice);
+    }
+    if (capture) {
+        size_t cap = sizeof(frontend->aux_handlers) / sizeof(frontend->aux_handlers[0]);
+        if (frontend->aux_handler_count < cap) {
+            TypioWlAuxHandler *h = typio_wl_aux_handler_for_voice(capture, frontend);
+            if (h)
+                frontend->aux_handlers[frontend->aux_handler_count++] = h;
+        }
+    }
+    if (voice && typio_voice_session_is_available(voice))
+        typio_log_info("Voice input service ready");
+    else if (voice)
+        typio_log_info("Voice input service created but no model");
+    else
+        typio_log_warning("Failed to create voice input service");
+
+    if (voice) {
+        size_t cap = sizeof(frontend->aux_handlers) / sizeof(frontend->aux_handlers[0]);
+        if (frontend->aux_handler_count < cap) {
+            TypioWlAuxHandler *h = typio_wl_aux_handler_for_voice(voice, frontend);
+            if (h)
+                frontend->aux_handlers[frontend->aux_handler_count++] = h;
+        }
+    }
+}
+#endif
