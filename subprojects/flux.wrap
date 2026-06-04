@@ -1,6 +1,6 @@
 [wrap-git]
 url = https://github.com/ming2k/flux.git
-revision = 3feff04
+revision = 50ee7db
 depth = 1
 
 [provide]

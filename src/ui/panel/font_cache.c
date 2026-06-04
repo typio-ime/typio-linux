@@ -1,6 +1,13 @@
 /**
  * @file font_cache.c
  * @brief FT_Face + hb_font_t object cache (see header).
+ *
+ * FT_Face objects are shared by file path: each unique font file is mmap'd
+ * once (one FT_New_Face per file). Distinct (size, weight) tuples for the
+ * same file create separate FontObj entries with their own hb_font and
+ * font_id, but reference the shared FT_Face. The face's pixel size and
+ * variable-font weight are applied on demand via font_cache_apply() before
+ * each shaping or rasterisation call.
  */
 #include "font_cache.h"
 
@@ -26,7 +33,43 @@ bool font_cache_init(void)
     return true;
 }
 
-/* ── Object cache ───────────────────────────────────────────────────────── */
+/* ── Shared face table (one FT_Face per file path) ─────────────────────── */
+
+typedef struct {
+    char     *path;
+    FT_Face   face;
+    int32_t   last_weight;
+} FaceEntry;
+
+static FaceEntry *faces;
+static size_t      face_count;
+static size_t      face_cap;
+
+static FT_Face face_lookup(const char *path)
+{
+    for (size_t i = 0; i < face_count; ++i) {
+        if (strcmp(faces[i].path, path) == 0) return faces[i].face;
+    }
+    return NULL;
+}
+
+static FaceEntry *face_insert(const char *path, FT_Face face)
+{
+    if (face_count == face_cap) {
+        size_t newcap = face_cap ? face_cap * 2 : 8;
+        FaceEntry *grown = (FaceEntry *)realloc(faces, newcap * sizeof(*grown));
+        if (!grown) return NULL;
+        faces = grown;
+        face_cap = newcap;
+    }
+    FaceEntry *e = &faces[face_count++];
+    e->path        = strdup(path);
+    e->face        = face;
+    e->last_weight = 0;
+    return e;
+}
+
+/* ── Object cache (one FontObj per path × size × weight) ───────────────── */
 #define FONT_OBJ_CACHE_INIT_CAP 64
 
 static FontObj  *cache;
@@ -38,13 +81,21 @@ void font_cache_clear(void)
 {
     for (size_t i = 0; i < cache_count; ++i) {
         if (cache[i].hb_font) hb_font_destroy(cache[i].hb_font);
-        if (cache[i].face)    FT_Done_Face(cache[i].face);
         free(cache[i].path);
     }
     free(cache);
     cache = NULL;
     cache_count = 0;
     cache_cap = 0;
+
+    for (size_t i = 0; i < face_count; ++i) {
+        if (faces[i].face) FT_Done_Face(faces[i].face);
+        free(faces[i].path);
+    }
+    free(faces);
+    faces = NULL;
+    face_count = 0;
+    face_cap = 0;
 }
 
 static FontObj *cache_lookup(const char *path, float size, int32_t weight)
@@ -58,13 +109,12 @@ static FontObj *cache_lookup(const char *path, float size, int32_t weight)
     return NULL;
 }
 
-/* Returns false only on allocation failure (caller then disposes the face). */
 static bool cache_insert(const char *path, float size, int32_t weight,
                          FT_Face face, hb_font_t *hb_font, uint32_t font_id)
 {
     if (cache_count == cache_cap) {
         size_t newcap = cache_cap ? cache_cap * 2 : FONT_OBJ_CACHE_INIT_CAP;
-        FontObj *grown = realloc(cache, newcap * sizeof(*grown));
+        FontObj *grown = (FontObj *)realloc(cache, newcap * sizeof(*grown));
         if (!grown) return false;
         cache = grown;
         cache_cap = newcap;
@@ -119,39 +169,56 @@ done:
     return ok;
 }
 
+void font_cache_apply(FT_Face face, float size, int32_t weight)
+{
+    if (!face) return;
+    FT_Set_Pixel_Sizes(face, 0, (FT_UInt)(size + 0.5f));
+
+    for (size_t i = 0; i < face_count; ++i) {
+        if (faces[i].face == face) {
+            if (faces[i].last_weight != weight) {
+                set_face_weight(face, weight);
+                faces[i].last_weight = weight;
+            }
+            return;
+        }
+    }
+    set_face_weight(face, weight);
+}
+
 FontObj *font_cache_get_or_create(const char *path, float size, int32_t weight)
 {
     FontObj *entry = cache_lookup(path, size, weight);
-    if (entry) return entry;
-    if (!ft_library) return NULL;
+    if (entry) {
+        font_cache_apply(entry->face, size, weight);
+        return entry;
+    }
 
-    FT_Face face = NULL;
-    if (FT_New_Face(ft_library, path, 0, &face) != 0) return NULL;
+    FT_Face face = face_lookup(path);
+    if (!face) {
+        if (!ft_library) return NULL;
+        if (FT_New_Face(ft_library, path, 0, &face) != 0) return NULL;
 
-    for (int i = 0; i < face->num_charmaps; i++) {
-        if (FT_Get_CMap_Format(face->charmaps[i]) == 12) {
-            FT_Set_Charmap(face, face->charmaps[i]);
-            break;
+        for (int i = 0; i < face->num_charmaps; i++) {
+            if (FT_Get_CMap_Format(face->charmaps[i]) == 12) {
+                FT_Set_Charmap(face, face->charmaps[i]);
+                break;
+            }
+        }
+        if (!face_insert(path, face)) {
+            FT_Done_Face(face);
+            return NULL;
         }
     }
 
-    set_face_weight(face, weight);
-
-    if (FT_Set_Pixel_Sizes(face, 0, (FT_UInt)(size + 0.5f)) != 0) {
-        FT_Done_Face(face);
-        return NULL;
-    }
+    font_cache_apply(face, size, weight);
 
     hb_font_t *hb_font = hb_ft_font_create_referenced(face);
-    if (!hb_font) {
-        FT_Done_Face(face);
-        return NULL;
-    }
+    if (!hb_font) return NULL;
 
     uint32_t font_id = next_font_id++;
     if (!cache_insert(path, size, weight, face, hb_font, font_id)) {
         hb_font_destroy(hb_font);
-        FT_Done_Face(face);
         return NULL;
     }
     return cache_lookup(path, size, weight);

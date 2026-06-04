@@ -252,6 +252,11 @@ bool glyph_upload_region(flux_image *img,
     if (vkQueueSubmit(gfx_queue, 1, &si, ctx->fence) != VK_SUCCESS)
         return false;
 
-    vkWaitForFences(vkd, 1, &ctx->fence, VK_TRUE, UINT64_MAX);
+    /* Finite timeout: if the GPU is stalled (driver hang, memory pressure),
+     * skip this glyph rather than freezing the event loop indefinitely.
+     * 100ms is generous for a single small texture upload. */
+    VkResult wr = vkWaitForFences(vkd, 1, &ctx->fence, VK_TRUE,
+                                   100ull * 1000ull * 1000ull);
+    if (wr != VK_SUCCESS) return false;
     return true;
 }

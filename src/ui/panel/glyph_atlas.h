@@ -58,8 +58,12 @@ typedef struct GlyphAtlasDiag {
 /* Look up a glyph's atlas slot, rasterising + uploading it on first sight.
  * After warm-up every panel glyph is a hash hit with zero GPU work. Returns
  * NULL only if no render device exists yet or the table is pathologically
- * full; the slot may be non-drawable (whitespace / load failure / no fit). */
-const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t glyph_id);
+ * full; the slot may be non-drawable (whitespace / load failure / no fit).
+ *
+ * @size_px and @weight are applied to @face before FT_Load_Glyph on a miss;
+ * required because the FT_Face is shared across (size, weight) tuples. */
+const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t glyph_id,
+                                  float size_px, int32_t weight);
 
 /* The atlas texture, for sampling sub-rects at draw time. Builds the atlas on
  * demand; returns NULL only when no render device exists yet. */

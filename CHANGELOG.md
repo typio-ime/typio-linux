@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **FT_Face sharing across (size, weight) tuples.** `font_cache.c` now
+  maintains a shared face table: each unique font file is mmap'd once
+  (one `FT_New_Face` per file). Distinct (size, weight) tuples create
+  separate `FontObj` entries with their own `hb_font` and `font_id`, but
+  reference the shared `FT_Face`. `font_cache_apply()` sets the face's
+  pixel size and variable-font weight before each shaping or rasterisation
+  call. Reduces memory usage by ~85 MB for CJK fonts (one 17 MB mmap
+  instead of six).
+
+### Changed
+
+- **Input-first event loop scheduling.** Panel flush now runs at the end
+  of each iteration, after all input events have been dispatched. If GPU
+  work stalls (atlas reclaim, fence timeout), the next iteration still
+  processes queued input before attempting another panel render.
+- **Glyph upload fence timeout.** `glyph_upload.c` now uses a 100 ms
+  timeout for `vkWaitForFences` instead of `UINT64_MAX`. If the GPU is
+  stalled (driver hang, memory pressure), the glyph is skipped rather
+  than freezing the event loop indefinitely.
+- **Atlas reclaim only on packer exhaustion.** `glyph_atlas_reclaim` now
+  triggers only when the shelf packer is exhausted (texture full), not
+  when the hash table reaches 75% load. With 131072 slots and ~3000
+  unique CJK glyphs, the table is well below 75% even after hours of
+  use; packer exhaustion is the real signal that the texture needs
+  rebuilding.
+
 ## [0.1.10] — 2026-06-03
 
 ### Fixed

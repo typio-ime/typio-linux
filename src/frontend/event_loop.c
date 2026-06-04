@@ -321,8 +321,10 @@ int typio_wl_frontend_run(TypioWlFrontend *frontend) {
          * dropped our grab without a deactivate, leaving us wedged. */
         typio_wl_reconcile_tick(frontend);
 
-        event_loop_flush_pending_panel(frontend);
-
+        /* Input-first scheduling: prepare/flush Wayland, poll, then dispatch
+         * incoming events BEFORE panel render. This ensures input events are
+         * processed promptly even if panel GPU work stalls. Panel flush runs
+         * at the end of the iteration, after all input has been handled. */
         if (event_loop_prepare_and_flush(frontend) < 0) {
             if (event_loop_recover(frontend, &aux))
                 continue;
@@ -390,6 +392,12 @@ int typio_wl_frontend_run(TypioWlFrontend *frontend) {
         if (!frontend->running) {
             break;
         }
+
+        /* Panel flush runs AFTER all input has been dispatched this iteration.
+         * If GPU work stalls (atlas reclaim, fence timeout), the next iteration
+         * will still process queued input before attempting another panel render. */
+        event_loop_flush_pending_panel(frontend);
+
         typio_wl_frontend_watchdog_heartbeat(frontend);
     }
 

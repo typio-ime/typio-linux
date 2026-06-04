@@ -5,6 +5,7 @@
 #include "glyph_atlas.h"
 #include "glyph_upload.h"
 #include "glyph_pack.h"
+#include "font_cache.h"
 #include "device.h"
 
 #include <typio/abi/log.h>
@@ -94,14 +95,22 @@ bool glyph_atlas_reclaim(void)
 {
     if (!g_atlas.slots) return false;
 
+    /* Only reclaim when packer is exhausted (texture full). The hash table
+     * load factor is a secondary concern — with 131072 slots and ~3000 unique
+     * CJK glyphs, the table is well below 75% even after hours of use.
+     * Packer exhaustion is the real signal that the texture needs rebuilding.
+     *
+     * This is called from the panel render path; triggering reclaim here
+     * causes a full GPU drain via flux_device_wait_idle. To avoid stalling
+     * every frame when the atlas is near capacity, we only trigger once
+     * per packer-exhaustion event (the flag is cleared by glyph_atlas_reset). */
+    if (!g_atlas.packer_exhausted) return false;
+
     uint32_t threshold =
         (uint32_t)((uint64_t)GLYPH_SLOT_CAP * ATLAS_RECLAIM_THRESHOLD_PCT / 100);
-    bool over_load = g_atlas.live_count >= threshold;
-    if (!over_load && !g_atlas.packer_exhausted) return false;
-
     typio_log_debug("Glyph atlas reclaim: rebuild (live=%u/%u, reason=%s)",
                     g_atlas.live_count, (unsigned)GLYPH_SLOT_CAP,
-                    g_atlas.packer_exhausted ? "image-full" : "load-factor");
+                    g_atlas.live_count >= threshold ? "load+packer" : "image-full");
     glyph_atlas_reset();
     return true;
 }
@@ -131,7 +140,8 @@ void glyph_atlas_shutdown(void)
     g_atlas = (GlyphAtlas){0};
 }
 
-const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t glyph_id)
+const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t glyph_id,
+                                  float size_px, int32_t weight)
 {
     if (!glyph_atlas_ensure()) return NULL;
 
@@ -154,6 +164,7 @@ const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t glyph_
      * it (overflow inserts a non-drawable slot, but never resets the table). */
     GlyphSlot slot = { .key = key, .occupied = true, .drawable = false };
 
+    font_cache_apply(face, size_px, weight);
     if (FT_Load_Glyph(face, glyph_id, FT_LOAD_RENDER | FT_LOAD_TARGET_NORMAL) == 0) {
         FT_GlyphSlot s = face->glyph;
         FT_Bitmap   *b = &s->bitmap;

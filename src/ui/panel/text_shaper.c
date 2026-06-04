@@ -49,6 +49,8 @@ struct TypioTextShape {
     FT_Face     fallback_faces[MAX_FALLBACK_FONTS];
     uint32_t    fallback_font_ids[MAX_FALLBACK_FONTS];
     uint8_t     fallback_count;
+    float       size_px;    /* retained for atlas rasterisation of shared face */
+    int32_t     weight;     /* retained for atlas rasterisation of shared face */
     float       width;
     float       height;
     float       baseline;
@@ -209,6 +211,9 @@ static TypioTextShape *create_layout(void *engine, const char *text,
     TypioTextShape *layout = shape_text(font, text);
     if (!layout) { free(font_file); return NULL; }
 
+    layout->size_px = size_px;
+    layout->weight  = weight;
+
     if (layout_has_missing_glyphs(layout) && layout->text) {
         assign_fallbacks(layout, weight, size_px, font_file);
     }
@@ -266,7 +271,8 @@ bool typio_text_shape_fill(flux_canvas *canvas, flux_arena *arena,
             }
         }
 
-        const GlyphSlot *g = glyph_atlas_get(font_id, face, glyph_id);
+        const GlyphSlot *g = glyph_atlas_get(font_id, face, glyph_id,
+                                               layout->size_px, layout->weight);
         if (!g || !g->drawable) continue;
 
         /* Integer glyph placement relative to the (fractional) draw origin,
