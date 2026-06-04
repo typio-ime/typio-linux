@@ -1,5 +1,5 @@
 project('typio-wayland', 'c',
-  version: '0.1.13',
+  version: '0.1.14',
   default_options: ['warning_level=2', 'c_std=c23'],
   meson_version: '>=1.0.0',
 )
