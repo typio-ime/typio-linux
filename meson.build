@@ -1,11 +1,7 @@
 project('typio-wayland', 'c',
-    version: '0.1.10',
-    default_options: [
-        'c_std=c23',
-        'warning_level=2',
-        'werror=false',
-    ],
-    meson_version: '>=1.0.0',
+  version: '0.1.11',
+  default_options: ['warning_level=2', 'c_std=c23'],
+  meson_version: '>=1.0.0',
 )
 
 cc = meson.get_compiler('c')

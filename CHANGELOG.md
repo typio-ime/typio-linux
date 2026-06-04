@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11] — 2026-06-04
+
 ### Added
 
 - **FT_Face sharing across (size, weight) tuples.** `font_cache.c` now
