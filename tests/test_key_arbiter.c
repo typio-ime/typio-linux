@@ -6,6 +6,8 @@
 #include "arbiter.h"
 #include "internal.h"
 #include "typio/abi/event.h"
+#include "typio/runtime/instance.h"
+#include "typio/runtime/registry.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -118,17 +120,36 @@ void typio_wl_vk_forward_key(struct TypioWlKeyboard *keyboard,
     }
 }
 
-/* Called by arbiter_consume → engine_manager_next */
-static int fake_engine_manager;  /* just a non-NULL pointer target */
-TypioEngineManager *typio_instance_get_engine_manager(
+/* Called by arbiter_consume → typio_registry_next_keyboard */
+static int fake_registry;  /* just a non-NULL pointer target */
+TypioRegistry *typio_instance_get_registry(
     [[maybe_unused]] TypioInstance *instance) {
-    return (TypioEngineManager *)&fake_engine_manager;
+    return (TypioRegistry *)&fake_registry;
 }
 
-TypioResult typio_engine_manager_next_keyboard(
-    [[maybe_unused]] TypioEngineManager *manager) {
+TypioResult typio_registry_next_keyboard(
+    [[maybe_unused]] TypioRegistry *registry) {
     engine_switch_count++;
     return TYPIO_OK;
+}
+
+/* Composition / preedit teardown stubs hit by arbiter_consume before the
+ * engine switch. The arbiter only needs them to return cleanly. */
+void typio_wl_set_preedit([[maybe_unused]] TypioWlFrontend *frontend,
+                          [[maybe_unused]] const char *text,
+                          [[maybe_unused]] int cursor_begin,
+                          [[maybe_unused]] int cursor_end) {
+}
+
+void typio_wl_commit([[maybe_unused]] TypioWlFrontend *frontend) {
+}
+
+void typio_wl_panel_coordinator_hide([[maybe_unused]] TypioWlFrontend *frontend,
+                                     [[maybe_unused]] TypioWlUiOwner owner) {
+}
+
+void typio_wl_session_cancel_ui_tracking(
+    [[maybe_unused]] TypioWlSession *session) {
 }
 
 /* Trace stub */
@@ -136,11 +157,6 @@ void typio_wl_trace(
     [[maybe_unused]] TypioWlFrontend *frontend,
     [[maybe_unused]] const char *category,
     [[maybe_unused]] const char *format, ...) {
-}
-
-/* Log stub */
-void typio_log([[maybe_unused]] int level,
-               [[maybe_unused]] const char *format, ...) {
 }
 
 /* ── Test helpers ───────────────────────────────────────────────── */
@@ -159,7 +175,12 @@ static void setup(void) {
     memset(&test_keyboard, 0, sizeof(test_keyboard));
     memset(&test_session, 0, sizeof(test_session));
     test_keyboard.frontend = &test_frontend;
-    typio_shortcut_config_defaults(&test_frontend.shortcuts);
+    /* Default engine-switch chord is Ctrl+Shift (modifier-only). Set it
+     * directly so the test stays independent of the config loader. */
+    test_frontend.shortcuts.switch_engine = (TypioShortcutBinding){
+        .modifiers = TYPIO_MOD_CTRL | TYPIO_MOD_SHIFT,
+        .keysym = 0,
+    };
     typio_wl_key_arbiter_init(&test_keyboard.arbiter);
     reset_mocks();
 }
@@ -336,6 +357,37 @@ TEST(no_engine_events_on_consume) {
     ASSERT(engine_switch_count == 1);
 }
 
+TEST(reset_clears_mid_chord_buffering) {
+    setup();
+    /* Begin a chord but stop mid-buffer (Ctrl held, Shift buffered) — this is
+     * the state a focus-out can leave behind: the soft pause retains the grab,
+     * so the arbiter is not torn down. */
+    press(KC_CTRL, TYPIO_KEY_Control_L, 100);
+    press(KC_SHIFT, TYPIO_KEY_Shift_L, 110);
+    ASSERT(test_keyboard.arbiter.state == TYPIO_ARBITER_BUFFERING);
+    ASSERT(test_keyboard.arbiter.buffer_count > 0);
+
+    /* typio_wl_keyboard_pause() calls this on the focus-out boundary. It must
+     * return the FSM to IDLE with an empty buffer so the retained grab does not
+     * carry a half-formed chord into the next activation. */
+    typio_wl_key_arbiter_reset(&test_keyboard.arbiter);
+    ASSERT(test_keyboard.arbiter.state == TYPIO_ARBITER_IDLE);
+    ASSERT(test_keyboard.arbiter.buffer_count == 0);
+
+    /* Simulate the modifier scrub the pause also performs, then prove a fresh
+     * chord on the next activation consumes cleanly — no stale state misfires
+     * or suppresses the switch. */
+    test_keyboard.physical_modifiers = 0;
+    reset_mocks();
+
+    press(KC_CTRL, TYPIO_KEY_Control_L, 300);
+    press(KC_SHIFT, TYPIO_KEY_Shift_L, 310);
+    release(KC_SHIFT, TYPIO_KEY_Shift_L, 320);
+    release(KC_CTRL, TYPIO_KEY_Control_L, 330);
+    ASSERT(test_keyboard.arbiter.state == TYPIO_ARBITER_IDLE);
+    ASSERT(engine_switch_count == 1);
+}
+
 /* ── Main ───────────────────────────────────────────────────────── */
 
 int main(void) {
@@ -348,6 +400,7 @@ int main(void) {
     run_test_cancel_on_alt();
     run_test_timestamps_preserved_on_replay();
     run_test_no_engine_events_on_consume();
+    run_test_reset_clears_mid_chord_buffering();
     printf("\n%d/%d tests passed\n", tests_passed, tests_run);
     return tests_passed == tests_run ? 0 : 1;
 }

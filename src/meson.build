@@ -2,6 +2,10 @@
 
 # ── Wayland protocol generation ───────────────────────────────────────────
 protocols = []
+# Header-only subset of the generated protocol targets, exported for host
+# unit tests that include internal.h (which pulls the client-protocol headers)
+# but do not link the protocol marshalling code.
+protocol_headers = []
 if enable_wayland
     protocol_xmls = {
         'input-method-unstable-v2': meson.project_source_root() / 'protocols' / 'input-method-unstable-v2.xml',
@@ -22,6 +26,7 @@ if enable_wayland
             command: [wayland_scanner, 'private-code', '@INPUT@', '@OUTPUT@'],
         )
         protocols += [header, code]
+        protocol_headers += [header]
     endforeach
 endif
 

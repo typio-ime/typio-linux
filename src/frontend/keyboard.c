@@ -282,6 +282,17 @@ void typio_wl_keyboard_pause(TypioWlKeyboard *keyboard) {
         xkb_state_update_mask(keyboard->xkb_state, 0, 0, 0, 0, 0, 0);
     }
 
+    /* The grab is retained across the pause, so the next focus reuses this
+     * keyboard rather than rebuilding it. Modifier key-releases that arrive
+     * while paused are dropped by the routing guard and never clear
+     * physical_modifiers, so without this scrub a Ctrl/Shift held at defocus
+     * stays phantom-held — corrupting the shortcut arbiter's chord detection
+     * on the next activation. Reset the host-side arbitration state that the
+     * reused grab will rely on (xkb mask above is already zeroed). */
+    keyboard->physical_modifiers = 0;
+    keyboard->saw_blocking_modifier = false;
+    typio_wl_key_arbiter_reset(&keyboard->arbiter);
+
     typio_wl_trace(keyboard->frontend, "grab", "action=pause status=ok");
     typio_log_debug("Keyboard paused (grab retained)");
 }

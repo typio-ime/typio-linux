@@ -77,6 +77,14 @@ test_shortcut_chord = executable('test_shortcut_chord',
 )
 test('shortcut_chord', test_shortcut_chord)
 
+test_key_arbiter = executable('test_key_arbiter',
+    ['test_key_arbiter.c', '../src/input/arbiter.c', '../src/input/chords.c',
+     protocol_headers],
+    include_directories: [wayland_test_inc, top_inc],
+    dependencies: libtypio_dep,
+)
+test('key_arbiter', test_key_arbiter)
+
 test_modifier_policy = executable('test_modifier_policy',
     ['test_modifier_policy.c', '../src/input/modifiers.c'],
     include_directories: wayland_test_inc,

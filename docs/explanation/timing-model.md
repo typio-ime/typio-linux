@@ -212,6 +212,7 @@ The frontend uses one poll loop for Wayland and auxiliary runtime sources. Auxil
 - no per-key tracking state survives a teardown
 - application shortcut press/release stays symmetric
 - a rebuilt grab never inherits prior-epoch keymap health
+- a grab **retained** across a soft pause (focus-out that keeps the grab to skip rebuild) must still shed host-side input-arbitration state — `physical_modifiers`, `saw_blocking_modifier`, and the shortcut arbiter — so a modifier held at defocus, whose release the routing guard drops, cannot phantom-persist into the next activation and corrupt chord detection
 - fail-safe paths prefer releasing the grab over running partially broken
 - config reload bursts coalesce into a single runtime reload once the filesystem settles
 - an engine-switch failure must not silently clear the previously active engine in that category
