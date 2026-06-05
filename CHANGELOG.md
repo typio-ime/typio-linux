@@ -7,7 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-06-05
+
 ### Changed
+
+- **Renamed the project `typio-wayland` → `typio-linux`.** The old name
+  framed the display protocol as the whole project and capped its scope;
+  this host is the Linux home for Typio, with Wayland as its current (and
+  only) frontend. Updated the meson project name, the `--version` output,
+  the README (now "Typio for Linux — a Wayland-native input method host",
+  noting X11 is not supported and not planned), and every doc reference.
+  The installed binary name (`typio`) is unchanged.
+
+- **Renamed the platform config file `wayland.toml` → `platform.toml`.**
+  *Breaking, no backward-compat fallback:* rename
+  `~/.config/typio/wayland.toml` to `platform.toml`. Paired with the
+  platform-independent `core.toml`, the two filenames now self-document
+  the original split — portable core config vs host/platform-specific
+  config — instead of naming the file after one display protocol.
+
+- **Renamed `src/voice/` → `src/audio/`.** The directory only holds the
+  PipeWire audio-capture layer (implementing `TypioAudioSource`); voice
+  recognition lives in engine plugins. The PipeWire node
+  `typio-voice-capture` is now `typio-audio-capture`. The voice-input
+  feature vocabulary (`enable_voice`, `TypioVoiceSession`, …) is
+  deliberately unchanged — it names the feature, not the capture layer.
 
 - **All Wayland host code consolidated under `src/wayland/`.**
   `src/frontend/` was a role word that dropped the one defining trait —

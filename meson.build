@@ -1,5 +1,5 @@
 project('typio-linux', 'c',
-  version: '0.1.16',
+  version: '0.1.17',
   default_options: ['warning_level=2', 'c_std=c23'],
   meson_version: '>=1.0.0',
 )
