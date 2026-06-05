@@ -349,7 +349,7 @@ bool typio_wl_frontend_reconnect(TypioWlFrontend *frontend) {
     /* No event-loop progress happens during the blocking backoff, so park
      * the watchdog. Destroying the keyboard in unbind also disarms it; this
      * is belt-and-suspenders for the case where no grab existed. */
-    atomic_store(&frontend->watchdog->armed, false);
+    typio_wl_frontend_watchdog_set_armed(frontend, false);
 
     /* Drop every Wayland-derived object. Engine/session state, aux handlers,
      * config watch, and the resume signal are intentionally preserved, so an

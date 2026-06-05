@@ -346,6 +346,11 @@ struct TypioWlWatchdog {
     TYPIO_ATOMIC(int) loop_stage;
     pthread_t thread;
     bool thread_started;
+    /* Gate the watchdog thread: it blocks on `cond` while disarmed (no focused
+     * input) so an idle daemon causes zero wakeups, and wakes immediately when
+     * `armed`/`stop` flip. `lock` guards the condition wait, not the atomics. */
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
     TypioWlFrontend *frontend;
 };
 
@@ -392,8 +397,15 @@ void typio_wl_frontend_emit_runtime_state_changed(TypioWlFrontend *frontend);
 void typio_wl_frontend_watchdog_heartbeat(TypioWlFrontend *frontend);
 void typio_wl_frontend_watchdog_set_stage(TypioWlFrontend *frontend,
                                           TypioWlLoopStage stage);
+/* Close a work stage: record progress and return to the IDLE waiting state.
+ * Collapses the repeated `heartbeat(); set_stage(IDLE);` tail at the end of
+ * each work block into one call. */
+void typio_wl_frontend_watchdog_stage_done(TypioWlFrontend *frontend);
 void typio_wl_frontend_watchdog_start(TypioWlFrontend *frontend);
 void typio_wl_frontend_watchdog_stop(TypioWlFrontend *frontend);
+/* Arm/disarm liveness monitoring. Armed only while an input field is focused;
+ * disarming lets the watchdog thread block until the next focus. */
+void typio_wl_frontend_watchdog_set_armed(TypioWlFrontend *frontend, bool armed);
 void typio_wl_frontend_log_shortcuts(TypioWlFrontend *frontend,
                                      const char *prefix);
 void typio_wl_frontend_handle_config_watch(TypioWlFrontend *frontend);

@@ -69,6 +69,12 @@ TEST(retry_shortens_poll_timeout_only_when_flushable) {
                                                        true, 100), 16);
     ASSERT_EQ(typio_wl_panel_scheduler_poll_timeout_ms(TYPIO_WL_PANEL_SCHEDULE_RETRY,
                                                        true, 8), 8);
+    /* A negative (infinite) timeout is still shortened to the retry cadence. */
+    ASSERT_EQ(typio_wl_panel_scheduler_poll_timeout_ms(TYPIO_WL_PANEL_SCHEDULE_RETRY,
+                                                       true, -1), 16);
+    /* …but only when in RETRY+flushable; otherwise infinite is preserved. */
+    ASSERT_EQ(typio_wl_panel_scheduler_poll_timeout_ms(TYPIO_WL_PANEL_SCHEDULE_DIRTY,
+                                                       true, -1), -1);
 }
 
 int main(void) {

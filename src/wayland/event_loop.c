@@ -63,33 +63,6 @@ frontend_has_keyboard_engine(TypioWlFrontend *frontend) {
     return has;
 }
 
-/* @brief Run one tick of the session controller:
- *   reduce(facts, prev) → desired
- *   observe(resources)  → actual
- *   diff(desired, actual) → effects
- *   apply(effects)
- * then update prev. */
-static void
-run_session_controller_pipeline(TypioWlFrontend *frontend) {
-    TypioWlInputFacts facts;
-    TypioWlDesiredState desired;
-    TypioWlActualState actual;
-    TypioWlEffectSet effects;
-
-    if (!frontend)
-        return;
-
-    facts = frontend->session_facts;
-    facts.engine_present = frontend_has_keyboard_engine(frontend);
-
-    desired = typio_wl_session_reduce(&facts, &frontend->session_prev_desired);
-    actual = typio_wl_session_observe(frontend);
-    effects = typio_wl_session_diff(&desired, &actual);
-
-    typio_wl_session_apply(frontend, &effects);
-    frontend->session_prev_desired = desired;
-}
-
 static void
 log_session_effects_if_present(TypioWlFrontend *frontend,
                                const TypioWlDesiredState *desired,
@@ -119,6 +92,36 @@ log_session_effects_if_present(TypioWlFrontend *frontend,
                    effects->clear_preedit ? "yes" : "no",
                    effects->commit ? "yes" : "no",
                    effects->reactivate ? "yes" : "no");
+}
+
+/* @brief Run one tick of the session controller:
+ *   reduce(facts, prev) → desired
+ *   observe(resources)  → actual
+ *   diff(desired, actual) → effects
+ *   apply(effects)
+ * then update prev. This is the single point that converges the frontend's
+ * resource state onto the desired state derived from the recorded facts. */
+static void
+run_session_controller_pipeline(TypioWlFrontend *frontend) {
+    TypioWlInputFacts facts;
+    TypioWlDesiredState desired;
+    TypioWlActualState actual;
+    TypioWlEffectSet effects;
+
+    if (!frontend)
+        return;
+
+    facts = frontend->session_facts;
+    facts.engine_present = frontend_has_keyboard_engine(frontend);
+
+    desired = typio_wl_session_reduce(&facts, &frontend->session_prev_desired);
+    actual = typio_wl_session_observe(frontend);
+    effects = typio_wl_session_diff(&desired, &actual);
+
+    log_session_effects_if_present(frontend, &desired, &actual, &effects);
+
+    typio_wl_session_apply(frontend, &effects);
+    frontend->session_prev_desired = desired;
 }
 
 /* ── Panel flush ──────────────────────────────────────────────────────── */
@@ -187,16 +190,14 @@ static void event_loop_flush_pending_panel(TypioWlFrontend *frontend) {
 
     typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_PANEL_UPDATE);
     typio_wl_session_flush_scheduled_ui_update(frontend->session);
-    typio_wl_frontend_watchdog_heartbeat(frontend);
-    typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_IDLE);
+    typio_wl_frontend_watchdog_stage_done(frontend);
 }
 
 static int event_loop_prepare_and_flush(TypioWlFrontend *frontend) {
     while (wl_display_prepare_read(frontend->display) != 0) {
         typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_PREPARE_READ);
         wl_display_dispatch_pending(frontend->display);
-        typio_wl_frontend_watchdog_heartbeat(frontend);
-        typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_IDLE);
+        typio_wl_frontend_watchdog_stage_done(frontend);
     }
 
     typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_FLUSH);
@@ -219,6 +220,15 @@ static TypioWlLoopAuxFds event_loop_init_aux_fds(TypioWlFrontend *frontend) {
     };
     (void)frontend;
     return aux;
+}
+
+/* Combine two poll() timeouts, treating a negative value as "infinite" (block
+ * until an fd is ready). Returns the sooner of the two deadlines; a candidate
+ * of -1 leaves the current timeout unchanged. */
+static int poll_timeout_min(int current_ms, int candidate_ms) {
+    if (candidate_ms < 0) return current_ms;
+    if (current_ms < 0)   return candidate_ms;
+    return candidate_ms < current_ms ? candidate_ms : current_ms;
 }
 
 /**
@@ -288,29 +298,50 @@ static int event_loop_poll(TypioWlFrontend *frontend,
     }
 
     typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_POLL);
-    int timeout_ms = 100;
-    bool panel_flushable = typio_wl_panel_scheduler_should_flush(
+
+    /* Default: block until an fd becomes ready — zero idle wakeups. Key
+     * repeat, the indicator timer and the config-reload debounce are all
+     * timerfds already in the poll set, so they wake us on their own. Only the
+     * three deadlines below are driven by the poll timeout itself; each lowers
+     * the timeout (via poll_timeout_min) so its check still fires on time. */
+    int timeout_ms = -1;
+    TypioWlPanelScheduleState sched_state =
         frontend->panel_coord ? frontend->panel_coord->panel_schedule_state
-                              : TYPIO_WL_PANEL_SCHEDULE_IDLE,
+                              : TYPIO_WL_PANEL_SCHEDULE_IDLE;
+
+    /* (1) Panel retry: re-attempt a deferred flush at a fixed cadence. */
+    bool panel_flushable = typio_wl_panel_scheduler_should_flush(
+        sched_state,
         frontend->session != nullptr,
         frontend->session && frontend->session->ctx != nullptr,
         frontend->session && frontend->session->ctx &&
             typio_input_context_is_focused(frontend->session->ctx));
     timeout_ms = typio_wl_panel_scheduler_poll_timeout_ms(
-        frontend->panel_coord ? frontend->panel_coord->panel_schedule_state
-                              : TYPIO_WL_PANEL_SCHEDULE_IDLE,
-        panel_flushable,
-        timeout_ms);
+        sched_state, panel_flushable, timeout_ms);
+
+    /* (2) Positioned-UI anchor probe: a client that sets its caret rect once
+     * and never re-emits it (e.g. terminals) would otherwise leave the popup
+     * pending indefinitely. Bound the wait so it resolves on the probe
+     * deadline even if no other fd activity arrives. */
+    if (frontend->panel_coord && frontend->panel_coord->positioned_ui_pending &&
+        !typio_wl_panel_coordinator_anchor_ready(frontend)) {
+        uint64_t now_ms = typio_wl_monotonic_ms();
+        uint64_t deadline_ms = frontend->panel_coord->positioned_ui_pending_since_ms +
+            (uint64_t)typio_wl_panel_coordinator_anchor_timeout_ms(frontend);
+        int remaining = deadline_ms > now_ms ? (int)(deadline_ms - now_ms) : 0;
+        timeout_ms = poll_timeout_min(timeout_ms, remaining);
+    }
+
+    /* (3) Virtual-keyboard keymap install deadline. */
     if (frontend->vk->state == TYPIO_WL_VK_STATE_NEEDS_KEYMAP &&
         frontend->vk->keymap_deadline_ms > 0) {
         uint64_t now_ms = typio_wl_monotonic_ms();
         int deadline_ms = frontend->vk->keymap_deadline_ms <= now_ms
                               ? 0
                               : (int)(frontend->vk->keymap_deadline_ms - now_ms);
-        if (deadline_ms < timeout_ms) {
-            timeout_ms = deadline_ms;
-        }
+        timeout_ms = poll_timeout_min(timeout_ms, deadline_ms);
     }
+
     return poll(fds, (nfds_t)nfds, timeout_ms);
 }
 
@@ -327,8 +358,7 @@ static int event_loop_handle_wayland(TypioWlFrontend *frontend,
         typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_DISPATCH_PENDING);
         wl_display_dispatch_pending(frontend->display);
         frontend->dispatch_epoch++;
-        typio_wl_frontend_watchdog_heartbeat(frontend);
-        typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_IDLE);
+        typio_wl_frontend_watchdog_stage_done(frontend);
     } else {
         wl_display_cancel_read(frontend->display);
     }
@@ -366,8 +396,7 @@ static void event_loop_handle_aux_handlers(TypioWlFrontend *frontend,
                 h->on_ready(h);
             }
         }
-        typio_wl_frontend_watchdog_heartbeat(frontend);
-        typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_IDLE);
+        typio_wl_frontend_watchdog_stage_done(frontend);
     }
 }
 
@@ -416,8 +445,7 @@ int typio_wl_frontend_run(TypioWlFrontend *frontend) {
         int idx_indicator;
         int ret;
 
-        typio_wl_frontend_watchdog_heartbeat(frontend);
-        typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_IDLE);
+        typio_wl_frontend_watchdog_stage_done(frontend);
 
         /* Clear session-controller facts for this tick. Input-method event
          * handlers and the resume-signal callback will record new facts
@@ -476,42 +504,26 @@ int typio_wl_frontend_run(TypioWlFrontend *frontend) {
          * here, which the session controller will pick up on this tick. */
         event_loop_handle_aux_handlers(frontend, fds, aux_indices);
 
-        /* Session controller: reduce → observe → diff → apply. This is the
-         * single point that converges the frontend's resource state onto
-         * the desired state derived from the recorded facts. */
-        {
-            TypioWlInputFacts facts = frontend->session_facts;
-            facts.engine_present = frontend_has_keyboard_engine(frontend);
-            TypioWlDesiredState desired =
-                typio_wl_session_reduce(&facts, &frontend->session_prev_desired);
-            TypioWlActualState actual = typio_wl_session_observe(frontend);
-            TypioWlEffectSet effects = typio_wl_session_diff(&desired, &actual);
-
-            log_session_effects_if_present(frontend, &desired, &actual, &effects);
-
-            typio_wl_session_apply(frontend, &effects);
-            frontend->session_prev_desired = desired;
-        }
+        /* Session controller: the single point that converges the frontend's
+         * resource state onto the desired state derived from this tick's facts. */
+        run_session_controller_pipeline(frontend);
 
         if (idx_repeat >= 0 && (fds[idx_repeat].revents & POLLIN)) {
             typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_REPEAT);
             typio_wl_keyboard_dispatch_repeat(frontend->keyboard);
-            typio_wl_frontend_watchdog_heartbeat(frontend);
-            typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_IDLE);
+            typio_wl_frontend_watchdog_stage_done(frontend);
         }
 
         if (idx_config >= 0 && (fds[idx_config].revents & POLLIN)) {
             typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_CONFIG_RELOAD);
             typio_wl_frontend_handle_config_watch(frontend);
-            typio_wl_frontend_watchdog_heartbeat(frontend);
-            typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_IDLE);
+            typio_wl_frontend_watchdog_stage_done(frontend);
         }
 
         if (idx_config_reload >= 0 && (fds[idx_config_reload].revents & POLLIN)) {
             typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_CONFIG_RELOAD);
             typio_wl_frontend_dispatch_config_reload(frontend);
-            typio_wl_frontend_watchdog_heartbeat(frontend);
-            typio_wl_frontend_watchdog_set_stage(frontend, TYPIO_WL_LOOP_STAGE_IDLE);
+            typio_wl_frontend_watchdog_stage_done(frontend);
         }
 
         if (idx_indicator >= 0 && (fds[idx_indicator].revents & POLLIN)) {

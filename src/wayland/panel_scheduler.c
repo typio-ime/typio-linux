@@ -31,9 +31,13 @@ bool typio_wl_panel_scheduler_should_flush(TypioWlPanelScheduleState state,
 int typio_wl_panel_scheduler_poll_timeout_ms(TypioWlPanelScheduleState state,
                                              bool flushable,
                                              int current_timeout_ms) {
+    /* A negative current_timeout_ms means "no timeout / block indefinitely";
+     * retry must still shorten it to the retry cadence. Only an already-finite
+     * timeout that is shorter than the retry interval is left untouched. */
     if (state != TYPIO_WL_PANEL_SCHEDULE_RETRY ||
         !flushable ||
-        current_timeout_ms <= TYPIO_WL_PANEL_RETRY_POLL_MS) {
+        (current_timeout_ms >= 0 &&
+         current_timeout_ms <= TYPIO_WL_PANEL_RETRY_POLL_MS)) {
         return current_timeout_ms;
     }
 
