@@ -118,6 +118,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   post-mortem analysis, and the legacy `typio-recent-*.log` file
   sweep that ran at startup is dropped.
 
+### Changed
+
+- **All D-Bus clients migrated from libdbus to sd-bus (libsystemd).**
+  The three libdbus surfaces — logind's `PrepareForSleep` subscriber
+  in `engine/logind/resume.c`, the desktop-notifications client in
+  `notify/notifications.c` (currently not built), and the SNI tray
+  host in `tray/{sni,bus}.c` + `tray_internal.h` — now use
+  `sd-bus` from `libsystemd`. The SNI tray was the largest change:
+  `DBusObjectPathVTable.message_function` (one vtable per path) became
+  one `sd_bus_vtable` per `(path, interface)` pair registered with
+  `sd_bus_add_object_vtable`; signal subscription went from
+  `dbus_bus_add_match` + a global filter to `sd_bus_match_signal`
+  returning a per-subscription `sd_bus_slot`; the shared
+  `dbus_helpers.h` `a{sv}` dict-entry builders were inlined into
+  `sni.c` as four `append_dict_*` helpers. The dependency is
+  `dependency('libsystemd')` in `meson.build`; the build macro is
+  `HAVE_LIBSYSTEMD` (renamed from `HAVE_LIBDBUS`).
+
+### Removed
+
+- **`src/dbus_helpers.h`.** All callers (the SNI tray only, after
+  migration) have inlined the four helpers they need.
+
+- **`-ldbus-1` dependency.** The host now links only `libsystemd` for
+  D-Bus access; libdbus is gone from the link line.
+
 ## [0.1.15] - 2026-06-04
 
 ### Fixed
