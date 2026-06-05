@@ -15,7 +15,7 @@
 #include <string.h>
 
 #ifdef HAVE_LIBDBUS
-#  include <dbus/dbus.h>
+#  include <systemd/sd-bus.h>
 #endif
 
 /*
@@ -35,14 +35,6 @@
  */
 #define TYPIO_WL_RESUME_COOLDOWN_MS 5000ULL
 
-#ifdef HAVE_LIBDBUS
-#  define TYPIO_LOGIND_MATCH                                          \
-       "type='signal',"                                                \
-       "interface='org.freedesktop.login1.Manager',"                   \
-       "member='PrepareForSleep',"                                     \
-       "path='/org/freedesktop/login1'"
-#endif
-
 struct TypioWlResumeSignal {
     TypioWlResumeCallback cb;
     void *user_data;
@@ -52,8 +44,8 @@ struct TypioWlResumeSignal {
     uint64_t last_fire_monotonic_ms;
 
 #ifdef HAVE_LIBDBUS
-    DBusConnection *conn;
-    bool filter_added;
+    sd_bus *bus;
+    sd_bus_slot *match_slot;
 #endif
 };
 
@@ -88,29 +80,17 @@ static void resume_signal_fire(TypioWlResumeSignal *rs,
 }
 
 #ifdef HAVE_LIBDBUS
-static DBusHandlerResult resume_signal_filter(DBusConnection *conn,
-                                              DBusMessage *msg,
-                                              void *user_data) {
+static int resume_signal_match(sd_bus_message *m,
+                               void *user_data,
+                               sd_bus_error *ret_error) {
     TypioWlResumeSignal *rs = user_data;
-    dbus_bool_t going_to_sleep;
-    DBusError err;
+    int going_to_sleep = 0;
 
-    (void)conn;
+    (void)ret_error;
 
-    if (!dbus_message_is_signal(msg,
-                                "org.freedesktop.login1.Manager",
-                                "PrepareForSleep")) {
-        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-    }
-
-    dbus_error_init(&err);
-    if (!dbus_message_get_args(msg, &err,
-                                DBUS_TYPE_BOOLEAN, &going_to_sleep,
-                                DBUS_TYPE_INVALID)) {
-        typio_log_warning("PrepareForSleep signal missing boolean arg: %s",
-                  err.message ? err.message : "(no detail)");
-        dbus_error_free(&err);
-        return DBUS_HANDLER_RESULT_HANDLED;
+    if (sd_bus_message_read(m, "b", &going_to_sleep) < 0) {
+        typio_log_warning("PrepareForSleep signal missing boolean arg");
+        return 0;
     }
 
     if (going_to_sleep) {
@@ -123,63 +103,55 @@ static DBusHandlerResult resume_signal_filter(DBusConnection *conn,
     } else {
         resume_signal_fire(rs, "logind", 0);
     }
-    return DBUS_HANDLER_RESULT_HANDLED;
+    return 0;
 }
 
 static bool resume_signal_init_dbus(TypioWlResumeSignal *rs) {
-    DBusError err;
+    int r;
 
-    dbus_error_init(&err);
-    rs->conn = dbus_bus_get_private(DBUS_BUS_SYSTEM, &err);
-    if (!rs->conn || dbus_error_is_set(&err)) {
+    r = sd_bus_open_system(&rs->bus);
+    if (r < 0) {
         typio_log_info("logind resume-signal disabled (system bus unavailable: %s)",
-                  err.message ? err.message : "no detail");
-        if (dbus_error_is_set(&err))
-            dbus_error_free(&err);
-        rs->conn = nullptr;
+                  strerror(-r));
+        rs->bus = nullptr;
         return false;
     }
 
-    /* Don't let a system-bus disconnect terminate the daemon — logind
-     * coming and going must not take the IME with it. */
-    dbus_connection_set_exit_on_disconnect(rs->conn, FALSE);
-
-    dbus_bus_add_match(rs->conn, TYPIO_LOGIND_MATCH, &err);
-    if (dbus_error_is_set(&err)) {
+    r = sd_bus_match_signal(rs->bus,
+                            &rs->match_slot,
+                            "org.freedesktop.login1",
+                            "/org/freedesktop/login1",
+                            "org.freedesktop.login1.Manager",
+                            "PrepareForSleep",
+                            resume_signal_match,
+                            rs);
+    if (r < 0) {
         typio_log_warning("Failed to add PrepareForSleep match rule: %s",
-                  err.message);
-        dbus_error_free(&err);
-        dbus_connection_close(rs->conn);
-        dbus_connection_unref(rs->conn);
-        rs->conn = nullptr;
+                  strerror(-r));
+        sd_bus_close(rs->bus);
+        sd_bus_unref(rs->bus);
+        rs->bus = nullptr;
+        rs->match_slot = nullptr;
         return false;
     }
 
-    if (!dbus_connection_add_filter(rs->conn, resume_signal_filter, rs, nullptr)) {
-        typio_log_warning("Failed to add PrepareForSleep filter");
-        dbus_bus_remove_match(rs->conn, TYPIO_LOGIND_MATCH, nullptr);
-        dbus_connection_close(rs->conn);
-        dbus_connection_unref(rs->conn);
-        rs->conn = nullptr;
-        return false;
-    }
-    rs->filter_added = true;
     typio_log_info("logind PrepareForSleep subscriber active");
     return true;
 }
 
 static void resume_signal_teardown_dbus(TypioWlResumeSignal *rs) {
-    if (!rs->conn)
+    if (!rs->bus)
         return;
 
-    if (rs->filter_added) {
-        dbus_connection_remove_filter(rs->conn, resume_signal_filter, rs);
-        rs->filter_added = false;
+    /* sd_bus_slot_unref is a no-op on NULL; if we never registered a
+     * match (init failed before match_signal), match_slot is NULL. */
+    if (rs->match_slot) {
+        sd_bus_slot_unref(rs->match_slot);
+        rs->match_slot = nullptr;
     }
-    dbus_bus_remove_match(rs->conn, TYPIO_LOGIND_MATCH, nullptr);
-    dbus_connection_close(rs->conn);
-    dbus_connection_unref(rs->conn);
-    rs->conn = nullptr;
+    sd_bus_close(rs->bus);
+    sd_bus_unref(rs->bus);
+    rs->bus = nullptr;
 }
 #endif /* HAVE_LIBDBUS */
 
@@ -217,30 +189,33 @@ void typio_wl_resume_signal_destroy(TypioWlResumeSignal *rs) {
 int typio_wl_resume_signal_get_fd(TypioWlResumeSignal *rs) {
 #ifdef HAVE_LIBDBUS
     int fd = -1;
-    if (rs && rs->conn && dbus_connection_get_unix_fd(rs->conn, &fd))
-        return fd;
-#endif
+    if (rs && rs->bus && sd_bus_get_fd(rs->bus) >= 0) {
+        fd = sd_bus_get_fd(rs->bus);
+    }
+    return fd;
+#else
     (void)rs;
     return -1;
+#endif
 }
 
 int typio_wl_resume_signal_dispatch(TypioWlResumeSignal *rs) {
 #ifdef HAVE_LIBDBUS
     int dispatched = 0;
 
-    if (!rs || !rs->conn)
+    if (!rs || !rs->bus)
         return 0;
 
-    /* Non-blocking read; bounded drain so a flood on the system bus can't
-     * spin the event loop (mirrors the status-bus per-tick cap). */
-    dbus_connection_read_write(rs->conn, 0);
-    while (dispatched < 16 &&
-           dbus_connection_dispatch(rs->conn) == DBUS_DISPATCH_DATA_REMAINS) {
+    /* Non-blocking drain so a flood on the system bus can't spin the
+     * event loop (mirrors the status-bus per-tick cap). */
+    while (dispatched < 16 && sd_bus_process(rs->bus, nullptr) > 0) {
         dispatched++;
     }
-#endif
+    return dispatched;
+#else
     (void)rs;
     return 0;
+#endif
 }
 
 void typio_wl_resume_signal_tick(TypioWlResumeSignal *rs) {

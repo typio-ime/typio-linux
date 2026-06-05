@@ -58,7 +58,7 @@ if enable_wayland
     wayland_scanner = find_program('wayland-scanner', required: true)
 endif
 
-dbus_dep = dependency('dbus-1', required: enable_systray)
+dbus_dep = dependency('libsystemd', required: enable_systray)
 have_libdbus = dbus_dep.found()
 
 if enable_voice
