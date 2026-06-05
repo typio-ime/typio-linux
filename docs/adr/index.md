@@ -25,7 +25,7 @@ Decisions about the framework core (engine ABI, composition contract) live in th
 | [ADR-0001](0001-record-architecture-decisions.md) | Record Architecture Decisions | Accepted |
 | [ADR-0002](0002-wayland-input-method-v2.md) | Adopt `zwp_input_method_v2` as the host protocol | Accepted |
 | [ADR-0003](0003-session-controller-reduce-diff.md) | Session controller — derived state, idempotent diff | Accepted |
-| [ADR-0004](0004-event-loop-scheduling-and-watchdog.md) | Event-loop scheduling and watchdog | Accepted |
+| [ADR-0004](0004-event-loop-scheduling-and-watchdog.md) | Event-loop scheduling and watchdog | Accepted (idle behaviour amended by ADR-0024) |
 | [ADR-0005](0005-unified-panel-backend.md) | Unified panel backend for candidate and status UI | Accepted (vocabulary formalised by ADR-0014) |
 | [ADR-0006](0006-resilient-candidate-popup-present.md) | Resilient candidate-popup GPU present | Accepted (amended by ADR-0010) |
 | [ADR-0007](0007-dbus-adapter-over-status-service.md) | D-Bus adapter as a thin transport over `TypioStatusService` | Superseded by ADR-0008 |
@@ -45,6 +45,7 @@ Decisions about the framework core (engine ABI, composition contract) live in th
 | [ADR-0021](0021-systemd-user-service-daemon-lifecycle.md) | systemd user service for daemon lifecycle | Accepted |
 | [ADR-0022](0022-panel-retry-result-owned-by-update.md) | Panel retry result owned by update | Accepted (amends ADR-0015) |
 | [ADR-0023](0023-panel-scheduler-state-machine.md) | Panel Scheduler State Machine | Accepted (amends ADR-0022) |
+| [ADR-0024](0024-idle-driven-loop-and-demand-gated-watchdog.md) | Idle-driven event loop and demand-gated watchdog | Accepted (amends ADR-0004) |
 
 ## Looking for something else?
 

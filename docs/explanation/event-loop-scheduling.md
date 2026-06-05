@@ -61,10 +61,22 @@ candidate only re-tints — no GPU upload.
 
 ## Poll and Deadline Management
 
-- while the grab resource is `needs_keymap`, the poll timeout must not sleep
-  past the current keymap deadline
-- the watchdog monitors the loop for stalls and can arm an emergency teardown
-  if the grab path becomes unresponsive
+The poll timeout defaults to **`-1` (block until an fd is ready)** so an idle
+daemon causes zero wakeups. Sources backed by a `timerfd` — key repeat, the
+indicator timer, the config-reload debounce — wake the loop themselves and need
+no timeout. Only deadlines *not* backed by an fd shorten the timeout, each via a
+`-1`-aware minimum (`poll_timeout_min`):
+
+- the panel retry cadence while a deferred flush is pending (ADR-0023),
+- the positioned-UI anchor-probe deadline while a popup awaits its caret anchor
+  (ADR-0017) — previously covered only implicitly by a fixed baseline tick,
+- the virtual-keyboard keymap deadline while the grab is `needs_keymap`.
+
+The watchdog monitors the loop for stalls and `SIGKILL`s on an unrecoverable
+hang (systemd then restarts). It exempts the restful `POLL`/`IDLE` stages, so an
+indefinitely blocked idle loop is never mistaken for a stall — which is what
+allows the `-1` timeout above. See [Watchdog](watchdog.md) and
+[Performance & Idle-Power Strategy](performance-strategy.md) for the full model.
 
 ## Auxiliary Source Bounding
 
@@ -174,3 +186,5 @@ deadline is the primary clue that the grab→keymap→vk chain did not close.
   rendering
 - [Vulkan and Flux Rendering](vulkan-flux-rendering.md) — GPU backend details
 - [ADR-0004: Event Loop Scheduling and Watchdog](../adr/0004-event-loop-scheduling-and-watchdog.md)
+- [ADR-0024: Idle-Driven Event Loop and Demand-Gated Watchdog](../adr/0024-idle-driven-loop-and-demand-gated-watchdog.md)
+- [Watchdog](watchdog.md) · [Performance & Idle-Power Strategy](performance-strategy.md)
