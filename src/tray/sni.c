@@ -89,37 +89,7 @@ static int append_dict_bool(sd_bus_message *m, const char *key, int value) {
     return sd_bus_message_close_container(m); /* e */
 }
 
-static int append_dict_object_path(sd_bus_message *m, const char *key, const char *value) {
-    int r;
-    r = sd_bus_message_open_container(m, 'e', "sv");
-    if (r < 0) return r;
-    r = sd_bus_message_append_basic(m, 's', key);
-    if (r < 0) return r;
-    r = sd_bus_message_open_container(m, 'v', "o");
-    if (r < 0) return r;
-    r = sd_bus_message_append_basic(m, 'o', value ? value : "/");
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m); /* v */
-    if (r < 0) return r;
-    return sd_bus_message_close_container(m); /* e */
-}
-
-static int append_dict_pixmap_array(sd_bus_message *m, const char *key) {
-    int r;
-    r = sd_bus_message_open_container(m, 'e', "sv");
-    if (r < 0) return r;
-    r = sd_bus_message_append_basic(m, 's', key);
-    if (r < 0) return r;
-    r = sd_bus_message_open_container(m, 'v', "a(iiay)");
-    if (r < 0) return r;
-    r = append_empty_pixmap_array(m);
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m); /* v */
-    if (r < 0) return r;
-    return sd_bus_message_close_container(m); /* e */
-}
-
-/* ── SNI Properties.Get / GetAll ───────────────────────────────────────── */
+/* ── SNI property value appender ───────────────────────────────────────── */
 
 static int sni_property_value(sd_bus_message *m, const char *property,
                               TypioTray *tray) {
@@ -172,84 +142,23 @@ static int sni_property_value(sd_bus_message *m, const char *property,
     return -EINVAL;
 }
 
-int typio_tray_sni_properties_get(sd_bus_message *m, void *userdata,
-                                  sd_bus_error *ret_error) {
+/*
+ * sd-bus property getter (sd_bus_property_get_t). sd-bus has already
+ * opened the enclosing variant with the signature declared in the
+ * vtable row, so we just append the bare value. GetAll and
+ * Properties.Get are both synthesised by sd-bus from the SD_BUS_PROPERTY
+ * rows — we never implement org.freedesktop.DBus.Properties ourselves.
+ */
+int typio_tray_sni_get_property(sd_bus *bus, const char *path,
+                                const char *interface, const char *property,
+                                sd_bus_message *reply, void *userdata,
+                                sd_bus_error *ret_error) {
     TypioTray *tray = userdata;
-    const char *interface;
-    const char *property;
-    int value_r;
-    int r;
+    (void)bus;
+    (void)path;
+    (void)interface;
     (void)ret_error;
-
-    r = sd_bus_message_read(m, "ss", &interface, &property);
-    if (r < 0) {
-        return sd_bus_reply_method_errorf(m, SD_BUS_ERROR_INVALID_ARGS,
-                                          "Invalid arguments");
-    }
-
-    /* The Properties.Get reply holds a variant; we open 'v' with the
-     * matching type sigil, then append_dict_*-style by hand. For
-     * pixmap / tooltip the contained type is itself a complex
-     * signature — we delegate to sni_property_value, which knows
-     * what to append. */
-    r = sd_bus_message_open_container(m, 'v', NULL);
-    if (r < 0) return r;
-    value_r = sni_property_value(m, property, tray);
-    if (value_r < 0) {
-        sd_bus_message_close_container(m);
-        return sd_bus_reply_method_errorf(
-            m, SD_BUS_ERROR_UNKNOWN_PROPERTY, "Unknown property");
-    }
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
-    return 0;
-}
-
-int typio_tray_sni_properties_getall(sd_bus_message *m, void *userdata,
-                                     sd_bus_error *ret_error) {
-    TypioTray *tray = userdata;
-    const char *interface;
-    int r;
-    (void)ret_error;
-
-    r = sd_bus_message_read(m, "s", &interface);
-    if (r < 0) {
-        return sd_bus_reply_method_errorf(m, SD_BUS_ERROR_INVALID_ARGS,
-                                          "Invalid arguments");
-    }
-    if (strcmp(interface, SNI_ITEM_INTERFACE) != 0) {
-        return sd_bus_reply_method_errorf(m,
-            SD_BUS_ERROR_UNKNOWN_INTERFACE, "Unknown interface");
-    }
-
-    r = sd_bus_message_open_container(m, 'a', "{sv}");
-    if (r < 0) return r;
-    r = append_dict_str(m, "Category", "ApplicationStatus");
-    if (r < 0) return r;
-    r = append_dict_str(m, "Id", "typio");
-    if (r < 0) return r;
-    r = append_dict_str(m, "Title", tray->title ? tray->title : "Typio");
-    if (r < 0) return r;
-    r = append_dict_str(m, "Status", tray_status_str(tray->status));
-    if (r < 0) return r;
-    r = append_dict_str(m, "IconName",
-                        tray->icon_name ? tray->icon_name
-                                        : "typio-keyboard-symbolic");
-    if (r < 0) return r;
-    r = append_dict_str(m, "IconThemePath",
-                        tray->icon_theme_path ? tray->icon_theme_path : "");
-    if (r < 0) return r;
-    r = append_dict_pixmap_array(m, "IconPixmap");
-    if (r < 0) return r;
-    r = append_dict_str(m, "OverlayIconName", "");
-    if (r < 0) return r;
-    r = append_dict_str(m, "AttentionIconName", "");
-    if (r < 0) return r;
-    r = append_dict_bool(m, "ItemIsMenu", 0);
-    if (r < 0) return r;
-    r = append_dict_object_path(m, "Menu", DBUSMENU_PATH);
-    if (r < 0) return r;
-    return sd_bus_message_close_container(m);
+    return sni_property_value(reply, property, tray);
 }
 
 /* ── SNI method calls (Activate / ContextMenu / Scroll / etc.) ─────────── */
@@ -307,7 +216,7 @@ int typio_tray_sni_method_call(sd_bus_message *m, void *userdata,
                                       "Unknown method");
 }
 
-/* ── DBusMenu Properties.Get / GetAll ──────────────────────────────────── */
+/* ── DBusMenu property value appender ──────────────────────────────────── */
 
 static int menu_property_value(sd_bus_message *m, const char *property) {
     if (strcmp(property, "Version") == 0) {
@@ -325,113 +234,19 @@ static int menu_property_value(sd_bus_message *m, const char *property) {
     return -EINVAL;
 }
 
-int typio_tray_menu_properties_get(sd_bus_message *m, void *userdata,
-                                   sd_bus_error *ret_error) {
-    const char *interface;
-    const char *property;
-    int value_r;
-    int r;
+/* sd-bus property getter (sd_bus_property_get_t) for com.canonical.dbusmenu.
+ * As with the SNI item, sd-bus opens the variant and synthesises
+ * Get/GetAll; we only append the bare value. */
+int typio_tray_menu_get_property(sd_bus *bus, const char *path,
+                                 const char *interface, const char *property,
+                                 sd_bus_message *reply, void *userdata,
+                                 sd_bus_error *ret_error) {
+    (void)bus;
+    (void)path;
+    (void)interface;
     (void)userdata;
     (void)ret_error;
-
-    r = sd_bus_message_read(m, "ss", &interface, &property);
-    if (r < 0) {
-        return sd_bus_reply_method_errorf(m, SD_BUS_ERROR_INVALID_ARGS,
-                                          "Invalid arguments");
-    }
-    if (strcmp(interface, DBUSMENU_INTERFACE) != 0) {
-        return sd_bus_reply_method_errorf(m, SD_BUS_ERROR_UNKNOWN_INTERFACE,
-                                          "Unknown interface");
-    }
-
-    r = sd_bus_message_open_container(m, 'v', NULL);
-    if (r < 0) return r;
-    value_r = menu_property_value(m, property);
-    if (value_r < 0) {
-        sd_bus_message_close_container(m);
-        return sd_bus_reply_method_errorf(
-            m, SD_BUS_ERROR_UNKNOWN_PROPERTY, "Unknown property");
-    }
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
-    return 0;
-}
-
-int typio_tray_menu_properties_getall(sd_bus_message *m, void *userdata,
-                                      sd_bus_error *ret_error) {
-    const char *interface;
-    int r;
-    (void)userdata;
-    (void)ret_error;
-
-    r = sd_bus_message_read(m, "s", &interface);
-    if (r < 0) {
-        return sd_bus_reply_method_errorf(m, SD_BUS_ERROR_INVALID_ARGS,
-                                          "Invalid arguments");
-    }
-    if (strcmp(interface, DBUSMENU_INTERFACE) != 0) {
-        return sd_bus_reply_method_errorf(m, SD_BUS_ERROR_UNKNOWN_INTERFACE,
-                                          "Unknown interface");
-    }
-
-    r = sd_bus_message_open_container(m, 'a', "{sv}");
-    if (r < 0) return r;
-    r = sd_bus_message_open_container(m, 'e', "sv");
-    if (r < 0) return r;
-    r = sd_bus_message_append_basic(m, 's', "Version");
-    if (r < 0) return r;
-    r = sd_bus_message_open_container(m, 'v', "u");
-    if (r < 0) return r;
-    { uint32_t v = 3; r = sd_bus_message_append_basic(m, 'u', &v); }
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
-
-    r = sd_bus_message_open_container(m, 'e', "sv");
-    if (r < 0) return r;
-    r = sd_bus_message_append_basic(m, 's', "TextDirection");
-    if (r < 0) return r;
-    r = sd_bus_message_open_container(m, 'v', "s");
-    if (r < 0) return r;
-    r = sd_bus_message_append_basic(m, 's', "ltr");
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
-
-    r = sd_bus_message_open_container(m, 'e', "sv");
-    if (r < 0) return r;
-    r = sd_bus_message_append_basic(m, 's', "Status");
-    if (r < 0) return r;
-    r = sd_bus_message_open_container(m, 'v', "s");
-    if (r < 0) return r;
-    r = sd_bus_message_append_basic(m, 's', "normal");
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
-
-    /* IconThemePath: a{sv} -> "IconThemePath" -> v -> as -> (empty) */
-    r = sd_bus_message_open_container(m, 'e', "sv");
-    if (r < 0) return r;
-    r = sd_bus_message_append_basic(m, 's', "IconThemePath");
-    if (r < 0) return r;
-    r = sd_bus_message_open_container(m, 'v', "as");
-    if (r < 0) return r;
-    r = sd_bus_message_open_container(m, 'a', "s");
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
-
-    return sd_bus_message_close_container(m);
+    return menu_property_value(reply, property);
 }
 
 /* ── DBusMenu methods ──────────────────────────────────────────────────── */
@@ -477,6 +292,7 @@ static int handle_menu_getlayout(sd_bus_message *m, TypioTray *tray) {
     int r;
     int32_t item_id = 1;
     char label[256];
+    sd_bus_message *reply = nullptr;
 
     r = sd_bus_message_read(m, "ii", &parent_id, &depth);
     if (r < 0) {
@@ -484,24 +300,29 @@ static int handle_menu_getlayout(sd_bus_message *m, TypioTray *tray) {
                                           "Invalid arguments");
     }
 
-    /* Reply: u (revision) + (ia{sv}av) (root item) */
-    r = sd_bus_message_append_basic(m, 'u', &tray->menu_revision);
+    /* The reply is a fresh message — the incoming call message is
+     * sealed and cannot be appended to. Reply: u (revision) +
+     * (ia{sv}av) (root item). */
+    r = sd_bus_message_new_method_return(m, &reply);
     if (r < 0) return r;
 
-    r = sd_bus_message_open_container(m, 'r', "ia{sv}av");
-    if (r < 0) return r;
+    r = sd_bus_message_append_basic(reply, 'u', &tray->menu_revision);
+    if (r < 0) goto fail;
+
+    r = sd_bus_message_open_container(reply, 'r', "ia{sv}av");
+    if (r < 0) goto fail;
     { int32_t root_id = 0;
-      r = sd_bus_message_append_basic(m, 'i', &root_id);
-      if (r < 0) return r; }
-    r = sd_bus_message_open_container(m, 'a', "{sv}");
-    if (r < 0) return r;
-    r = append_dict_str(m, "children-display", "submenu");
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m);
-    if (r < 0) return r;
+      r = sd_bus_message_append_basic(reply, 'i', &root_id);
+      if (r < 0) goto fail; }
+    r = sd_bus_message_open_container(reply, 'a', "{sv}");
+    if (r < 0) goto fail;
+    r = append_dict_str(reply, "children-display", "submenu");
+    if (r < 0) goto fail;
+    r = sd_bus_message_close_container(reply);
+    if (r < 0) goto fail;
 
-    r = sd_bus_message_open_container(m, 'a', "v");
-    if (r < 0) return r;
+    r = sd_bus_message_open_container(reply, 'a', "v");
+    if (r < 0) goto fail;
 
     TypioRegistry *registry = typio_instance_get_registry(tray->instance);
     if (registry) {
@@ -519,35 +340,42 @@ static int handle_menu_getlayout(sd_bus_message *m, TypioTray *tray) {
             } else {
                 snprintf(label, sizeof(label), "  %s", display);
             }
-            r = build_menu_item(m, 100 + (int32_t)i, label, nullptr, 1);
+            r = build_menu_item(reply, 100 + (int32_t)i, label, nullptr, 1);
             if (r < 0) {
                 typio_engine_info_free((TypioEngineInfo *)info);
                 typio_free_string_array(engines, engine_count);
-                return r;
+                goto fail;
             }
             typio_engine_info_free((TypioEngineInfo *)info);
             shown++;
         }
         if (shown > 0) {
-            r = build_menu_item(m, item_id++, nullptr, "separator", 1);
+            r = build_menu_item(reply, item_id++, nullptr, "separator", 1);
             if (r < 0) {
                 typio_free_string_array(engines, engine_count);
-                return r;
+                goto fail;
             }
         }
         typio_free_string_array(engines, engine_count);
     }
 
-    r = build_menu_item(m, 98, "Restart", nullptr, 1);
-    if (r < 0) return r;
-    r = build_menu_item(m, 99, "Quit", nullptr, 1);
-    if (r < 0) return r;
+    r = build_menu_item(reply, 98, "Restart", nullptr, 1);
+    if (r < 0) goto fail;
+    r = build_menu_item(reply, 99, "Quit", nullptr, 1);
+    if (r < 0) goto fail;
 
-    r = sd_bus_message_close_container(m); /* av */
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(m); /* root struct r */
-    if (r < 0) return r;
-    return 0;
+    r = sd_bus_message_close_container(reply); /* av */
+    if (r < 0) goto fail;
+    r = sd_bus_message_close_container(reply); /* root struct r */
+    if (r < 0) goto fail;
+
+    r = sd_bus_send(nullptr, reply, nullptr);
+    sd_bus_message_unref(reply);
+    return r;
+
+fail:
+    sd_bus_message_unref(reply);
+    return r;
 }
 
 static int handle_menu_event(sd_bus_message *m, TypioTray *tray) {
@@ -601,76 +429,38 @@ int typio_tray_menu_method_call(sd_bus_message *m, void *userdata,
     } else if (strcmp(member, "Event") == 0) {
         return handle_menu_event(m, tray);
     } else if (strcmp(member, "GetProperty") == 0) {
-        return sd_bus_reply_method_return(m, NULL);
-    } else if (strcmp(member, "GetGroupProperties") == 0) {
-        int r = sd_bus_message_open_container(m, 'a', "(ia{sv})");
+        /* GetProperty(i, s) -> v. We expose no per-item properties, so
+         * reply with an empty-string variant to satisfy the signature. */
+        sd_bus_message *reply = nullptr;
+        int r = sd_bus_message_new_method_return(m, &reply);
         if (r < 0) return r;
-        return sd_bus_message_close_container(m);
+        r = sd_bus_message_open_container(reply, 'v', "s");
+        if (r >= 0) r = sd_bus_message_append_basic(reply, 's', "");
+        if (r >= 0) r = sd_bus_message_close_container(reply);
+        if (r < 0) { sd_bus_message_unref(reply); return r; }
+        r = sd_bus_send(nullptr, reply, nullptr);
+        sd_bus_message_unref(reply);
+        return r;
+    } else if (strcmp(member, "GetGroupProperties") == 0) {
+        /* GetGroupProperties(ai, as) -> a(ia{sv}); reply with an
+         * empty array. */
+        sd_bus_message *reply = nullptr;
+        int r = sd_bus_message_new_method_return(m, &reply);
+        if (r < 0) return r;
+        r = sd_bus_message_open_container(reply, 'a', "(ia{sv})");
+        if (r >= 0) r = sd_bus_message_close_container(reply);
+        if (r < 0) { sd_bus_message_unref(reply); return r; }
+        r = sd_bus_send(nullptr, reply, nullptr);
+        sd_bus_message_unref(reply);
+        return r;
     } else if (strcmp(member, "AboutToShow") == 0) {
+        /* AboutToShow(i) -> b. Returning false means "layout unchanged,
+         * no need to re-fetch". */
         int val = 0;
-        return sd_bus_message_append_basic(m, 'b', &val);
+        return sd_bus_reply_method_return(m, "b", val);
     }
     return sd_bus_reply_method_errorf(m, SD_BUS_ERROR_UNKNOWN_METHOD,
                                       "Unknown method");
-}
-
-int typio_tray_introspect(sd_bus_message *m, void *userdata,
-                          sd_bus_error *ret_error) {
-    TypioTray *tray = userdata;
-    (void)tray;
-    (void)ret_error;
-
-    const char *path = sd_bus_message_get_path(m);
-    const char *xml;
-
-    if (path && strcmp(path, DBUSMENU_PATH) == 0) {
-        xml =
-            "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"\n"
-            "\"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n"
-            "<node>\n"
-            "  <interface name=\"com.canonical.dbusmenu\">\n"
-            "    <method name=\"GetLayout\">\n"
-            "      <arg type=\"i\" direction=\"in\"/>\n"
-            "      <arg type=\"i\" direction=\"in\"/>\n"
-            "      <arg type=\"as\" direction=\"in\"/>\n"
-            "      <arg type=\"u\" direction=\"out\"/>\n"
-            "      <arg type=\"(ia{sv}av)\" direction=\"out\"/>\n"
-            "    </method>\n"
-            "    <method name=\"Event\">\n"
-            "      <arg type=\"i\" direction=\"in\"/>\n"
-            "      <arg type=\"s\" direction=\"in\"/>\n"
-            "      <arg type=\"v\" direction=\"in\"/>\n"
-            "      <arg type=\"u\" direction=\"in\"/>\n"
-            "    </method>\n"
-            "    <method name=\"AboutToShow\"><arg type=\"i\" direction=\"in\"/><arg type=\"b\" direction=\"out\"/></method>\n"
-            "    <property name=\"Version\" type=\"u\" access=\"read\"/>\n"
-            "    <property name=\"Status\" type=\"s\" access=\"read\"/>\n"
-            "    <signal name=\"LayoutUpdated\"><arg type=\"u\"/><arg type=\"i\"/></signal>\n"
-            "  </interface>\n"
-            "</node>\n";
-    } else {
-        xml =
-            "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"\n"
-            "\"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n"
-            "<node>\n"
-            "  <interface name=\"org.kde.StatusNotifierItem\">\n"
-            "    <method name=\"ContextMenu\"><arg type=\"i\" direction=\"in\"/><arg type=\"i\" direction=\"in\"/></method>\n"
-            "    <method name=\"Activate\"><arg type=\"i\" direction=\"in\"/><arg type=\"i\" direction=\"in\"/></method>\n"
-            "    <method name=\"SecondaryActivate\"><arg type=\"i\" direction=\"in\"/><arg type=\"i\" direction=\"in\"/></method>\n"
-            "    <method name=\"Scroll\"><arg type=\"i\" direction=\"in\"/><arg type=\"s\" direction=\"in\"/></method>\n"
-            "    <signal name=\"NewTitle\"/>\n"
-            "    <signal name=\"NewIcon\"/>\n"
-            "    <signal name=\"NewStatus\"><arg type=\"s\"/></signal>\n"
-            "    <signal name=\"NewToolTip\"/>\n"
-            "  </interface>\n"
-            "  <interface name=\"org.freedesktop.DBus.Properties\">\n"
-            "    <method name=\"Get\"><arg type=\"s\" direction=\"in\"/><arg type=\"s\" direction=\"in\"/><arg type=\"v\" direction=\"out\"/></method>\n"
-            "    <method name=\"GetAll\"><arg type=\"s\" direction=\"in\"/><arg type=\"a{sv}\" direction=\"out\"/></method>\n"
-            "  </interface>\n"
-            "</node>\n";
-    }
-
-    return sd_bus_reply_method_return(m, "s", xml);
 }
 
 #endif /* HAVE_LIBSYSTEMD */

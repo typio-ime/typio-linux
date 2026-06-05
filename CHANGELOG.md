@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The SNI tray never registered after the sd-bus migration.** The
+  migration registered hand-written vtables for the reserved
+  `org.freedesktop.DBus.Properties` and `…Introspectable` interfaces;
+  `sd_bus_add_object_vtable` rejects those with `-EINVAL`, and the
+  error path destroyed the tray and returned `NULL` from
+  `typio_tray_new`, so no `StatusNotifierItem` was ever registered and
+  the icon never appeared. Properties are now `SD_BUS_PROPERTY` rows
+  with a single `sd_bus_property_get_t` getter; `Properties.Get`/`GetAll`
+  and the Introspectable interface are synthesised by sd-bus. The
+  hand-written introspection XML and the invalid
+  `sd_bus_message_open_container(m, 'v', NULL)` variant code are gone.
+  The DBusMenu `GetLayout` / `GetGroupProperties` / `AboutToShow`
+  handlers appended their reply to the sealed incoming message
+  (`-EPERM`); they now build a proper reply via
+  `sd_bus_message_new_method_return`. Verified live against the
+  quickshell `StatusNotifierWatcher`: the item registers, `GetAll`
+  returns the icon, and the menu layout renders.
+
 ## [0.1.16] - 2026-06-05
 
 ### Changed

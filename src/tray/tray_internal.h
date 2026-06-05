@@ -29,8 +29,6 @@ extern "C" {
 #define DBUS_SERVICE "org.freedesktop.DBus"
 #define DBUS_PATH "/org/freedesktop/DBus"
 #define DBUS_INTERFACE "org.freedesktop.DBus"
-#define DBUS_PROPERTIES_INTERFACE "org.freedesktop.DBus.Properties"
-#define DBUS_INTROSPECTABLE_INTERFACE "org.freedesktop.DBus.Introspectable"
 
 /* Menu interface */
 #define DBUSMENU_INTERFACE "com.canonical.dbusmenu"
@@ -95,18 +93,19 @@ void typio_tray_sni_emit_signal(TypioTray *tray, const char *signal_name);
  * happens after the bus is opened. */
 int typio_tray_sni_method_call(sd_bus_message *m, void *userdata,
                                sd_bus_error *ret_error);
-int typio_tray_sni_properties_get(sd_bus_message *m, void *userdata,
-                                  sd_bus_error *ret_error);
-int typio_tray_sni_properties_getall(sd_bus_message *m, void *userdata,
-                                     sd_bus_error *ret_error);
 int typio_tray_menu_method_call(sd_bus_message *m, void *userdata,
                                 sd_bus_error *ret_error);
-int typio_tray_menu_properties_get(sd_bus_message *m, void *userdata,
-                                   sd_bus_error *ret_error);
-int typio_tray_menu_properties_getall(sd_bus_message *m, void *userdata,
-                                      sd_bus_error *ret_error);
-int typio_tray_introspect(sd_bus_message *m, void *userdata,
-                          sd_bus_error *ret_error);
+/* sd_bus_property_get_t getters. Properties.Get / GetAll and the
+ * Introspectable interface are synthesised by sd-bus from the
+ * SD_BUS_PROPERTY / SD_BUS_SIGNAL rows in the per-path vtables. */
+int typio_tray_sni_get_property(sd_bus *bus, const char *path,
+                                const char *interface, const char *property,
+                                sd_bus_message *reply, void *userdata,
+                                sd_bus_error *ret_error);
+int typio_tray_menu_get_property(sd_bus *bus, const char *path,
+                                 const char *interface, const char *property,
+                                 sd_bus_message *reply, void *userdata,
+                                 sd_bus_error *ret_error);
 #endif
 
 #ifdef __cplusplus

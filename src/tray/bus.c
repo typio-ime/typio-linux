@@ -59,49 +59,57 @@ static const char *typio_tray_default_icon_theme_path(void) {
 static int watcher_owner_changed(sd_bus_message *m, void *userdata,
                                  sd_bus_error *ret_error);
 
-/* Vtable for org.freedesktop.DBus.Properties on /StatusNotifierItem.
- * Note: GetAll needs a defined output signature 'a{sv}', so the
- * 'Get' and 'GetAll' methods get separate vtable rows. */
-static const sd_bus_vtable sni_properties_vtable[] = {
-    SD_BUS_VTABLE_START(0),
-    SD_BUS_METHOD("Get", "ss", "v", typio_tray_sni_properties_get, 0),
-    SD_BUS_METHOD("GetAll", "s", "a{sv}", typio_tray_sni_properties_getall, 0),
-    SD_BUS_VTABLE_END,
-};
-
+/* org.kde.StatusNotifierItem on /StatusNotifierItem. Properties are
+ * declared as SD_BUS_PROPERTY rows so sd-bus synthesises
+ * org.freedesktop.DBus.Properties (Get / GetAll) and the
+ * Introspectable interface for us — those reserved interfaces must NOT
+ * be registered by hand (sd_bus_add_object_vtable returns -EINVAL for
+ * them). The custom NewIcon / NewStatus / ... signals are declared so
+ * they appear in the generated introspection XML; they are emitted
+ * from sni.c via sd_bus_message_new_signal. */
 static const sd_bus_vtable sni_item_vtable[] = {
     SD_BUS_VTABLE_START(0),
-    SD_BUS_METHOD("ContextMenu", "ii", NULL, typio_tray_sni_method_call, 0),
-    SD_BUS_METHOD("Activate", "ii", NULL, typio_tray_sni_method_call, 0),
-    SD_BUS_METHOD("SecondaryActivate", "ii", NULL, typio_tray_sni_method_call, 0),
-    SD_BUS_METHOD("Scroll", "is", NULL, typio_tray_sni_method_call, 0),
-    SD_BUS_VTABLE_END,
-};
-
-static const sd_bus_vtable menu_properties_vtable[] = {
-    SD_BUS_VTABLE_START(0),
-    SD_BUS_METHOD("Get", "ss", "v", typio_tray_menu_properties_get, 0),
-    SD_BUS_METHOD("GetAll", "s", "a{sv}", typio_tray_menu_properties_getall, 0),
+    SD_BUS_METHOD("ContextMenu", "ii", "", typio_tray_sni_method_call, 0),
+    SD_BUS_METHOD("Activate", "ii", "", typio_tray_sni_method_call, 0),
+    SD_BUS_METHOD("SecondaryActivate", "ii", "", typio_tray_sni_method_call, 0),
+    SD_BUS_METHOD("Scroll", "is", "", typio_tray_sni_method_call, 0),
+    SD_BUS_PROPERTY("Category", "s", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("Id", "s", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("Title", "s", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("Status", "s", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("IconName", "s", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("IconThemePath", "s", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("IconPixmap", "a(iiay)", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("OverlayIconName", "s", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("OverlayIconPixmap", "a(iiay)", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("AttentionIconName", "s", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("AttentionIconPixmap", "a(iiay)", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("ToolTip", "(sa(iiay)ss)", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("ItemIsMenu", "b", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_PROPERTY("Menu", "o", typio_tray_sni_get_property, 0, 0),
+    SD_BUS_SIGNAL("NewTitle", NULL, 0),
+    SD_BUS_SIGNAL("NewIcon", NULL, 0),
+    SD_BUS_SIGNAL("NewAttentionIcon", NULL, 0),
+    SD_BUS_SIGNAL("NewOverlayIcon", NULL, 0),
+    SD_BUS_SIGNAL("NewToolTip", NULL, 0),
+    SD_BUS_SIGNAL("NewStatus", "s", 0),
     SD_BUS_VTABLE_END,
 };
 
 static const sd_bus_vtable menu_vtable[] = {
     SD_BUS_VTABLE_START(0),
     SD_BUS_METHOD("GetLayout", "iias", "u(ia{sv}av)", typio_tray_menu_method_call, 0),
-    SD_BUS_METHOD("Event", "isvu", NULL, typio_tray_menu_method_call, 0),
+    SD_BUS_METHOD("Event", "isvu", "", typio_tray_menu_method_call, 0),
     SD_BUS_METHOD("GetProperty", "is", "v", typio_tray_menu_method_call, 0),
-    SD_BUS_METHOD("GetGroupProperties", "ias", "a(ia{sv})", typio_tray_menu_method_call, 0),
+    SD_BUS_METHOD("GetGroupProperties", "aias", "a(ia{sv})", typio_tray_menu_method_call, 0),
     SD_BUS_METHOD("AboutToShow", "i", "b", typio_tray_menu_method_call, 0),
-    SD_BUS_VTABLE_END,
-};
-
-/* The introspect handler is interface-agnostic but the XML it emits
- * depends on the path. The userdata passed at registration time is
- * the TypioTray*; the handler reads sd_bus_message_get_path() to pick
- * the right XML. */
-static const sd_bus_vtable introspect_vtable[] = {
-    SD_BUS_VTABLE_START(SD_BUS_VTABLE_UNPRIVILEGED),
-    SD_BUS_METHOD("Introspect", NULL, "s", typio_tray_introspect, 0),
+    SD_BUS_PROPERTY("Version", "u", typio_tray_menu_get_property, 0, 0),
+    SD_BUS_PROPERTY("TextDirection", "s", typio_tray_menu_get_property, 0, 0),
+    SD_BUS_PROPERTY("Status", "s", typio_tray_menu_get_property, 0, 0),
+    SD_BUS_PROPERTY("IconThemePath", "as", typio_tray_menu_get_property, 0, 0),
+    SD_BUS_SIGNAL("ItemsPropertiesUpdated", "a(ia{sv})a(ias)", 0),
+    SD_BUS_SIGNAL("LayoutUpdated", "ui", 0),
+    SD_BUS_SIGNAL("ItemActivationRequested", "iu", 0),
     SD_BUS_VTABLE_END,
 };
 
@@ -136,7 +144,6 @@ static int watcher_owner_changed(sd_bus_message *m, void *userdata,
 
 TypioTray *typio_tray_new(TypioInstance *instance, const TypioTrayConfig *config) {
     pid_t pid;
-    int ret;
     static int instance_counter = 0;
     TypioTray *tray;
     int service_name_len;
@@ -200,11 +207,13 @@ TypioTray *typio_tray_new(TypioInstance *instance, const TypioTrayConfig *config
     }
     sd_bus_flush(tray->bus);
 
-    /* Register the per-(path, interface) vtables. The slot returned
-     * for the first registration is anchored on tray->vtable_slot; the
-     * subsequent sd_bus_add_object_vtable calls return NULL slots
-     * because the slot is owned by the bus. We unref vtable_slot on
-     * teardown. */
+    /* Register one object vtable per path. sd-bus derives the standard
+     * org.freedesktop.DBus.Properties / Introspectable / Peer interfaces
+     * from the SD_BUS_PROPERTY / method rows automatically, so we only
+     * register the SNI item and dbusmenu interfaces themselves. The
+     * SNI slot is anchored on tray->vtable_slot; the menu registration
+     * passes NULL because that slot is owned by the bus. Both are torn
+     * down when vtable_slot (and ultimately the bus) is unref'd. */
     r = sd_bus_add_object_vtable(tray->bus,
                                  &tray->vtable_slot,
                                  SNI_ITEM_PATH,
@@ -216,43 +225,11 @@ TypioTray *typio_tray_new(TypioInstance *instance, const TypioTrayConfig *config
         typio_tray_destroy(tray);
         return nullptr;
     }
-    r = sd_bus_add_object_vtable(tray->bus, nullptr, SNI_ITEM_PATH,
-                                 DBUS_PROPERTIES_INTERFACE,
-                                 sni_properties_vtable, tray);
-    if (r < 0) {
-        typio_log_error("Failed to register SNI Properties: %s", strerror(-r));
-        typio_tray_destroy(tray);
-        return nullptr;
-    }
-    r = sd_bus_add_object_vtable(tray->bus, nullptr, SNI_ITEM_PATH,
-                                 DBUS_INTROSPECTABLE_INTERFACE,
-                                 introspect_vtable, tray);
-    if (r < 0) {
-        typio_log_error("Failed to register SNI Introspect: %s", strerror(-r));
-        typio_tray_destroy(tray);
-        return nullptr;
-    }
     r = sd_bus_add_object_vtable(tray->bus, nullptr, DBUSMENU_PATH,
                                  DBUSMENU_INTERFACE,
                                  menu_vtable, tray);
     if (r < 0) {
         typio_log_error("Failed to register menu object path: %s", strerror(-r));
-        typio_tray_destroy(tray);
-        return nullptr;
-    }
-    r = sd_bus_add_object_vtable(tray->bus, nullptr, DBUSMENU_PATH,
-                                 DBUS_PROPERTIES_INTERFACE,
-                                 menu_properties_vtable, tray);
-    if (r < 0) {
-        typio_log_error("Failed to register menu Properties: %s", strerror(-r));
-        typio_tray_destroy(tray);
-        return nullptr;
-    }
-    r = sd_bus_add_object_vtable(tray->bus, nullptr, DBUSMENU_PATH,
-                                 DBUS_INTROSPECTABLE_INTERFACE,
-                                 introspect_vtable, tray);
-    if (r < 0) {
-        typio_log_error("Failed to register menu Introspect: %s", strerror(-r));
         typio_tray_destroy(tray);
         return nullptr;
     }
