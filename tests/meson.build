@@ -20,7 +20,6 @@ wayland_test_inc = [
     include_directories('../src/ui'),
     include_directories('../src/ui/panel'),
     include_directories('../src/engine'),
-    include_directories('../src/platform'),
 ]
 
 test_preedit_format = executable('test_preedit_format',

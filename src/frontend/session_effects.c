@@ -38,7 +38,7 @@
 #include "input/wayland/bridge.h"
 #include "frontend/foreign/identity.h"
 #include "panel.h"
-#include "monotonic.h"
+#include "clock.h"
 #include "typio/abi/instance.h"
 #include "typio/abi/input_context.h"
 #include "typio/abi/log.h"

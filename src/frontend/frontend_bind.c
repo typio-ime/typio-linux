@@ -18,7 +18,7 @@
 
 #include "frontend.h"
 #include "internal.h"
-#include "monotonic.h"
+#include "clock.h"
 #include "panel.h"
 #include "foreign/identity.h"
 

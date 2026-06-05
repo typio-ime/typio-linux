@@ -97,6 +97,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the host never saw the update. An explicit
   `dbus_connection_flush` now follows every signal send.
 
+### Changed
+
+- **`src/platform/monotonic.h` → `src/clock.h`.** The single-header
+  `src/platform/` directory was removed; the header now lives at the
+  top level of `src/` (reachable via the existing `.` include path).
+  Updated all 14 consumer `#include` lines and the cross-reference in
+  `docs/adr/0015-candidate-popup-lag-final-fixes.md`.
+
 ## [0.1.15] - 2026-06-04
 
 ### Fixed

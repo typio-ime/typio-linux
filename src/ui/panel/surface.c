@@ -20,7 +20,7 @@
 #include "theme.h"
 #include "text_shaper.h"
 #include "device.h"
-#include "monotonic.h"
+#include "clock.h"
 #include "typio/abi/log.h"
 
 #include <inttypes.h>

@@ -18,7 +18,7 @@
 #include "internal.h"
 #include "panel.h"
 #include "frontend/foreign/identity.h"
-#include "monotonic.h"
+#include "clock.h"
 #include "preedit.h"
 #include "state.h"
 #include "trace.h"

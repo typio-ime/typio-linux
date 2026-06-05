@@ -9,7 +9,7 @@
  */
 
 #include "internal.h"
-#include "monotonic.h"
+#include "clock.h"
 #include "panel.h"
 #include "trace.h"
 

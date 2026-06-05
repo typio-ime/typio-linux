@@ -51,7 +51,7 @@ Added `GlyphUploadCtx` — a persistent upload context that reuses the command p
 
 ### 4. Microsecond instrumentation
 
-**Files:** `src/ui/panel/surface.c:452-535`, `src/ui/panel/panel.c:162-270`, `src/platform/monotonic.h:24-42`
+**Files:** `src/ui/panel/surface.c:452-535`, `src/ui/panel/panel.c:162-270`, `src/clock.h:24-42`
 
 Added microsecond-precision timing to `do_present` (acquire/record/submit/present phases) and `panel_render` (classify/geometry/present phases). Added `typio_wl_monotonic_us()` helper. RETRY events are logged with elapsed time and streak count. Slow renders (>1ms for present, >8ms for panel) emit structured logs with phase breakdowns.
 

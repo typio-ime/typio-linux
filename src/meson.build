@@ -162,7 +162,6 @@ if enable_wayland
         include_directories('ui'),
         include_directories('ui/panel'),
         include_directories('engine'),
-        include_directories('platform'),
     ]
 endif
 

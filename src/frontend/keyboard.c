@@ -21,7 +21,7 @@
 #include "input/policy/modifiers.h"
 #include "input/policy/repeat_guard.h"
 #include "candidate_guard.h"
-#include "monotonic.h"
+#include "clock.h"
 #include "recent_log.h"
 #include "startup.h"
 #include "input/wayland/bridge.h"

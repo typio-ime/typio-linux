@@ -5,7 +5,7 @@
 
 #include "resume.h"
 
-#include "monotonic.h"
+#include "clock.h"
 #include "resume_model.h"
 #include "typio_build_config.h"
 #include "typio/abi/log.h"

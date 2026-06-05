@@ -18,7 +18,7 @@
 #include "internal.h"
 
 #include "frontend_aux.h"
-#include "monotonic.h"
+#include "clock.h"
 #include "panel.h"
 #include "session_controller.h"
 #include "state.h"

@@ -17,7 +17,7 @@
 
 #include "frontend.h"
 #include "internal.h"
-#include "monotonic.h"
+#include "clock.h"
 #include "session_controller.h"
 #include "ipc/ipc_bus.h"
 

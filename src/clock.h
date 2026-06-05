@@ -1,5 +1,5 @@
 /**
- * @file monotonic.h
+ * @file clock.h
  * @brief Inline helpers for Wayland-side time sources
  *
  * Two clocks are exposed:
@@ -15,8 +15,8 @@
  *    logind @c PrepareForSleep notification.
  */
 
-#ifndef TYPIO_WL_MONOTONIC_TIME_H
-#define TYPIO_WL_MONOTONIC_TIME_H
+#ifndef TYPIO_WL_CLOCK_H
+#define TYPIO_WL_CLOCK_H
 
 #include <stdint.h>
 #include <time.h>
@@ -51,4 +51,4 @@ static inline uint64_t typio_wl_boottime_ms(void) {
     return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000L);
 }
 
-#endif /* TYPIO_WL_MONOTONIC_TIME_H */
+#endif /* TYPIO_WL_CLOCK_H */

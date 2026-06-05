@@ -13,7 +13,7 @@
  */
 
 #include "theme.h"
-#include "monotonic.h"
+#include "clock.h"
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -6,7 +6,7 @@
 
 #include "bridge.h"
 #include "debug.h"
-#include "monotonic.h"
+#include "clock.h"
 #include "recent_log.h"
 #include "internal.h"
 #include "trace.h"
