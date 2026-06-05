@@ -7,7 +7,10 @@
 #define TYPIO_TRAY_INTERNAL_H
 
 #include "tray.h"
-#include <dbus/dbus.h>
+
+#ifdef HAVE_LIBDBUS
+#  include <systemd/sd-bus.h>
+#endif
 
 typedef struct TypioStateController TypioStateController;
 
@@ -27,10 +30,7 @@ extern "C" {
 #define DBUS_PATH "/org/freedesktop/DBus"
 #define DBUS_INTERFACE "org.freedesktop.DBus"
 #define DBUS_PROPERTIES_INTERFACE "org.freedesktop.DBus.Properties"
-#define DBUS_NAME_OWNER_CHANGED_WATCHER_MATCH \
-    "type='signal',sender='org.freedesktop.DBus'," \
-    "interface='org.freedesktop.DBus',member='NameOwnerChanged'," \
-    "arg0='org.kde.StatusNotifierWatcher'"
+#define DBUS_INTROSPECTABLE_INTERFACE "org.freedesktop.DBus.Introspectable"
 
 /* Menu interface */
 #define DBUSMENU_INTERFACE "com.canonical.dbusmenu"
@@ -44,7 +44,16 @@ struct TypioTray {
     TypioInstance *instance;
 
     /* D-Bus connection */
-    DBusConnection *conn;
+#ifdef HAVE_LIBDBUS
+    sd_bus *bus;
+    /* sd_bus_slot returned by sd_bus_add_object_vtable calls; nulled on
+     * teardown. The slot is unref'd explicitly before sd_bus_unref to
+     * avoid a use-after-unref on in-flight messages. */
+    sd_bus_slot *vtable_slot;
+    /* Match slot for org.freedesktop.DBus.NameOwnerChanged
+     * (StatusNotifierWatcher presence). */
+    sd_bus_slot *watcher_match_slot;
+#endif
 
     /* Service name */
     char *service_name;             /* e.g., org.kde.StatusNotifierItem-PID-N */
@@ -80,10 +89,25 @@ struct TypioTray {
 int typio_tray_sni_register(TypioTray *tray);
 void typio_tray_sni_emit_signal(TypioTray *tray, const char *signal_name);
 
-/* D-Bus message handlers */
-DBusHandlerResult typio_tray_handle_message(DBusConnection *conn,
-                                            DBusMessage *msg,
-                                            void *user_data);
+#ifdef HAVE_LIBDBUS
+/* sd-bus per-(path, interface) method handlers. Defined in sni.c;
+ * the vtables that reference them live in bus.c so registration
+ * happens after the bus is opened. */
+int typio_tray_sni_method_call(sd_bus_message *m, void *userdata,
+                               sd_bus_error *ret_error);
+int typio_tray_sni_properties_get(sd_bus_message *m, void *userdata,
+                                  sd_bus_error *ret_error);
+int typio_tray_sni_properties_getall(sd_bus_message *m, void *userdata,
+                                     sd_bus_error *ret_error);
+int typio_tray_menu_method_call(sd_bus_message *m, void *userdata,
+                                sd_bus_error *ret_error);
+int typio_tray_menu_properties_get(sd_bus_message *m, void *userdata,
+                                   sd_bus_error *ret_error);
+int typio_tray_menu_properties_getall(sd_bus_message *m, void *userdata,
+                                      sd_bus_error *ret_error);
+int typio_tray_introspect(sd_bus_message *m, void *userdata,
+                          sd_bus_error *ret_error);
+#endif
 
 #ifdef __cplusplus
 }
