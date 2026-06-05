@@ -14,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
 #  include <systemd/sd-bus.h>
 #endif
 
@@ -43,7 +43,7 @@ struct TypioWlResumeSignal {
     uint64_t last_boottime_ms;
     uint64_t last_fire_monotonic_ms;
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     sd_bus *bus;
     sd_bus_slot *match_slot;
 #endif
@@ -79,7 +79,7 @@ static void resume_signal_fire(TypioWlResumeSignal *rs,
         rs->cb(rs->user_data, reason, sleep_ms);
 }
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
 static int resume_signal_match(sd_bus_message *m,
                                void *user_data,
                                sd_bus_error *ret_error) {
@@ -153,7 +153,7 @@ static void resume_signal_teardown_dbus(TypioWlResumeSignal *rs) {
     sd_bus_unref(rs->bus);
     rs->bus = nullptr;
 }
-#endif /* HAVE_LIBDBUS */
+#endif /* HAVE_LIBSYSTEMD */
 
 TypioWlResumeSignal *typio_wl_resume_signal_create(TypioWlResumeCallback cb,
                                                    void *user_data) {
@@ -168,7 +168,7 @@ TypioWlResumeSignal *typio_wl_resume_signal_create(TypioWlResumeCallback cb,
     rs->last_monotonic_ms = typio_wl_monotonic_ms();
     rs->last_boottime_ms = typio_wl_boottime_ms();
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     (void)resume_signal_init_dbus(rs); /* falls back to gap detector on failure */
 #endif
 
@@ -179,7 +179,7 @@ void typio_wl_resume_signal_destroy(TypioWlResumeSignal *rs) {
     if (!rs)
         return;
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     resume_signal_teardown_dbus(rs);
 #endif
 
@@ -187,7 +187,7 @@ void typio_wl_resume_signal_destroy(TypioWlResumeSignal *rs) {
 }
 
 int typio_wl_resume_signal_get_fd(TypioWlResumeSignal *rs) {
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     int fd = -1;
     if (rs && rs->bus && sd_bus_get_fd(rs->bus) >= 0) {
         fd = sd_bus_get_fd(rs->bus);
@@ -200,7 +200,7 @@ int typio_wl_resume_signal_get_fd(TypioWlResumeSignal *rs) {
 }
 
 int typio_wl_resume_signal_dispatch(TypioWlResumeSignal *rs) {
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     int dispatched = 0;
 
     if (!rs || !rs->bus)

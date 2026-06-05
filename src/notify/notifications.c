@@ -7,7 +7,7 @@
 
 #include "typio/abi/log.h"
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
 #  include <systemd/sd-bus.h>
 #endif
 
@@ -28,7 +28,7 @@ typedef struct TypioRecentNotification {
 } TypioRecentNotification;
 
 struct TypioNotifier {
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     sd_bus *bus;
 #endif
     TypioRecentNotification recent[TYPIO_NOTIFY_RECENT_CAP];
@@ -78,7 +78,7 @@ static bool notifier_is_rate_limited(TypioNotifier *notifier,
     return false;
 }
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
 /*
  * Append the {sv} hints array carrying the urgency byte. sd-bus's
  * append API takes type sigils and a pointer; an 'a{sv}' is built by
@@ -127,7 +127,7 @@ fail_array:
 
 TypioNotifier *typio_notifier_new(void) {
     TypioNotifier *notifier;
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     int r;
 #endif
 
@@ -136,7 +136,7 @@ TypioNotifier *typio_notifier_new(void) {
         return nullptr;
     }
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     r = sd_bus_open_user(&notifier->bus);
     if (r < 0) {
         typio_log_warning("Desktop notifications unavailable: %s", strerror(-r));
@@ -153,7 +153,7 @@ void typio_notifier_free(TypioNotifier *notifier) {
         return;
     }
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     if (notifier->bus) {
         sd_bus_unref(notifier->bus);
     }
@@ -165,7 +165,7 @@ bool typio_notifier_send(TypioNotifier *notifier,
                          TypioNotificationUrgency urgency,
                          const char *summary,
                          const char *body) {
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     sd_bus_message *msg = nullptr;
     sd_bus_message *reply = nullptr;
     sd_bus_error err = SD_BUS_ERROR_NULL;

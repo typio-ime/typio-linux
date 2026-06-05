@@ -17,7 +17,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-bus.h>
 #endif
 
@@ -48,7 +48,7 @@ static const char *typio_tray_default_icon_theme_path(void) {
     return "";
 }
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
 
 /* Forward declarations of the per-(path, interface) sd-bus method
  * handlers. Each returns 0 on success (sending a reply on the message),
@@ -131,7 +131,7 @@ static int watcher_owner_changed(sd_bus_message *m, void *userdata,
     return 0;
 }
 
-#endif /* HAVE_LIBDBUS */
+#endif /* HAVE_LIBSYSTEMD */
 
 
 TypioTray *typio_tray_new(TypioInstance *instance, const TypioTrayConfig *config) {
@@ -140,7 +140,7 @@ TypioTray *typio_tray_new(TypioInstance *instance, const TypioTrayConfig *config
     static int instance_counter = 0;
     TypioTray *tray;
     int service_name_len;
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     int r;
 #endif
 
@@ -175,7 +175,7 @@ TypioTray *typio_tray_new(TypioInstance *instance, const TypioTrayConfig *config
     }
     tray->title = typio_strdup("Typio");
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     r = sd_bus_open_user(&tray->bus);
     if (r < 0) {
         typio_log_error("Failed to connect to session D-Bus: %s", strerror(-r));
@@ -279,7 +279,7 @@ TypioTray *typio_tray_new(TypioInstance *instance, const TypioTrayConfig *config
         return nullptr;
     }
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     r = sd_bus_request_name(tray->bus, tray->service_name, 0);
     if (r < 0 && r != -EALREADY) {
         typio_log_error("Failed to acquire D-Bus name %s: %s",
@@ -298,7 +298,7 @@ void typio_tray_destroy(TypioTray *tray) {
         return;
     }
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     if (tray->bus) {
         /* Unref the vtable slot first; this removes all per-(path, interface)
          * vtables registered through it. The watcher match slot is
@@ -330,7 +330,7 @@ void typio_tray_destroy(TypioTray *tray) {
 }
 
 int typio_tray_get_fd(TypioTray *tray) {
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     if (!tray || !tray->bus) {
         return -1;
     }
@@ -343,7 +343,7 @@ int typio_tray_get_fd(TypioTray *tray) {
 }
 
 int typio_tray_dispatch(TypioTray *tray) {
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     int dispatched = 0;
 
     if (!tray || !tray->bus) {

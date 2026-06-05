@@ -59,7 +59,7 @@ if enable_wayland
 endif
 
 dbus_dep = dependency('libsystemd', required: enable_systray)
-have_libdbus = dbus_dep.found()
+have_libsystemd = dbus_dep.found()
 
 if enable_voice
     pipewire_dep = dependency('libpipewire-0.3', required: true)
@@ -121,7 +121,7 @@ conf_data.set('TYPIO_INSTALL_ICON_DIR', prefix / datadir / 'icons')
 conf_data.set('TYPIO_SOURCE_ICON_DIR', meson.project_source_root() / 'data' / 'icons')
 conf_data.set('HAVE_WAYLAND', enable_wayland)
 conf_data.set('HAVE_SYSTRAY', enable_systray)
-conf_data.set('HAVE_LIBDBUS', have_libdbus)
+conf_data.set('HAVE_LIBSYSTEMD', have_libsystemd)
 conf_data.set('HAVE_VOICE', enable_voice)
 conf_data.set('HAVE_FLUX', flux_dep.found())
 

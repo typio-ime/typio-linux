@@ -16,7 +16,7 @@
 #mesondefine HAVE_WAYLAND
 #mesondefine HAVE_SYSTRAY
 #mesondefine HAVE_VOICE
-#mesondefine HAVE_LIBDBUS
+#mesondefine HAVE_LIBSYSTEMD
 #mesondefine HAVE_FLUX
 
 #endif /* TYPIO_BUILD_CONFIG_H */

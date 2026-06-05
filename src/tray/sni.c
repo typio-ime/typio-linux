@@ -13,7 +13,7 @@
 #include "typio/abi/log.h"
 #include "typio/abi/string.h"
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
 #  include <systemd/sd-bus.h>
 #endif
 
@@ -34,7 +34,7 @@
 
 /* ── small sd-bus a{sv} helpers ────────────────────────────────────────── */
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
 
 /*
  * Append an empty pixmap array (a(iiay)) — used as the value for
@@ -673,26 +673,26 @@ int typio_tray_introspect(sd_bus_message *m, void *userdata,
     return sd_bus_reply_method_return(m, "s", xml);
 }
 
-#endif /* HAVE_LIBDBUS */
+#endif /* HAVE_LIBSYSTEMD */
 
 /* ── Registration with the StatusNotifierWatcher ──────────────────────── */
 
 int typio_tray_sni_register(TypioTray *tray) {
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     sd_bus_error err = SD_BUS_ERROR_NULL;
     sd_bus_message *reply = nullptr;
     int r;
 #endif
 
     if (!tray
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
         || !tray->bus
 #endif
     ) {
         return -1;
     }
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     r = sd_bus_call_method(tray->bus,
                            SNI_WATCHER_SERVICE,
                            SNI_WATCHER_PATH,
@@ -718,7 +718,7 @@ int typio_tray_sni_register(TypioTray *tray) {
     return 0;
 }
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
 void typio_tray_sni_emit_signal(TypioTray *tray, const char *signal_name) {
     sd_bus_message *sig = nullptr;
     int r;
@@ -829,7 +829,7 @@ void typio_tray_update_engine(TypioTray *tray, const char *engine_name,
 
     tray->menu_revision++;
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     if (tray->bus && tray->registered) {
         sd_bus_message *sig = nullptr;
         int r;

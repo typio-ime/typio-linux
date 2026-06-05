@@ -8,7 +8,7 @@
 
 #include "tray.h"
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
 #  include <systemd/sd-bus.h>
 #endif
 
@@ -44,7 +44,7 @@ struct TypioTray {
     TypioInstance *instance;
 
     /* D-Bus connection */
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
     sd_bus *bus;
     /* sd_bus_slot returned by sd_bus_add_object_vtable calls; nulled on
      * teardown. The slot is unref'd explicitly before sd_bus_unref to
@@ -89,7 +89,7 @@ struct TypioTray {
 int typio_tray_sni_register(TypioTray *tray);
 void typio_tray_sni_emit_signal(TypioTray *tray, const char *signal_name);
 
-#ifdef HAVE_LIBDBUS
+#ifdef HAVE_LIBSYSTEMD
 /* sd-bus per-(path, interface) method handlers. Defined in sni.c;
  * the vtables that reference them live in bus.c so registration
  * happens after the bus is opened. */

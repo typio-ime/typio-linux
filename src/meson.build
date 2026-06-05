@@ -136,7 +136,7 @@ if enable_wayland
     host_deps += [fontconfig_dep, harfbuzz_dep, freetype_dep]
 endif
 
-if have_libdbus
+if have_libsystemd
     host_deps += dbus_dep
 endif
 
