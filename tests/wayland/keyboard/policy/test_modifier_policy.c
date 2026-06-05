@@ -3,7 +3,7 @@
  * @brief Modifier truth-source policy tests
  */
 
-#include "input/policy/modifiers.h"
+#include "wayland/keyboard/policy/modifiers.h"
 
 #include <wayland-client-protocol.h>
 #include <xkbcommon/xkbcommon-keysyms.h>

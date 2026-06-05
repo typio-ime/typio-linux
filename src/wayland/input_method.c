@@ -17,7 +17,7 @@
 
 #include "internal.h"
 #include "panel.h"
-#include "frontend/foreign/identity.h"
+#include "wayland/foreign/identity.h"
 #include "clock.h"
 #include "preedit.h"
 #include "state.h"

@@ -4,7 +4,7 @@
  */
 
 #include "candidate_guard.h"
-#include "frontend/internal.h"
+#include "wayland/internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>

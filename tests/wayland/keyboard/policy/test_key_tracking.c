@@ -3,7 +3,7 @@
  * @brief Key tracking lifecycle helper tests
  */
 
-#include "input/policy/tracker.h"
+#include "wayland/keyboard/policy/tracker.h"
 
 #include <stdio.h>
 #include <stdlib.h>

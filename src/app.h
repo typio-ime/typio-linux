@@ -7,7 +7,7 @@
 #include <signal.h>
 
 #ifdef HAVE_WAYLAND
-#include "frontend/frontend.h"
+#include "wayland/frontend.h"
 #endif
 
 #include "state/controller.h"

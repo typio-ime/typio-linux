@@ -12,7 +12,7 @@
 #include "typio/abi/log.h"
 
 #ifdef HAVE_WAYLAND
-#include "frontend/internal.h"
+#include "wayland/internal.h"
 #include "ui/state.h"
 #endif
 

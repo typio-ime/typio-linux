@@ -3,7 +3,7 @@
  * @brief Tests for basic-engine key routing bypass
  */
 
-#include "input/wayland/router.h"
+#include "wayland/keyboard/router.h"
 #include "internal.h"
 #include "typio/abi/engine.h"
 #include "typio/abi/event.h"

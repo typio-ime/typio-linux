@@ -13,7 +13,7 @@
  *
  * This module owns the pure half: facts, desired, actual, effects, reduce,
  * and diff. The effectful half (observe + apply) lives in
- * src/frontend/session_effects.c because it must read and mutate the
+ * src/wayland/session_effects.c because it must read and mutate the
  * TypioWlFrontend struct.
  *
  * @see docs/explanation/session-controller.md
@@ -241,7 +241,7 @@ typio_wl_grab_resource_state_name(TypioWlGrabResourceState state);
 const char *
 typio_wl_done_action_name(TypioWlDoneAction action);
 
-/* ── Effectful half (implemented in src/frontend/session_effects.c) ───── */
+/* ── Effectful half (implemented in src/wayland/session_effects.c) ───── */
 
 struct TypioWlFrontend;
 

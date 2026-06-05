@@ -4,7 +4,7 @@
  */
 
 #include "internal.h"
-#include "input/wayland/bridge.h"
+#include "wayland/keyboard/bridge.h"
 
 #include <stdio.h>
 #include <stdlib.h>

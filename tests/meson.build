@@ -14,9 +14,9 @@
 
 wayland_test_inc = [
     include_directories('../src'),
-    include_directories('../src/frontend'),
-    include_directories('../src/input/policy'),
-    include_directories('../src/input/wayland'),
+    include_directories('../src/wayland'),
+    include_directories('../src/wayland/keyboard/policy'),
+    include_directories('../src/wayland/keyboard'),
     include_directories('../src/ui'),
     include_directories('../src/ui/panel'),
     include_directories('../src/engine'),
@@ -45,14 +45,14 @@ test_boundary_bridge = executable('test_boundary_bridge',
 test('boundary_bridge', test_boundary_bridge)
 
 test_repeat_guard = executable('test_repeat_guard',
-    ['input/policy/test_repeat_guard.c', '../src/input/policy/repeat_guard.c'],
+    ['wayland/keyboard/policy/test_repeat_guard.c', '../src/wayland/keyboard/policy/repeat_guard.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )
 test('repeat_guard', test_repeat_guard)
 
 test_frontend_aux = executable('test_frontend_aux',
-    ['frontend/test_frontend_aux.c', '../src/frontend/frontend_aux.c'],
+    ['wayland/test_frontend_aux.c', '../src/wayland/frontend_aux.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )
@@ -66,36 +66,36 @@ test_text_ui_state = executable('test_text_ui_state',
 test('text_ui_state', test_text_ui_state)
 
 test_panel_scheduler = executable('test_panel_scheduler',
-    ['frontend/test_panel_scheduler.c', '../src/frontend/panel_scheduler.c'],
+    ['wayland/test_panel_scheduler.c', '../src/wayland/panel_scheduler.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )
 test('panel_scheduler', test_panel_scheduler)
 
 test_shortcut_chord = executable('test_shortcut_chord',
-    ['input/policy/test_shortcut_chord.c', '../src/input/policy/chords.c'],
+    ['wayland/keyboard/policy/test_shortcut_chord.c', '../src/wayland/keyboard/policy/chords.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )
 test('shortcut_chord', test_shortcut_chord)
 
 test_key_arbiter = executable('test_key_arbiter',
-    ['input/wayland/test_key_arbiter.c', '../src/input/wayland/arbiter.c',
-     '../src/input/policy/chords.c', protocol_headers],
+    ['wayland/keyboard/test_key_arbiter.c', '../src/wayland/keyboard/arbiter.c',
+     '../src/wayland/keyboard/policy/chords.c', protocol_headers],
     include_directories: [wayland_test_inc, top_inc],
     dependencies: libtypio_dep,
 )
 test('key_arbiter', test_key_arbiter)
 
 test_modifier_policy = executable('test_modifier_policy',
-    ['input/policy/test_modifier_policy.c', '../src/input/policy/modifiers.c'],
+    ['wayland/keyboard/policy/test_modifier_policy.c', '../src/wayland/keyboard/policy/modifiers.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )
 test('modifier_policy', test_modifier_policy)
 
 test_key_tracking = executable('test_key_tracking',
-    ['input/policy/test_key_tracking.c', '../src/input/policy/tracker.c'],
+    ['wayland/keyboard/policy/test_key_tracking.c', '../src/wayland/keyboard/policy/tracker.c'],
     include_directories: wayland_test_inc,
     dependencies: libtypio_dep,
 )
@@ -139,14 +139,14 @@ test_glyph_pack = executable('test_glyph_pack',
 test('glyph_pack', test_glyph_pack)
 
 test_vk_bridge = executable('test_vk_bridge',
-    ['input/wayland/test_vk_bridge.c', '../src/input/wayland/bridge.c'],
+    ['wayland/keyboard/test_vk_bridge.c', '../src/wayland/keyboard/bridge.c'],
     include_directories: [wayland_test_inc, top_inc],
     dependencies: [libtypio_dep, wayland_client_dep, xkbcommon_dep],
 )
 test('vk_bridge', test_vk_bridge)
 
 test_candidate_guard = executable('test_candidate_guard',
-    ['frontend/test_candidate_guard.c', '../src/frontend/candidate_guard.c'],
+    ['wayland/test_candidate_guard.c', '../src/wayland/candidate_guard.c'],
     include_directories: [wayland_test_inc, top_inc],
     dependencies: libtypio_dep,
 )

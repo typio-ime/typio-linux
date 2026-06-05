@@ -41,7 +41,7 @@ owner:
 - `TYPIO_WL_UI_OWNER_INDICATOR`
 - `TYPIO_WL_UI_OWNER_VOICE`
 
-The coordinator lives in `src/frontend/panel_coordinator.c`. It is frontend
+The coordinator lives in `src/wayland/panel_coordinator.c`. It is frontend
 policy, not rendering code; `src/ui/panel/` remains the Panel renderer.
 
 The coordinator enforces these rules:

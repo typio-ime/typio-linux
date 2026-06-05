@@ -6,8 +6,8 @@
 #include "typio/runtime/instance.h"
 #include "typio/abi/config.h"
 #include "typio/abi/string.h"
-#include "frontend/foreign/identity.h"
-#include "frontend/internal.h"
+#include "wayland/foreign/identity.h"
+#include "wayland/internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>

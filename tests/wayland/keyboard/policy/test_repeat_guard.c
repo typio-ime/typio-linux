@@ -3,7 +3,7 @@
  * @brief Repeat cancellation helper tests
  */
 
-#include "input/policy/repeat_guard.h"
+#include "wayland/keyboard/policy/repeat_guard.h"
 #include "typio/abi/types.h"
 
 #include <assert.h>

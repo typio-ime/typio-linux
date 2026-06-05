@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **All Wayland host code consolidated under `src/wayland/`.**
+  `src/frontend/` was a role word that dropped the one defining trait —
+  Wayland — already carried by every symbol (`TypioWlFrontend`,
+  `TYPIO_WL_FRONTEND_H`), and Wayland handling was split across
+  `src/frontend/` and `src/input/wayland/`. `src/input/` had also
+  collapsed to a single `policy/` child whose "platform-agnostic"
+  framing did not hold: those files are all `typio_wl_*`, consume xkb
+  modifier masks, and reach into `TypioWlFrontend`. The moves:
+  `src/frontend/` → `src/wayland/`; `src/input/wayland/` →
+  `src/wayland/keyboard/` (with `keyboard.c`); `src/input/policy/` →
+  `src/wayland/keyboard/policy/`; the now-empty `src/input/` is gone.
+  The pure-vs-effectful split survives as `wayland/keyboard/` (I/O
+  mechanics) over `wayland/keyboard/policy/` (pure, unit-tested logic).
+  Tests mirror the layout under `tests/wayland/`. All `#include`
+  directives, `src/meson.build` + `tests/meson.build` source lists and
+  `include_directories`, and the `docs/` cross-references were updated.
+  Pure relocation (`git mv` + include-path edits); no behaviour change.
+  Build is clean and all 18 host tests pass.
+
 ### Fixed
 
 - **The SNI tray never registered after the sd-bus migration.** The

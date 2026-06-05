@@ -35,8 +35,8 @@
 #include "session_controller.h"
 
 #include "internal.h"
-#include "input/wayland/bridge.h"
-#include "frontend/foreign/identity.h"
+#include "wayland/keyboard/bridge.h"
+#include "wayland/foreign/identity.h"
 #include "panel.h"
 #include "clock.h"
 #include "typio/abi/instance.h"

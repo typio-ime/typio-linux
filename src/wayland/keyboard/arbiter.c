@@ -14,7 +14,7 @@
 
 #include "arbiter.h"
 
-#include "input/policy/chords.h"
+#include "wayland/keyboard/policy/chords.h"
 #include "bridge.h"
 #include "internal.h"
 #include "state.h"

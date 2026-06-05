@@ -12,8 +12,8 @@
  */
 
 #include "frontend.h"
-#include "frontend/foreign/identity.h"
-#include "input/policy/tracker.h"
+#include "wayland/foreign/identity.h"
+#include "wayland/keyboard/policy/tracker.h"
 #include "clock.h"
 #include "backoff.h"
 #include "internal.h"
@@ -28,7 +28,7 @@
 #include <time.h>
 #ifdef HAVE_VOICE
 #include "typio/abi/voice.h"
-#include "../voice/pw_capture.h"
+#include "voice/pw_capture.h"
 #endif
 
 #include <wayland-client.h>

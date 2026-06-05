@@ -35,7 +35,7 @@ Changed `PANEL_PRESENT_TIMEOUT_NS` from 32ms to 2ms. The 32ms value was chosen f
 
 ### 2. Skip panel flush when retry is pending
 
-**File:** `src/frontend/event_loop.c:28-57`
+**File:** `src/wayland/event_loop.c:28-57`
 
 Added a check: if `typio_panel_present_retry_pending()` returns true, skip the panel flush entirely. The `panel_update_pending` flag remains set, so the next flush (when the compositor releases an image) will use the latest candidate state.
 

@@ -49,7 +49,7 @@ Rule: no `TypioKeyTrackState` value may survive from one activation to the next.
 
 ## Key Tracking State Machine
 
-`TypioKeyTrackState` lives in `src/frontend/internal.h`. Per-key ownership also tracks a `key_generation`: a key cycle belongs to the current grab only if the daemon observed its press in the current generation.
+`TypioKeyTrackState` lives in `src/wayland/internal.h`. Per-key ownership also tracks a `key_generation`: a key cycle belongs to the current grab only if the daemon observed its press in the current generation.
 
 States:
 
@@ -327,7 +327,7 @@ chain:
   changes cannot inherit the 16 ms retry poll cadence and key routing no longer
   calls Panel flush directly.
 - **Do not resurrect the old pending flag.** The live implementation is
-  `src/frontend/panel_scheduler.c`. Historical ADR text that mentions
+  `src/wayland/panel_scheduler.c`. Historical ADR text that mentions
   `panel_update_pending`, durable retry latches, or key-path Panel flushes is
   retained only to explain the regression trail.
 - **GPU memory (~192 MB)** looked alarming but was a *bounded plateau* of

@@ -26,7 +26,7 @@ Lower layers must not call back into frontend policy.
 
 | Code kind | Owns | Does not own | Current home |
 |---|---|---|---|
-| Frontend policy | Focus, input-method commits, owner arbitration, anchor readiness, voice/indicator state | Panel geometry, paint, GPU frames | `src/frontend/` |
+| Frontend policy | Focus, input-method commits, owner arbitration, anchor readiness, voice/indicator state | Panel geometry, paint, GPU frames | `src/wayland/` |
 | UI model | Data-only description of what should be shown | Wayland objects, GPU objects, compositor timing | `src/ui/panel/content.h`, pure helpers under `src/ui/` |
 | UI planning helpers | Small, testable decisions about preedit/panel flushes and positioned UI timing | Rendering, protocol writes, ownership side effects | `src/ui/state.*`, `src/ui/preedit.*` |
 | Layout | `Content + config + palette + scale -> geometry` | Frame lifecycle, present, owner policy | `src/ui/panel/layout.*` |
@@ -39,7 +39,7 @@ Lower layers must not call back into frontend policy.
 
 ## Directory standard
 
-### `src/frontend/`
+### `src/wayland/`
 
 Use this for policy that observes or changes the input-method session.
 
@@ -113,7 +113,7 @@ small and easy to replace.
 
 ## Dependency rules
 
-1. `src/frontend/` may depend on `src/ui/panel/panel.h`, not on
+1. `src/wayland/` may depend on `src/ui/panel/panel.h`, not on
    `layout.h`, `paint.h`, `surface.h`, `device.h`, or `text_shaper.h`.
 2. `content.h` must remain free of Wayland, flux, Vulkan, Fontconfig,
    HarfBuzz, and FreeType types.
@@ -134,7 +134,7 @@ Use this placement checklist:
 
 | If you are adding... | Put it in... |
 |---|---|
-| A new producer, such as a voice or mode status | `src/frontend/`, routed through the Panel Coordinator |
+| A new producer, such as a voice or mode status | `src/wayland/`, routed through the Panel Coordinator |
 | A new piece of data shown in the Panel | `TypioPanelContent` first |
 | A new visual region | content zone + `layout.*` geometry + `paint.*` recording |
 | A new theme knob | `theme.*`, `PanelConfig`, config docs |

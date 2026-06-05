@@ -18,7 +18,7 @@ The Panel system is split into two large areas.
 
 The frontend knows about Wayland focus, input-method commits, voice state,
 engine mode changes, and browser anchor quirks. That policy belongs under
-`src/frontend/`.
+`src/wayland/`.
 
 The main frontend policy object is the **Panel Coordinator**. It answers:
 

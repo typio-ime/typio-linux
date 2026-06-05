@@ -8,7 +8,7 @@
 
 #include "debug.h"
 #include "candidate_guard.h"
-#include "input/policy/repeat_guard.h"
+#include "wayland/keyboard/policy/repeat_guard.h"
 #include "bridge.h"
 #include "internal.h"
 #include "trace.h"
