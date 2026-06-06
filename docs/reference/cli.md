@@ -12,7 +12,7 @@
 |--------|----------|--------|
 | `-c`, `--config` | `DIR` | Set the configuration directory. |
 | `-d`, `--data` | `DIR` | Set the data directory. |
-| `-E`, `--engine-dir` | `DIR` | Set the engine plugin directory override. |
+| `-E`, `--engine-dir` | `DIR` | Set the engine manifest directory override. |
 | `-v`, `--verbose` | None | Enable debug logging. |
 | `-vv` | None | Enable trace logging, including high-volume key-routing traces. |
 | `-h`, `--help` | None | Print CLI help and exit. |

@@ -35,7 +35,7 @@ endif
 host_sources = files(
     'main.c',
     'app.c',
-    'plugin_loader.c',
+    'engine_loader.c',
     'state/controller.c',
     'state/engine_placeholder.c',
     'cli.c',
@@ -123,7 +123,7 @@ if enable_voice
 endif
 
 # ── Dependencies ──────────────────────────────────────────────────────────
-host_deps = [libtypio_dep, dl_dep, vulkan_dep]
+host_deps = [libtypio_dep, vulkan_dep]
 
 if enable_wayland
     host_deps += [wayland_client_dep, xkbcommon_dep]

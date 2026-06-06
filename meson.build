@@ -1,5 +1,5 @@
 project('typio-linux', 'c',
-  version: '0.1.17',
+  version: '0.2.0',
   default_options: ['warning_level=2', 'c_std=c23'],
   meson_version: '>=1.0.0',
 )
@@ -35,7 +35,6 @@ enable_voice = get_option('enable_voice')
 
 # ── Dependencies ──────────────────────────────────────────────────────────
 thread_dep = dependency('threads')
-dl_dep = cc.find_library('dl', required: false)
 m_dep = cc.find_library('m', required: false)
 
 # The framework library (libtypio + full C ABI headers).
@@ -115,7 +114,7 @@ conf_data.set('TYPIO_VERSION_MINOR', typio_version.split('.')[1])
 conf_data.set('TYPIO_VERSION_PATCH', typio_version.split('.')[2])
 conf_data.set('TYPIO_BUILD_SOURCE_LABEL', typio_source_label)
 conf_data.set('TYPIO_INSTALL_PREFIX', prefix)
-conf_data.set('TYPIO_ENGINE_DIR', prefix / libdir / 'typio' / 'engines')
+conf_data.set('TYPIO_ENGINE_DIR', prefix / datadir / 'typio' / 'engines')
 conf_data.set('TYPIO_DATA_DIR', prefix / datadir / 'typio')
 conf_data.set('TYPIO_INSTALL_ICON_DIR', prefix / datadir / 'icons')
 conf_data.set('TYPIO_SOURCE_ICON_DIR', meson.project_source_root() / 'data' / 'icons')

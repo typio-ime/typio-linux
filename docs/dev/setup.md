@@ -135,16 +135,15 @@ export LD_LIBRARY_PATH=../libtypio/target/release:${LD_LIBRARY_PATH}
 The verbose log reports how many engines were discovered at startup
 (`Host loader registered N engine(s) from …`).
 
-For plugin engine work, point the daemon at one or more engine directories.
+For engine work, point the daemon at one or more manifest directories.
 `--engine-dir` is repeatable and takes highest precedence, so you can run
 freshly built engines straight from their build trees — no copy step, no
-symlinking. Pass the directory that **contains** the `libtypio_engine_<name>.so`
-— a Cargo engine's `target/release`, a Meson engine's `build` — not the
-repository root; the scan is flat and does not recurse into subdirectories:
+symlinking. Pass the directory that **contains** `typio-engine-*.toml`; the
+scan is flat and does not recurse into subdirectories:
 
 ```bash
 ./build/src/typio -v \
-  --engine-dir ../typio-engine-basic/target/release \
+  --engine-dir ../typio-engine-basic \
   --engine-dir ../typio-engine-mozc/build
 ```
 
@@ -152,7 +151,7 @@ Equivalently, set the colon-separated `$TYPIO_ENGINE_PATH` (PATH-style) once
 in your shell instead of repeating the flag:
 
 ```bash
-export TYPIO_ENGINE_PATH="$PWD/../typio-engine-basic/target/release:$PWD/../typio-engine-mozc/build"
+export TYPIO_ENGINE_PATH="$PWD/../typio-engine-basic:$PWD/../typio-engine-mozc/build"
 ./build/src/typio -v
 ```
 
@@ -169,28 +168,26 @@ actually exercise input conversion (and to verify your build wires up the
 engine ABI correctly), build one engine and point the daemon at it.
 
 Any engine works; this uses `typio-engine-basic`, the zero-dependency
-fallback, as the concrete example. Cargo emits `libtypio_engine_<name>.so`
-directly into its target directory:
+fallback, as the concrete example. Cargo emits the worker executable and the
+repository contains `typio-engine-basic.toml`:
 
 ```bash
 ( cd ../typio-engine-basic && cargo build --release )
 ```
 
-This produces `../typio-engine-basic/target/release/libtypio_engine_basic.so`;
-the `basic` suffix becomes the engine identifier exposed to users and
+This produces `../typio-engine-basic/target/release/typio-engine-basic`; the
+manifest declares the `basic` engine identifier exposed to users and
 configuration files.
 
 Point the daemon at that build directory with `--engine-dir` — no copy and no
 install step (see [Run the daemon while iterating](#3-run-the-daemon-while-iterating)):
 
 ```bash
-./build/src/typio -v --engine-dir ../typio-engine-basic/target/release
+./build/src/typio -v --engine-dir ../typio-engine-basic
 ```
 
-Different build systems emit into different directories — a Cargo engine into
-`target/release`, a Meson engine (such as `typio-engine-mozc`) into `build` —
-but the rule is the same: pass the directory that contains the
-`libtypio_engine_<name>.so`.
+Different engine packages may keep their manifest in the repository root or
+generate it into `build`; pass the directory that contains the manifest.
 
 ## Optional features
 
@@ -200,10 +197,10 @@ but the rule is the same: pass the directory that contains the
 | `-Denable_voice=true` | `false` | PipeWire audio capture and voice session infrastructure |
 
 `-Denable_voice=true` does **not** compile any voice engine into the binary.
-Voice engines (Whisper, Sherpa-ONNX, …) are separate plugin repositories
-loaded at runtime. This option only enables the host-side PipeWire capture
-and voice-session plumbing that those external engines plug into. Without
-this flag, voice engine plugins are rejected at load time with a
+Voice engines (Whisper, Sherpa-ONNX, …) are separate worker packages loaded at
+runtime. This option only enables the host-side PipeWire capture and
+voice-session plumbing that those external engines plug into. Without this
+flag, voice engine manifests are rejected at load time with a
 `voice_input capability` error because the host does not advertise the
 required capability.
 
@@ -218,13 +215,12 @@ explicitly.
 |---|---|---|
 | 1 | `-E` / `--engine-dir DIR` | directories passed on the command line; repeatable, in the order given |
 | 2 | `$TYPIO_ENGINE_PATH` | colon-separated list, in listed order |
-| 3 | **System** | compile-time `<prefix>/<libdir>/typio/engines` (typically `/usr/lib/typio/engines`) |
+| 3 | **System** | compile-time `<prefix>/<datadir>/typio/engines` (typically `/usr/share/typio/engines`) |
 
-In each directory it loads only files named `libtypio_engine_<name>.so`,
-`dlopen`s each, and registers it with libtypio via the engine ABI. The
-`libtypio_engine_` prefix is mandatory; `<name>` (the part before `.so`)
-becomes the engine identifier exposed in config and the CLI (`basic`, `rime`,
-`whisper`, …). A sibling `icons/` directory (`<engine-dir>/icons/`,
+In each directory it loads only files named `typio-engine-*.toml`, parses the
+manifest, and registers the declared worker argv with libtypio. The `name`
+field becomes the engine identifier exposed in config and the CLI (`basic`,
+`rime`, `sherpa`, …). A sibling `icons/` directory (`<engine-dir>/icons/`,
 freedesktop hicolor layout) is added to the tray's icon search path, so an
 engine can ship its own symbolic icons.
 

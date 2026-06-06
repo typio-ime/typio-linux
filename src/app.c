@@ -1,7 +1,7 @@
 #include "app.h"
 
 #include "ipc/ipc_bus.h"
-#include "plugin_loader.h"
+#include "engine_loader.h"
 #include "state/controller.h"
 #include "typio/abi/config.h"
 #include "typio/runtime/registry.h"
@@ -698,7 +698,7 @@ int typio_app_run(TypioApp *app) {
     typio_init_ipc_bus(app);
     typio_init_tray(app);
 #ifdef HAVE_SYSTRAY
-    const char *engine_icon_path = typio_plugin_discovered_icon_theme_path();
+    const char *engine_icon_path = typio_engine_loader_discovered_icon_theme_path();
     if (engine_icon_path && app->tray) {
         typio_tray_set_icon_theme_path(app->tray, engine_icon_path);
     }

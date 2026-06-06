@@ -216,7 +216,7 @@ void typio_wl_frontend_handle_config_watch(TypioWlFrontend *frontend) {
                 should_reload = true;
             } else if ((event->mask & relevant_mask) != 0) {
                 if (event->wd == frontend->config->engines_watch) {
-                    /* Engine plugin directory: keep the broad trigger. */
+                    /* Engine manifest directory: keep the broad trigger. */
                     should_reload = true;
                 } else if (config_event_is_relevant(event->name, event->len)) {
                     should_reload = true;

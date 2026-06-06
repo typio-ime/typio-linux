@@ -69,7 +69,7 @@ Wayland frontend routes printable keys when the basic engine is active.
 
 ### `[engines.rime]`, `[engines.mozc]`, etc. — engine-owned sections
 
-Each engine plugin registers its own `engines.<name>.*` schema.  The host does
+Each engine package registers its own `engines.<name>.*` schema.  The host does
 not interpret these keys; it passes the config table to the engine via the
 engine ABI.
 
@@ -107,7 +107,7 @@ Both keyboard and voice engines follow the same activation priority:
 ### Disabling engines
 
 Installed engines can be excluded from loading entirely.  Disabled engines
-are not `dlopen`ed and never appear in the engine list.  Useful when you
+are not started and never appear in the engine list.  Useful when you
 have many engines installed but only want a subset active.
 
 | Key | Type | Description |
@@ -170,7 +170,7 @@ channel.
 
 Keys that **require a restart** to take effect:
 
-- `engines.*` schema changes (engine plugins read their config at load time)
+- `engines.*` schema changes (engine workers read their config at load time)
 
 ---
 
@@ -178,4 +178,4 @@ Keys that **require a restart** to take effect:
 
 - `data/core.toml.example` — annotated starter for framework policy
 - `data/platform.toml.example` — annotated starter for Panel styling
-- [Engine Discovery Reference](engine-discovery.md) — how engine plugins are found and named
+- [Engine Discovery Reference](engine-discovery.md) — how engine manifests are found and named

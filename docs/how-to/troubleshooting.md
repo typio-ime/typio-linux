@@ -4,17 +4,15 @@
 
 The daemon logs how many engines it loaded at startup (`Host loader
 registered N engine(s) from …`); run `typio --verbose` to see it. If the
-count is zero, the plugin is usually installed in a directory that is not on
-the search path, or the file name does not match the expected pattern. The
-scanner
-looks for `libtypio_engine_<name>.so` (underscores). Cargo produces this
-naming natively, so no rename should be needed.
+count is zero, the engine manifest is usually installed in a directory that is
+not on the search path, or the file name does not match the expected pattern.
+The scanner looks for `typio-engine-*.toml`.
 
-Confirm the plugin sits in a scanned directory and is readable:
+Confirm the manifest sits in a scanned directory and is readable:
 
 ```bash
-ls /usr/lib/typio/engines
-ls /usr/local/lib/typio/engines
+ls /usr/share/typio/engines
+ls /usr/local/share/typio/engines
 ```
 
 The [basic engine](../../typio-engine-basic) is a separate repository: build it
@@ -70,9 +68,9 @@ Stop other input method daemons in the same session before starting typio.
 
 That is expected with the `basic` engine. It commits printable characters directly and does not implement candidate UI or advanced composition.
 
-For richer behavior, install an external engine plugin.
+For richer behavior, install an external engine package.
 
-With the `rime` plugin, the daemon renders candidates through the Panel when the required Wayland input-popup objects are available. If you still only see inline candidates, the daemon likely failed to initialize `wl_compositor` or the input-popup surface itself.
+With the `rime` engine, the daemon renders candidates through the Panel when the required Wayland input-popup objects are available. If you still only see inline candidates, the daemon likely failed to initialize `wl_compositor` or the input-popup surface itself.
 
 If edits under `~/.local/share/typio/rime` do not affect candidate behavior, switch to the `rime` engine and run:
 

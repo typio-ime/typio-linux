@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-06
+
+### Changed
+
+- **Engine discovery is now IPC manifest based.** The daemon scans
+  `typio-engine-*.toml` manifests, registers engines through
+  `typio_registry_register_ipc_engine`, and starts worker processes for
+  engine calls. The daemon no longer loads engine `.so` files in-process.
+  Engine packages ship direct worker executables; the generic
+  `typio-engine-worker` bridge has been removed.
+
+- **Engine package paths now match the IPC worker model.** The system manifest
+  directory moved to `<datadir>/typio/engines`, while engine worker
+  executables belong under `<libexecdir>/typio/engines`. Installed manifests
+  should point `command` at the absolute worker path.
+
 ## [0.1.17] - 2026-06-05
 
 ### Changed

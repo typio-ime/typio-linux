@@ -14,7 +14,7 @@ a pure business-logic library could fulfill alone.
 | **Language** | C23 | Rust + hand-written C ABI |
 | **Knows about** | Wayland, Vulkan, D-Bus, PipeWire, Linux filesystem | Engines, input contexts, config schema, engine registry |
 | **Does not know about** | How an engine processes a key; what Rime schema is active | What compositor is running; what GPU renders the panel; what audio hardware is attached |
-| **Contains engines** | No — discovers and loads `.so` plugins at runtime | No — provides the engine ABI and registry; engines are separate repos |
+| **Contains engines** | No — discovers engine manifests and starts workers at runtime | No — provides the engine ABI and registry; engines are separate repos |
 | **Process** | `typio` daemon binary | Linked as a static/shared library inside `typio` |
 
 The dependency direction is one-way: typio-linux links libtypio and calls its
@@ -28,10 +28,11 @@ public headers:
 
 ### Surface 1: Instance lifecycle (`typio/runtime/instance.h`)
 
-The host creates a `TypioInstance`, provides engine directories and a plugin
-loader callback, then drives init and shutdown. libtypio never calls `dlopen` —
-it calls back into the host's `TypioPluginLoaderFunc` once per engine directory,
-and the host does the actual `dlopen`, capability negotiation, and registration.
+The host creates a `TypioInstance`, provides engine directories and an engine
+discovery callback, then drives init and shutdown. libtypio never scans engine
+paths; it calls back into the host's `TypioPluginLoaderFunc` once per engine
+directory, and the host does manifest parsing, capability negotiation, and IPC
+registration.
 
 ### Surface 2: Input context (`typio/abi/input_context.h`)
 
@@ -54,11 +55,11 @@ updates the tray, panel, and IPC event subscribers.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  Engine Plugin (.so)                                      │
-│  Implements TypioKeyboardEngineOps.process_key             │
-│  Calls typio_input_context_commit / set_composition        │
+│  Engine Worker Process                                    │
+│  Implements the Typio worker protocol                      │
+│  Emits COMMIT / COMPOSITION response lines                 │
 └──────────────┬──────────────────────┬────────────────────┘
-               │ vtable dispatch      │ output callbacks
+               │ IPC request          │ IPC responses
                ▼                      │
 ┌──────────────────────────────────────┴────────────────────┐
 │  libtypio                                                  │
@@ -71,7 +72,7 @@ updates the tray, panel, and IPC event subscribers.
 ┌────────────────────────────────────────────────────────────┐
 │  typio-linux                                             │
 │  Wayland input-method, Vulkan panel, event loop            │
-│  Plugin discovery, tray, IPC, voice capture, config watch  │
+│  Manifest discovery, tray, IPC, voice capture, config watch│
 └────────────────────────────────────────────────────────────┘
 ```
 

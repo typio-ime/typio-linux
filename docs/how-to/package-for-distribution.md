@@ -41,6 +41,7 @@ meson setup build --prefix=/usr --buildtype=release
 | `typio` | `<prefix>/<bindir>/` | Main daemon binary |
 | `typio.service` | `<prefix>/<libdir>/systemd/user/` | systemd user service unit that runs the daemon |
 | `hicolor/*` | `<datadir>/icons/` | Status and tray icons |
+| `typio-engine-*.toml` | `<datadir>/typio/engines/` | Engine manifests installed by engine packages |
 | `core.toml.example` | `<datadir>/typio/` | Example core configuration |
 | `platform.toml.example` | `<datadir>/typio/` | Example Wayland frontend configuration |
 
@@ -54,16 +55,21 @@ The binary itself requires:
 - `libpipewire-0.3` — for voice capture (if enabled at build time)
 - Vulkan loader, FreeType, HarfBuzz, fontconfig — for the candidate Panel renderer
 
-## Engine plugins
+## Engine Packages
 
-`typio` does not ship with input engines. At minimum, install one engine plugin
-into `<libdir>/typio/engines/`. The file must match `libtypio_engine_*.so`.
+`typio` does not ship with input engines. At minimum, install one engine
+manifest into `<datadir>/typio/engines/`. The file must match
+`typio-engine-*.toml`.
+
+Engine workers are private helper executables. Install them under
+`<libexecdir>/typio/engines/` and point each manifest's `command` at the
+installed worker path.
 
 Common engines:
 
-- `libtypio_engine_basic.so` — zero-dependency fallback keyboard
-- `libtypio_engine_rime.so` — RIME-based engine
-- `libtypio_engine_whisper.so` — Whisper voice engine
+- `typio-engine-basic.toml` — zero-dependency fallback keyboard
+- `typio-engine-rime.toml` — RIME-based engine
+- `typio-engine-sherpa.toml` — Sherpa-ONNX voice engine
 
 Package each engine as a separate package so users choose only the ones they need.
 
@@ -116,7 +122,7 @@ decision background see [ADR-0021](../adr/0021-systemd-user-service-daemon-lifec
 ## Packaging checklist
 
 - [ ] `libtypio` is available in the target repository or bundled via the meson wrap
-- [ ] At least one engine plugin is packaged or declared as a dependency
+- [ ] At least one engine package is packaged or declared as a dependency
 - [ ] `DESTDIR` staging produces clean file lists
 - [ ] The systemd user unit path matches the distribution's `<libdir>`
 - [ ] Icon cache update is triggered after installation if required by the distribution policy

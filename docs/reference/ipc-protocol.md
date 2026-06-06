@@ -106,7 +106,7 @@ The `engine.*` namespace is cross-modality and keyed by engine name (aggregate q
 
 `kind` (in `engine.list` / `engine.describe`) is `"keyboard"` or `"voice"`. `keyboard.use` / `voice.use` reject a `name` whose engine is not of the matching modality. Each property entry in `engine.describe` carries `{ key, type, value, label, choices? }`.
 
-`engine.load` loads a single engine plugin from an absolute `.so` path. `engine.unload` unregisters an engine by name (deactivating it first if active). `engine.reload` combines unload + load: if `path` is provided, loads from that exact path; if omitted, rescans the configured `engine_dirs` to find the engine by name (`libtypio_engine_<name>.so`).
+`engine.load` loads a single engine manifest from an absolute `.toml` path. `engine.unload` unregisters an engine by name (deactivating it first if active). `engine.reload` combines unload + load: if `path` is provided, loads from that exact path; if omitted, rescans the configured `engine_dirs` to find the engine by name (`typio-engine-<name>.toml`).
 
 ### `daemon.*`
 

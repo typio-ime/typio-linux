@@ -25,7 +25,7 @@
 #include "typio_build_config.h"
 #include "typio/abi/log.h"
 #include "typio/abi/string.h"
-#include "plugin_loader.h"
+#include "engine_loader.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -654,7 +654,7 @@ static char *handle_engine_load(TypioStatusService *svc, const char *params, int
         return tip_json_build_error(id, RPC_INTERNAL_ERROR, "no registry");
     }
 
-    if (!typio_plugin_load_single(reg, path)) {
+    if (!typio_engine_loader_load_single(reg, path)) {
         free(path);
         return tip_json_build_error(id, RPC_INTERNAL_ERROR, "engine.load failed");
     }
@@ -688,7 +688,7 @@ static char *handle_engine_unload(TypioStatusService *svc, const char *params, i
         return tip_json_build_error(id, RPC_INTERNAL_ERROR, "no registry");
     }
 
-    if (!typio_plugin_unload(reg, name)) {
+    if (!typio_engine_loader_unload(reg, name)) {
         free(name);
         return tip_json_build_error(id, RPC_INVALID_PARAMS, "Unknown engine");
     }
@@ -726,7 +726,7 @@ static char *handle_engine_reload(TypioStatusService *svc, const char *params, i
     /* Reload resolves by name against $TYPIO_ENGINE_PATH + the system dir;
      * it has no access to the daemon's --engine-dir list (ADR-0025). */
     const char *const *engine_dirs = typio_engine_dirs_build(nullptr, 0);
-    if (!typio_plugin_reload(reg, name, path, engine_dirs)) {
+    if (!typio_engine_loader_reload(reg, name, path, engine_dirs)) {
         typio_engine_dirs_free(engine_dirs);
         free(name); free(path);
         return tip_json_build_error(id, RPC_INTERNAL_ERROR, "engine.reload failed");

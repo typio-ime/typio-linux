@@ -14,10 +14,10 @@ the D-Bus status interface, the StatusNotifierItem tray, and PipeWire
 voice capture. It translates Wayland/D-Bus events into libtypio
 abstractions and drives libtypio's callbacks back onto the compositor.
 
-Plugin discovery is host-owned: at startup `typio` scans
-`<libdir>/typio/engines` for `libtypio_engine_*.so`, `dlopen`s each, and
-registers it with libtypio. Core itself contains no `dlopen` and no
-engine paths.
+Engine discovery is host-owned: at startup `typio` scans
+`<datadir>/typio/engines` for `typio-engine-*.toml` manifests and registers
+direct worker processes with libtypio. Core itself contains no engine search
+paths.
 
 ## Building
 
@@ -43,9 +43,9 @@ See [`docs/dev/setup.md`](docs/dev/setup.md) for the full setup steps and
 additional options.
 
 Options: `-Denable_systray=true`, `-Denable_status_bus=true` (default),
-`-Denable_voice=true` for voice input support. Voice engines (Whisper,
-Sherpa-ONNX, …) are loaded as plugin `.so` files at runtime; this option
-only enables the host-side PipeWire capture infrastructure.
+`-Denable_voice=true` for voice input support. Voice engines run as worker
+processes at runtime; this option only enables the host-side PipeWire capture
+infrastructure.
 
 ## Running
 
@@ -66,9 +66,9 @@ journalctl --user -u typio -f
 ```
 
 Engines are discovered from the system engine directory
-`<prefix>/<libdir>/typio/engines`. Build the [basic engine](../typio-engine-basic)
-with `cargo build --release` and install the `.so`
-(`libtypio_engine_*.so`) into that directory. For development and testing,
-pass `--engine-dir DIR` or set `TYPIO_ENGINE_DIR`.
+`<prefix>/<datadir>/typio/engines`. Build the [basic engine](../typio-engine-basic)
+with `cargo build --release` and install `typio-engine-basic.toml` into that
+directory. For development and testing, pass `--engine-dir DIR` or set
+`TYPIO_ENGINE_PATH`.
 
 Control it from a separate terminal with the [typioctl](../typioctl) client.

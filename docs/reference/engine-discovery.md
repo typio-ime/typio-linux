@@ -1,42 +1,79 @@
 # Engine Discovery Reference
 
-How `typio` locates and loads engine plugins at startup.
-
-## Search path (priority order)
+## Search Path
 
 | Order | Source | Path |
 |---|---|---|
-| 1 | `-E` / `--engine-dir DIR` | directories given on the command line; **repeatable**, scanned in the order given |
-| 2 | `$TYPIO_ENGINE_PATH` | colon-separated list, scanned in listed order |
-| 3 | System lib dir | compile-time `<prefix>/<libdir>/typio/engines` (e.g. `/usr/lib/typio/engines`, or `/usr/local/lib/typio/engines` for a `/usr/local` prefix) |
-
-- All existing directories in the list are scanned, in the order above.
-- The **first** engine of a given `<name>` registers; a later duplicate is rejected (`AlreadyExists`).
-- The daemon auto-loads only from the system directory (order 3). Orders 1 and 2 are explicit operator opt-ins; there is no per-user `$HOME` auto-scan. See [ADR-0025](../adr/0025-engine-discovery-search-path.md) for the rationale (engines are keystroke-privileged native code).
-
-## File name convention
+| 1 | `-E` / `--engine-dir DIR` | Directories given on the command line; repeatable; scanned in the order given |
+| 2 | `$TYPIO_ENGINE_PATH` | Colon-separated directory list; scanned in listed order |
+| 3 | System engine dir | Compile-time `<prefix>/<datadir>/typio/engines` |
 
 | Rule | Value |
 |---|---|
-| Required prefix | `libtypio_engine_` |
-| Required suffix | `.so` |
-| Engine identifier | `<name>` — the text between prefix and suffix |
-| Loaded example | `libtypio_engine_basic.so` → identifier `basic` |
-| Ignored | any file not matching `libtypio_engine_*.so` (silently skipped) |
+| Duplicate names | First registered engine wins; later duplicates are rejected |
+| Missing directory | Ignored |
+| User auto-scan | None |
+| Decision record | [ADR-0029](../adr/0029-engine-package-install-layout.md) |
 
-- Cargo emits `libtypio_engine_<name>.so` natively — no rename needed.
-- `<name>` is the identifier used in config keys (`engines.<name>.*`), the `--engine` flag, and `typioctl`.
+## Manifest Files
 
-## Bundled icons (optional)
+| Rule | Value |
+|---|---|
+| Required prefix | `typio-engine-` |
+| Required suffix | `.toml` |
+| Loaded example | `typio-engine-rime.toml` |
+| Ignored | Files not matching `typio-engine-*.toml` |
+
+## Manifest Keys
+
+| Key | Required | Repeatable | Value |
+|---|---:|---:|---|
+| `name` | Yes | No | Engine identifier used by config, CLI, and `typioctl` |
+| `type` | Yes | No | `keyboard` or `voice` |
+| `command` | Yes | No | Worker executable; values containing `/` resolve relative to the manifest file |
+| `args` | No | No | Worker argv array; values containing `/` resolve relative to the manifest file |
+| `display_name` | No | No | Human-readable name |
+| `description` | No | No | Short description |
+| `author` | No | No | Engine author or vendor |
+| `icon` | No | No | Freedesktop icon name |
+| `language` | No | No | BCP-47 language tag; default `und` |
+| `required` | No | No | Required capability array |
+| `optional` | No | No | Optional capability array |
+
+## Worker Protocol
 
 | Item | Value |
 |---|---|
-| Location | `<engine-dir>/icons/` (freedesktop hicolor layout) |
-| Effect | the directory is added to the tray's `IconThemePath` |
-| Resolves | `TypioEngineInfo.icon` and the engine's status `icon_name` |
+| Transport | Child process stdin/stdout |
+| Request format | One tab-separated line |
+| Response format | Zero or more response lines ending with `END` |
+| Host registration | `typio_registry_register_ipc_engine` |
+| Worker model | One executable per engine package |
+| Installed worker location | `<prefix>/<libexecdir>/typio/engines/` |
+| Installed manifest location | `<prefix>/<datadir>/typio/engines/` |
+
+## Capabilities
+
+| Capability | Host support |
+|---|---|
+| `preedit` | Yes |
+| `candidates` | Yes |
+| `prediction` | Yes |
+| `punctuation` | Yes |
+| `learning` | Yes |
+| `voice_input` | Voice builds only |
+| `continuous_voice` | Voice builds only |
+
+## Bundled Icons
+
+| Item | Value |
+|---|---|
+| Location | `<engine-dir>/icons/` |
+| Layout | Freedesktop hicolor icon-theme layout |
+| Effect | Directory is added to the tray `IconThemePath` |
 
 ## Related
 
-- [How to Package for Distribution](../how-to/package-for-distribution.md) — install paths for packagers
-- [Troubleshooting: no engines](../how-to/troubleshooting.md) — common discovery failures
-- [Developer Setup](../dev/setup.md#engine-discovery) — building an engine and pointing the daemon at it locally
+- [How to Package for Distribution](../how-to/package-for-distribution.md)
+- [Troubleshooting](../how-to/troubleshooting.md)
+- [Developer Setup](../dev/setup.md#engine-discovery)

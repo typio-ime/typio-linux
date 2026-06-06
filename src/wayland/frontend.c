@@ -279,7 +279,7 @@ TypioWlFrontend *typio_wl_frontend_new(TypioInstance *instance,
 
     frontend->instance = instance;
     /* Default to PREPARING: do NOT query engine availability eagerly during
-     * init. Third-party engine plugins may be buggy or slow to initialise;
+     * init. Third-party engine workers may be buggy or slow to initialise;
      * calling into their vtable here could crash the daemon. Instead, rely
      * on the push-based availability callback to transition to READY when
      * the engine finishes warm-up. The key router already handles
