@@ -206,6 +206,10 @@ typio_wl_session_apply(TypioWlFrontend *frontend,
         typio_wl_trace(frontend, "session", "action=create_grab");
         frontend->keyboard = typio_wl_keyboard_create(frontend);
         typio_wl_vk_expect_keymap(frontend, "session_controller create_grab");
+        if (effects->send_focus_in) {
+            typio_wl_panel_coordinator_reset_anchor(frontend);
+            typio_wl_panel_coordinator_early_anchor_probe(frontend);
+        }
     }
 
     if (effects->send_focus_in && frontend->session && frontend->session->ctx) {
@@ -228,5 +232,6 @@ typio_wl_session_apply(TypioWlFrontend *frontend,
     if (effects->reactivate) {
         typio_wl_trace(frontend, "session", "action=reactivate");
         typio_wl_panel_coordinator_reset_anchor(frontend);
+        typio_wl_panel_coordinator_early_anchor_probe(frontend);
     }
 }

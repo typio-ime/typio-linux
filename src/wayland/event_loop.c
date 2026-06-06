@@ -149,7 +149,9 @@ static void event_loop_flush_pending_panel(TypioWlFrontend *frontend) {
          * instead of dropping the UI. Browsers answer the probe before the
          * timeout and take the plain SHOW path. */
         bool caret_fallback = ui_plan == TYPIO_WL_POSITIONED_UI_CANCEL &&
-                              frontend->panel_coord->position_anchor_has_caret;
+                              (frontend->panel_coord->position_anchor_has_caret ||
+                               frontend->panel_coord->positioned_ui_pending_owner ==
+                                   TYPIO_WL_UI_OWNER_INDICATOR);
 
         if (ui_plan == TYPIO_WL_POSITIONED_UI_SHOW || caret_fallback) {
             if (caret_fallback) {

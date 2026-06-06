@@ -154,40 +154,33 @@ static bool build_indicator_label(TypioWlFrontend *frontend,
 }
 
 void typio_wl_frontend_show_indicator_for_state(TypioWlFrontend *frontend,
-                                                  const TypioKeyboardEngineMode *mode) {
+                                                   const TypioKeyboardEngineMode *mode) {
     char label[TYPIO_POSITIONED_UI_LABEL_CAP];
 
     if (!frontend || !frontend->instance) return;
     if (!indicator_enabled(frontend)) return;
     if (!frontend->panel) return;
 
-    /* Deliberate-change path: a user-initiated engine switch or mode
-     * change always earns confirmation feedback, *regardless of salience*.
-     * The user just acted; give them the clearest signal. salience governs
-     * only the unprompted on-focus auto-display (see show_indicator_on_focus),
-     * not this path. */
     if (!build_indicator_label(frontend, mode, label, sizeof(label))) return;
 
     typio_wl_frontend_show_indicator(frontend, label);
 }
 
 void typio_wl_frontend_show_indicator_on_focus(TypioWlFrontend *frontend,
-                                                const TypioKeyboardEngineMode *mode) {
+                                                 const TypioKeyboardEngineMode *mode) {
+    char label[TYPIO_POSITIONED_UI_LABEL_CAP];
+
     if (!frontend) return;
 
-    /* Salience gate — focus path only. salience guides exactly one decision:
-     * whether to *auto-reveal* a state on an incidental focus. A QUIET state
-     * (Latin/ascii passthrough, off) behaves like a plain keyboard, so landing
-     * in it should stay silent. Deliberate changes never reach here; they call
-     * show_indicator_for_state directly and always announce. */
+    if (frontend->indicator->pending_label[0]) {
+        snprintf(label, sizeof(label), "%s", frontend->indicator->pending_label);
+        frontend->indicator->pending_label[0] = '\0';
+        typio_wl_frontend_show_indicator(frontend, label);
+        return;
+    }
+
     if (mode && mode->salience == TYPIO_STATUS_SALIENCE_QUIET) return;
 
-    /* Acknowledged-recency suppression (focus path only). If the user recently
-     * engaged with this IME — by any effective keypress or shortcut (not only a
-     * commit), or by seeing the indicator — they already know the state, so an
-     * incidental reactivation (the terminal click-to-focus case) should stay silent.
-     * Keying off the last *effective key* matches the user's "I was just typing
-     * a moment ago" intuition better than keying off commits alone. */
     uint64_t now = typio_wl_monotonic_ms();
     uint64_t acknowledged = frontend->indicator->last_key_activity_ms > frontend->indicator->last_indicator_ms
                           ? frontend->indicator->last_key_activity_ms
@@ -206,19 +199,23 @@ void typio_wl_frontend_record_key_activity(TypioWlFrontend *frontend) {
 }
 
 void typio_wl_frontend_show_indicator(TypioWlFrontend *frontend,
-                                       const char *text) {
-    bool anchor_ready;
+                                        const char *text) {
+    bool shown;
 
     if (!frontend || !text || !text[0]) return;
     if (!indicator_enabled(frontend)) return;
     if (!frontend->panel) return;
 
-    anchor_ready = typio_wl_panel_coordinator_anchor_ready(frontend);
-    if (typio_wl_panel_coordinator_show_status(frontend, TYPIO_WL_UI_OWNER_INDICATOR, text) &&
-        anchor_ready) {
+    shown = typio_wl_panel_coordinator_show_status(frontend, TYPIO_WL_UI_OWNER_INDICATOR, text);
+    if (shown) {
         frontend->indicator->active = true;
         frontend->indicator->last_indicator_ms = typio_wl_monotonic_ms();
         arm_indicator_timer(frontend);
+        frontend->indicator->pending_label[0] = '\0';
+    } else {
+        snprintf(frontend->indicator->pending_label,
+                 sizeof(frontend->indicator->pending_label),
+                 "%s", text);
     }
 }
 
@@ -226,8 +223,8 @@ void typio_wl_frontend_hide_indicator(TypioWlFrontend *frontend) {
     struct itimerspec its;
 
     if (!frontend) return;
-    typio_wl_panel_coordinator_hide(frontend, TYPIO_WL_UI_OWNER_INDICATOR);
     frontend->indicator->active = false;
+    typio_wl_panel_coordinator_hide(frontend, TYPIO_WL_UI_OWNER_INDICATOR);
 
     if (frontend->indicator->timer_fd >= 0) {
         memset(&its, 0, sizeof(its));

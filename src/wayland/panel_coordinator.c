@@ -40,6 +40,7 @@ void typio_wl_panel_coordinator_reset_anchor(TypioWlFrontend *frontend) {
     }
     frontend->panel_coord->position_anchor_ready_generation = 0;
     frontend->panel_coord->position_anchor_probe_generation = 0;
+    frontend->panel_coord->position_anchor_has_caret = false;
 }
 
 void typio_wl_panel_coordinator_note_caret_rect(TypioWlFrontend *frontend) {
@@ -149,6 +150,11 @@ static bool has_focused_context(TypioWlFrontend *frontend) {
            typio_input_context_is_focused(frontend->session->ctx);
 }
 
+void typio_wl_panel_coordinator_early_anchor_probe(TypioWlFrontend *frontend) {
+    if (!frontend) return;
+    maybe_probe_position_anchor(frontend, TYPIO_WL_UI_OWNER_NONE);
+}
+
 static bool queue_positioned_ui(TypioWlFrontend *frontend,
                                 TypioWlUiOwner owner,
                                 const char *text) {
@@ -216,8 +222,11 @@ bool typio_wl_panel_coordinator_show_status(TypioWlFrontend *frontend,
         typio_panel_hide(frontend->panel);
     }
 
-    frontend->ui_owner = owner;
-    return typio_panel_show_status(frontend->panel, text);
+    bool ok = typio_panel_show_status(frontend->panel, text);
+    if (ok) {
+        frontend->ui_owner = owner;
+    }
+    return ok;
 }
 
 void typio_wl_panel_coordinator_hide(TypioWlFrontend *frontend,

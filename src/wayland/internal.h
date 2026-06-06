@@ -373,6 +373,8 @@ struct TypioWlIndicator {
         char display_label[64];
     } mode_cache[TYPIO_INDICATOR_MODE_CACHE_CAP];
     size_t mode_cache_count;
+    #define TYPIO_INDICATOR_PENDING_LABEL_CAP 128
+    char pending_label[TYPIO_INDICATOR_PENDING_LABEL_CAP];
     TypioWlFrontend *frontend;
 };
 
@@ -434,6 +436,7 @@ void typio_wl_panel_coordinator_note_caret_rect(TypioWlFrontend *frontend);
 /* Clear the cached-caret state on focus-out so a later focus cannot reuse a
  * stale position. */
 void typio_wl_panel_coordinator_clear_caret_rect(TypioWlFrontend *frontend);
+void typio_wl_panel_coordinator_early_anchor_probe(TypioWlFrontend *frontend);
 
 bool typio_wl_frontend_init_indicator(TypioWlFrontend *frontend);
 void typio_wl_frontend_show_indicator(TypioWlFrontend *frontend,
