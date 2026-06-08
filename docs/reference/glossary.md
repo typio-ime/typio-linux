@@ -53,7 +53,7 @@ in depth.
 
 | Term | Definition | Primary source |
 |------|-----------|----------------|
-| **Engine Manifest** | A `typio-engine-*.toml` file that declares engine metadata, capabilities, and worker argv. | [Engine Discovery](engine-discovery.md) |
+| **Engine Manifest** | A `typio-engine-*.toml` file that declares engine metadata, capabilities, protocol, and engine argv. | [Engine Discovery](engine-discovery.md) |
 | **Engine Availability** | The active engine lifecycle state that answers whether the engine can process input right now. Non-ready keyboard engines consume key cycles locally instead of leaking raw keys to the application. | [Input-Method Session](../explanation/input-method-session.md) |
 | **TIP v1** | Typio IPC Protocol version 1. Unix Domain Socket + length-prefixed JSON-RPC 2.0. | [IPC Protocol](ipc-protocol.md) |
 | **Focus Controller** | Derived-state, idempotent-diff pipeline that manages grab create/destroy, focus_in/focus_out, and keymap epoch scrubbing. Replaces the stored-phase FSM and reconciler. | [Focus Controller](../explanation/focus-controller.md) |

@@ -168,7 +168,7 @@ actually exercise input conversion (and to verify your build wires up the
 engine ABI correctly), build one engine and point the daemon at it.
 
 Any engine works; this uses `typio-engine-basic`, the zero-dependency
-fallback, as the concrete example. Cargo emits the worker executable and the
+fallback, as the concrete example. Cargo emits the engine executable and the
 repository contains `typio-engine-basic.toml`:
 
 ```bash
@@ -197,7 +197,7 @@ generate it into `build`; pass the directory that contains the manifest.
 | `-Denable_voice=true` | `false` | PipeWire audio capture and voice session infrastructure |
 
 `-Denable_voice=true` does **not** compile any voice engine into the binary.
-Voice engines (Whisper, Sherpa-ONNX, …) are separate worker packages loaded at
+Voice engines (Whisper, Sherpa-ONNX, …) are separate engine packages loaded at
 runtime. This option only enables the host-side PipeWire capture and
 voice-session plumbing that those external engines plug into. Without this
 flag, voice engine manifests are rejected at load time with a
@@ -218,7 +218,7 @@ explicitly.
 | 3 | **System** | compile-time `<prefix>/<datadir>/typio/engines` (typically `/usr/share/typio/engines`) |
 
 In each directory it loads only files named `typio-engine-*.toml`, parses the
-manifest, and registers the declared worker argv with libtypio. The `name`
+manifest, and registers the declared engine argv with libtypio. The `name`
 field becomes the engine identifier exposed in config and the command-line interface (`basic`,
 `rime`, `sherpa`, …). A sibling `icons/` directory (`<engine-dir>/icons/`,
 freedesktop hicolor layout) is added to the tray's icon search path, so an

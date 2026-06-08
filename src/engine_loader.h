@@ -8,8 +8,8 @@
  * @brief Engine manifest discovery callback for TypioInstanceConfig.plugin_loader.
  *
  * Enumerates `typio-engine-*.toml` manifests in @p dir, resolves each
- * manifest's worker argv, and registers out-of-process IPC engines via
- * `typio_registry_register_ipc_engine`. Core calls this once per configured
+ * manifest's engine argv, and registers out-of-process engine processes via
+ * `typio_registry_register_engine_process`. Core calls this once per configured
  * engine directory.
  *
  * @return Number of engines successfully registered.

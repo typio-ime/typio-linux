@@ -14,7 +14,7 @@ a pure business-logic library could fulfill alone.
 | **Language** | C23 | Rust + hand-written C ABI |
 | **Knows about** | Wayland, Vulkan, D-Bus, PipeWire, Linux filesystem | Engines, input contexts, config schema, engine registry |
 | **Does not know about** | How an engine processes a key; what Rime schema is active | What compositor is running; what GPU renders the panel; what audio hardware is attached |
-| **Contains engines** | No — discovers engine manifests and starts workers at runtime | No — provides the engine ABI and registry; engines are separate repos |
+| **Contains engines** | No — discovers engine manifests and starts engine processes at runtime | No — provides the engine ABI and registry; engines are separate repos |
 | **Process** | `typio` daemon binary | Linked as a static/shared library inside `typio` |
 
 The dependency direction is one-way: typio-linux links libtypio and calls its
@@ -55,11 +55,11 @@ updates the tray, panel, and IPC event subscribers.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  Engine Worker Process                                    │
-│  Implements the Typio worker protocol                      │
+│  Engine Process                                           │
+│  Implements Typio Engine Protocol                          │
 │  Emits COMMIT / COMPOSITION response lines                 │
 └──────────────┬──────────────────────┬────────────────────┘
-               │ IPC request          │ IPC responses
+	               │ engine request       │ engine responses
                ▼                      │
 ┌──────────────────────────────────────┴────────────────────┐
 │  libtypio                                                  │

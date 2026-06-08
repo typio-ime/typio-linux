@@ -30,8 +30,9 @@
 |---|---:|---:|---|
 | `name` | Yes | No | Engine identifier used by config, the command-line interface, and `typioctl` |
 | `type` | Yes | No | `keyboard` or `voice` |
-| `command` | Yes | No | Worker executable; values containing `/` resolve relative to the manifest file |
-| `args` | No | No | Worker argv array; values containing `/` resolve relative to the manifest file |
+| `protocol` | Yes | No | `typio-engine-protocol` |
+| `command` | Yes | No | Engine executable; values containing `/` resolve relative to the manifest file |
+| `args` | No | No | Engine argv array; values containing `/` resolve relative to the manifest file |
 | `display_name` | No | No | Human-readable name |
 | `description` | No | No | Short description |
 | `author` | No | No | Engine author or vendor |
@@ -40,16 +41,18 @@
 | `required` | No | No | Required capability array |
 | `optional` | No | No | Optional capability array |
 
-## Worker Protocol
+## Engine Protocol
 
 | Item | Value |
 |---|---|
-| Transport | Child process stdin/stdout |
-| Request format | One tab-separated line |
-| Response format | Zero or more response lines ending with `END` |
-| Host registration | `typio_registry_register_ipc_engine` |
-| Worker model | One executable per engine package |
-| Installed worker location | `<prefix>/<libexecdir>/typio/engines/` |
+| Protocol | Typio Engine Protocol |
+| Manifest value | `protocol = "typio-engine-protocol"` |
+| Transport | Private fd 3 channel passed to the engine process |
+| Standard output | Logs only |
+| Standard error | Logs only |
+| Host registration | `typio_registry_register_engine_process` |
+| Engine process model | One executable per engine package |
+| Installed executable location | `<prefix>/<libexecdir>/typio/engines/` |
 | Installed manifest location | `<prefix>/<datadir>/typio/engines/` |
 
 ## Capabilities

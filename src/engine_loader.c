@@ -25,6 +25,7 @@ typedef struct {
     char *icon;
     char *language;
     char *type;
+    char *protocol;
     char *command;
     char **args;
     size_t arg_count;
@@ -128,6 +129,7 @@ static void manifest_free(TypioEngineManifest *m) {
     free(m->icon);
     free(m->language);
     free(m->type);
+    free(m->protocol);
     free(m->command);
     string_array_free(m->args);
     string_array_free(m->required_caps);
@@ -211,6 +213,8 @@ static bool manifest_parse(const char *path, TypioEngineManifest *m) {
             if (!manifest_set(&m->language, value)) goto oom;
         } else if (strcmp(key, "type") == 0) {
             if (!manifest_set(&m->type, value)) goto oom;
+        } else if (strcmp(key, "protocol") == 0) {
+            if (!manifest_set(&m->protocol, value)) goto oom;
         } else if (strcmp(key, "command") == 0) {
             char *resolved = resolve_manifest_arg(path, value);
             if (!resolved) goto oom;
@@ -395,8 +399,13 @@ static bool typio_register_one(TypioRegistry *registry, const char *path) {
     if (!manifest_parse(path, &m)) {
         goto out;
     }
-    if (!m.name || !m.type || !m.command) {
+    if (!m.name || !m.type || !m.protocol || !m.command) {
         typio_log_error("Engine manifest missing required fields: %s", path);
+        goto out;
+    }
+    if (strcmp(m.protocol, "typio-engine-protocol") != 0) {
+        typio_log_error("Engine manifest %s has unsupported protocol '%s'",
+                        path, m.protocol);
         goto out;
     }
 
@@ -435,11 +444,11 @@ static bool typio_register_one(TypioRegistry *registry, const char *path) {
 
     char **argv = build_argv(&m);
     if (!argv) {
-        typio_log_error("Engine manifest %s has no worker argv", path);
+        typio_log_error("Engine manifest %s has no engine argv", path);
         goto out;
     }
 
-    TypioResult result = typio_registry_register_ipc_engine(
+    TypioResult result = typio_registry_register_engine_process(
         registry, &info, (const char *const *)argv);
     string_array_free(argv);
     if (result != TYPIO_OK) {
@@ -447,7 +456,7 @@ static bool typio_register_one(TypioRegistry *registry, const char *path) {
                         path, result);
         goto out;
     }
-    typio_log_info("Registered IPC engine %s from %s", info.name, path);
+    typio_log_info("Registered engine process %s from %s", info.name, path);
     ok = true;
 
 out:

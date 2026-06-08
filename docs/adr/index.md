@@ -47,9 +47,10 @@ Decisions about the framework core (engine ABI, composition contract) live in th
 | [ADR-0024](0024-idle-driven-loop-and-demand-gated-watchdog.md) | Idle-driven event loop and demand-gated watchdog | Accepted (amends ADR-0004) |
 | [ADR-0025](0025-engine-discovery-search-path.md) | Engine discovery — ordered search path, no user-level auto-scan | Accepted |
 | [ADR-0026](0026-modality-explicit-engine-control-surface.md) | Modality-explicit engine control surface (`keyboard.*` / `voice.*`) | Accepted (amends ADR-0008) |
-| [ADR-0027](0027-ipc-engine-manifests.md) | IPC Engine Manifests | Accepted (supersedes shared-library discovery in ADR-0025; worker bridge superseded by ADR-0028) |
-| [ADR-0028](0028-direct-ipc-engine-workers.md) | Direct IPC Engine Workers | Accepted (supersedes the ADR-0027 worker bridge) |
-| [ADR-0029](0029-engine-package-install-layout.md) | Engine Package Install Layout | Accepted |
+| [ADR-0027](0027-ipc-engine-manifests.md) | IPC Engine Manifests | Superseded by ADR-0030 |
+| [ADR-0028](0028-direct-ipc-engine-workers.md) | Direct IPC Engine Workers | Superseded by ADR-0030 |
+| [ADR-0029](0029-engine-package-install-layout.md) | Engine Package Install Layout | Accepted (terminology amended by ADR-0030) |
+| [ADR-0030](0030-engine-process-manifests.md) | Engine process manifests and Typio Engine Protocol | Accepted |
 
 ## Looking for something else?
 

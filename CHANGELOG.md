@@ -7,21 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Engine manifests now use `protocol = "typio-engine-protocol"` and register
+  with libtypio through `typio_registry_register_engine_process`. Engine traffic
+  uses the private fd 3 Typio Engine Protocol channel; stdout and stderr are
+  reserved for logs.
+
 ## [0.2.0] - 2026-06-06
 
 ### Changed
 
-- **Engine discovery is now IPC manifest based.** The daemon scans
+- **Engine discovery is now manifest based.** The daemon scans
   `typio-engine-*.toml` manifests, registers engines through
-  `typio_registry_register_ipc_engine`, and starts worker processes for
+  `typio_registry_register_engine_process`, and starts engine processes for
   engine calls. The daemon no longer loads engine `.so` files in-process.
-  Engine packages ship direct worker executables; the generic
-  `typio-engine-worker` bridge has been removed.
+  Engine packages ship direct engine executables.
 
-- **Engine package paths now match the IPC worker model.** The system manifest
-  directory moved to `<datadir>/typio/engines`, while engine worker
+- **Engine package paths now match the engine process model.** The system manifest
+  directory moved to `<datadir>/typio/engines`, while engine
   executables belong under `<libexecdir>/typio/engines`. Installed manifests
-  should point `command` at the absolute worker path.
+  should point `command` at the absolute engine executable path.
 
 ## [0.1.17] - 2026-06-05
 
