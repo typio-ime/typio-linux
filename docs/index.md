@@ -29,9 +29,8 @@ The Linux/Wayland host for the [Typio](../typio) input method framework. This re
   - [Developer Setup](dev/setup.md)
   - [Testing](dev/testing.md)
   - [Code Style](dev/code-style.md)
-  - [Rendering Code Organization](dev/rendering-organization.md)
   - [Panel Appearance](dev/panel-appearance.md)
-  - [Maintenance Manual](dev/maintenance.md)
+  - [Documentation Governance](dev/documentation/)
 
 ## Quick Links
 

@@ -9,7 +9,7 @@ Typio uses two files under `$XDG_CONFIG_HOME/typio` (default `~/.config/typio`):
 
 Both files are read from the same directory.  The directory itself is created
 and managed by libtypio (`typio_instance_get_config_dir`).  If you need a
-custom path, use the `-c` / `--config` CLI flag.
+custom path, use the `-c` / `--config` command-line flag.
 
 ## Quick start
 

@@ -12,8 +12,7 @@ Decisions about the framework core (engine ABI, composition contract) live in th
 > (0011), shared glyph atlas (0012) — each fixes a real problem and is still in
 > force; only their "this is what cured the lag" claim was wrong, and each now
 > carries a scope-correction block. The misdiagnosis trail is kept deliberately:
-> it is the record that stops the next reader repeating it. See
-> [`docs/dev/maintenance.md`](../dev/maintenance.md) for the condensed lesson.
+> it is the record that stops the next reader repeating it.
 > Later retry-latch and scheduler regressions in ADR-0015's deferral path are
 > recorded in ADR-0022 and ADR-0023. Do not implement new scheduling from the
 > historical `panel_update_pending` or retry-latch descriptions in ADR-0015 /

@@ -193,7 +193,6 @@ it.
 - [ADR-0011 — Colour-Independent Coverage Glyphs](../adr/0011-colour-independent-coverage-glyphs.md) — why shapes carry no colour.
 - [ADR-0012 — Glyph Atlas Shared Texture](../adr/0012-glyph-atlas-shared-texture.md) / [ADR-0013](../adr/0013-grow-only-popup-swapchain.md) — backend-internal optimisations.
 - [ADR-0014 — Canonical Panel Vocabulary](../adr/0014-canonical-panel-vocabulary.md) — the object model and naming.
-- [Rendering Code Organization](../dev/rendering-organization.md) — contributor rules for placing UI and backend code.
 - [Panel Appearance](../dev/panel-appearance.md) — theming and configuration of what gets drawn.
 
 ## Glossary

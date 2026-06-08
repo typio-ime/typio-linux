@@ -94,8 +94,7 @@ unchanged**. The two decisions are complementary, not alternatives:
   candidate popup.
 - Trade-off: depends on the driver advertising `MAILBOX`/`IMMEDIATE`. flux falls
   back to FIFO otherwise — no regression, but the lag would persist; confirm
-  with the gdb method above (see also `docs/dev/maintenance.md` →
-  *Monitoring*).
+  with the gdb method above.
 - **Verification gate**: this ADR stays **Proposed** until a post-change gdb
   sample on an affected setup shows main-thread `anv_QueuePresentKHR` occupancy
   dropping from ~86 % toward ~0. Flip to **Accepted** once confirmed.

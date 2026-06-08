@@ -219,7 +219,7 @@ explicitly.
 
 In each directory it loads only files named `typio-engine-*.toml`, parses the
 manifest, and registers the declared worker argv with libtypio. The `name`
-field becomes the engine identifier exposed in config and the CLI (`basic`,
+field becomes the engine identifier exposed in config and the command-line interface (`basic`,
 `rime`, `sherpa`, …). A sibling `icons/` directory (`<engine-dir>/icons/`,
 freedesktop hicolor layout) is added to the tray's icon search path, so an
 engine can ship its own symbolic icons.

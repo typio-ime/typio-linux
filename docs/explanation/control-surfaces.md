@@ -13,7 +13,7 @@ consumers.
 ```mermaid
 flowchart TB
     subgraph external ["External clients"]
-        CLI["typioctl (CLI)"]
+        CTL["typioctl (command-line interface)"]
         SET["typio-settings (GUI)"]
     end
 
@@ -45,7 +45,7 @@ flowchart TB
     CTRL -->|"reads snapshots"| REG
     REG & CFG & CTX -->|"observer callbacks"| CTRL
 
-    CLI & SET -->|"Unix socket"| UDS
+    CTL & SET -->|"Unix socket"| UDS
 
     TRAY <-->|"SNI / dbusmenu<br/>D-Bus session bus"| PANEL["Desktop Panel"]
 ```

@@ -28,7 +28,7 @@
 
 | Key | Required | Repeatable | Value |
 |---|---:|---:|---|
-| `name` | Yes | No | Engine identifier used by config, CLI, and `typioctl` |
+| `name` | Yes | No | Engine identifier used by config, the command-line interface, and `typioctl` |
 | `type` | Yes | No | `keyboard` or `voice` |
 | `command` | Yes | No | Worker executable; values containing `/` resolve relative to the manifest file |
 | `args` | No | No | Worker argv array; values containing `/` resolve relative to the manifest file |

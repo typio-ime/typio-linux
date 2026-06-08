@@ -1,4 +1,4 @@
-# CLI Reference
+# Command-Line Interface Reference
 
 ## Commands
 
@@ -15,7 +15,7 @@
 | `-E`, `--engine-dir` | `DIR` | Set the engine manifest directory override. |
 | `-v`, `--verbose` | None | Enable debug logging. |
 | `-vv` | None | Enable trace logging, including high-volume key-routing traces. |
-| `-h`, `--help` | None | Print CLI help and exit. |
+| `-h`, `--help` | None | Print command-line help and exit. |
 | `--version` | None | Print version information and exit. |
 
 ## Log Levels

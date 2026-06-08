@@ -47,7 +47,7 @@ in depth.
 | **Activation** | A `zwp_input_method_v2.activate` event. Begins a focused input session. | [Input-Method Session](../explanation/input-method-session.md) |
 | **Grab Generation** | A generation counter that fences stale key events. A key cycle belongs to the current grab only if the daemon observed its press in the current generation. | [Input-Method Session](../explanation/input-method-session.md) |
 | **Reactivation** | A repeat `activate` for an already-focused session. Keeps the grab and composition, re-anchors the Panel. Classified at `done`. | [ADR-0018](../adr/0018-focus-transition-classification.md) |
-| **Boundary Bridge** | Policy layer for short-lived handoff behavior at activation boundaries (orphan release forwarding, carried modifiers). | [Maintenance Manual](../dev/maintenance.md) |
+| **Boundary Bridge** | Policy layer for short-lived handoff behavior at activation boundaries (orphan release forwarding, carried modifiers). | [Input-Method Session](../explanation/input-method-session.md) |
 
 ## Engine and config
 
