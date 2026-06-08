@@ -248,6 +248,16 @@ TEST(diff_focus_in_effect) {
     ASSERT(e.send_focus_out == false);
 }
 
+TEST(diff_focus_in_with_retained_grab_does_not_create_grab) {
+    /* Returning from soft-pause can reuse the existing grab. It still emits
+     * focus_in; the effectful layer must treat that as a fresh caret anchor. */
+    TypioWlDesiredState d = {.grab = TYPIO_WL_GRAB_WANT_YES, .focus_in = true};
+    TypioWlActualState  a = {.grab = TYPIO_WL_GRAB_RES_READY};
+    TypioWlEffectSet e = typio_wl_focus_diff(&d, &a);
+    ASSERT(e.send_focus_in == true);
+    ASSERT(e.create_grab == false);
+}
+
 TEST(diff_focus_out_effect) {
     TypioWlDesiredState d = {.grab = TYPIO_WL_GRAB_WANT_SOFT_PAUSE, .focus_out = true};
     TypioWlActualState  a = {.grab = TYPIO_WL_GRAB_RES_READY};
@@ -348,6 +358,7 @@ int main(void)
     run_test_diff_yes_with_needs_keymap_noop();
 
     run_test_diff_focus_in_effect();
+    run_test_diff_focus_in_with_retained_grab_does_not_create_grab();
     run_test_diff_focus_out_effect();
     run_test_diff_focus_out_discards_composition();
     run_test_diff_no_focus_change_keeps_composition();

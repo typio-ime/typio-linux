@@ -161,6 +161,28 @@ focus_hard_reset_keyboard(TypioWlFrontend *frontend, const char *reason)
     frontend->vk->active_generation_dirty = false;
 }
 
+static void
+show_focus_indicator(TypioWlFrontend *frontend, bool force)
+{
+    if (!frontend || !frontend->instance)
+        return;
+
+    const TypioKeyboardEngineMode *mode =
+        typio_instance_get_last_keyboard_mode(frontend->instance);
+    if (!mode || !mode->display_label || !mode->display_label[0])
+        return;
+
+    if (!force) {
+        typio_wl_frontend_show_indicator_on_focus(frontend, mode);
+        return;
+    }
+
+    if (mode->salience == TYPIO_STATUS_SALIENCE_QUIET)
+        return;
+
+    typio_wl_frontend_show_indicator_for_state(frontend, mode);
+}
+
 void
 typio_wl_focus_apply(TypioWlFrontend *frontend,
                        const TypioWlEffectSet *effects)
@@ -233,10 +255,11 @@ typio_wl_focus_apply(TypioWlFrontend *frontend,
         typio_wl_trace(frontend, "session", "action=create_grab");
         frontend->keyboard = typio_wl_keyboard_create(frontend);
         typio_wl_vk_expect_keymap(frontend, "focus_controller create_grab");
-        if (effects->send_focus_in) {
-            typio_wl_panel_coordinator_reset_anchor(frontend);
-            typio_wl_panel_coordinator_early_anchor_probe(frontend);
-        }
+    }
+
+    if (effects->send_focus_in) {
+        typio_wl_panel_coordinator_reset_anchor(frontend);
+        typio_wl_panel_coordinator_early_anchor_probe(frontend);
     }
 
     if (effects->send_focus_in && frontend->session && frontend->session->ctx) {
@@ -244,21 +267,13 @@ typio_wl_focus_apply(TypioWlFrontend *frontend,
         typio_input_context_focus_in(frontend->session->ctx);
         typio_wl_frontend_refresh_identity(frontend);
         typio_wl_frontend_restore_identity_engine(frontend);
-        /* Show the on-focus indicator only if the engine mode carries a
-         * display label. The on-focus path is gated by the indicator
-         * subsystem's own salience and recency rules. */
-        if (frontend->instance) {
-            const TypioKeyboardEngineMode *mode =
-                typio_instance_get_last_keyboard_mode(frontend->instance);
-            if (mode && mode->display_label && mode->display_label[0]) {
-                typio_wl_frontend_show_indicator_on_focus(frontend, mode);
-            }
-        }
+        show_focus_indicator(frontend, false);
     }
 
     if (effects->reactivate) {
         typio_wl_trace(frontend, "session", "action=reactivate");
         typio_wl_panel_coordinator_reset_anchor(frontend);
         typio_wl_panel_coordinator_early_anchor_probe(frontend);
+        show_focus_indicator(frontend, true);
     }
 }
