@@ -32,6 +32,22 @@ meson test -C build-asan --print-errorlogs
 
 Use `dbus-run-session` for sanitizer and CI-like runs so status-bus and tray tests get an isolated session bus instead of depending on the developer's desktop session.
 
+## Fuzzing
+
+`src/ipc/tip_json.c` parses bytes received from UDS clients and has a
+libFuzzer harness. Build it with clang and run it directly; it is not part
+of `meson test`:
+
+```bash
+CC=clang meson setup build-fuzz -Denable_fuzzers=true
+ninja -C build-fuzz tests/fuzz_tip_json
+mkdir -p corpus
+./build-fuzz/tests/fuzz_tip_json corpus/ -max_total_time=300
+```
+
+Run the harness after any change to `tip_json.c`, and add a fuzzer for any
+new code that parses external input.
+
 ## Useful individual binaries
 
 ```bash

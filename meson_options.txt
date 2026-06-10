@@ -10,3 +10,5 @@ option('enable_asan', type: 'boolean', value: false,
     description: 'Enable AddressSanitizer')
 option('enable_ubsan', type: 'boolean', value: false,
     description: 'Enable UndefinedBehaviorSanitizer')
+option('enable_fuzzers', type: 'boolean', value: false,
+    description: 'Build libFuzzer harnesses (requires clang)')

@@ -151,3 +151,19 @@ test_candidate_guard = executable('test_candidate_guard',
     dependencies: libtypio_dep,
 )
 test('candidate_guard', test_candidate_guard)
+
+# ── Fuzzers ─────────────────────────────────────────────────────────────────
+# Not run by `meson test`; build with -Denable_fuzzers=true and run the
+# binaries directly (see docs/dev/testing.md).
+if get_option('enable_fuzzers')
+    if cc.get_id() != 'clang'
+        error('-Denable_fuzzers=true requires clang (libFuzzer)')
+    endif
+    fuzz_sanitize = ['-fsanitize=fuzzer,address,undefined']
+    executable('fuzz_tip_json',
+        ['fuzz/fuzz_tip_json.c', '../src/ipc/tip_json.c'],
+        include_directories: wayland_test_inc,
+        c_args: fuzz_sanitize,
+        link_args: fuzz_sanitize,
+    )
+endif
