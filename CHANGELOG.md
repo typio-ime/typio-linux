@@ -7,8 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `CONTRIBUTING.md`, `SECURITY.md`, an interface stability reference
+  (`docs/reference/stability.md`), and a security-model explanation
+  (`docs/explanation/security-model.md`).
+- `-Denable_fuzzers=true` builds a libFuzzer harness for the TIP JSON
+  parser (`tests/fuzz/fuzz_tip_json.c`, requires clang).
+
 ### Changed
 
+- The build now requires libtypio >= 0.3.0 (pkg-config version floor in
+  `meson.build`).
+- CI builds against a pinned libtypio release tag and adds two jobs: an
+  ASan/UBSan test run and a non-blocking canary against libtypio `main`.
+  The primary job builds with `-Dwerror=true`.
 - Engine manifests now use `protocol = "typio-engine-protocol"` and register
   with libtypio through `typio_registry_register_engine_process`. Engine traffic
   uses the private fd 3 Typio Engine Protocol channel; stdout and stderr are

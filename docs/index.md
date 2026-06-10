@@ -12,6 +12,7 @@ The Linux/Wayland host for the [Typio](../typio) input method framework. This re
   - [IPC Protocol Reference](reference/ipc-protocol.md) — TIP v1 (UDS + JSON-RPC)
   - [Configuration Reference](reference/configuration.md) — `core.toml` and `platform.toml` keys, reload behaviour, and file structure
   - [Engine Discovery Reference](reference/engine-discovery.md) — search path, file-name rules, icons
+  - [Interface Stability Reference](reference/stability.md) — stability tiers for every external interface
 - **[Explanation](explanation/)** — Understanding-oriented design documents.
   - [Project Scope: typio-linux vs. libtypio](explanation/project-scope.md)
   - [Wayland Input Method Protocol](explanation/wayland-input-method.md)
@@ -25,6 +26,7 @@ The Linux/Wayland host for the [Typio](../typio) input method framework. This re
   - [Watchdog](explanation/watchdog.md) — loop-stall detection, restful-stage exemption, demand gating, and SIGKILL recovery
   - [Performance & Idle-Power Strategy](explanation/performance-strategy.md) — event-driven idle, zero wakeups, deadline folding, and how to measure
   - [Control Surfaces](explanation/control-surfaces.md)
+  - [Security Model](explanation/security-model.md) — trust boundaries, engine trust, and the sandboxing path
 - **[Developer Documentation](dev/)** — Contributor-oriented docs.
   - [Developer Setup](dev/setup.md)
   - [Testing](dev/testing.md)
