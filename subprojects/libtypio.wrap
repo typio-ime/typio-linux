@@ -1,6 +1,6 @@
 [wrap-git]
-url = https://github.com/ming2k/libtypio.git
-revision = main
+url = https://github.com/typio-ime/libtypio.git
+revision = v0.3.0
 depth = 1
 
 [provide]
