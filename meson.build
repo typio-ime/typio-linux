@@ -45,7 +45,10 @@ m_dep = cc.find_library('m', required: false)
 #      on a system install.  See docs/dev/setup.md.
 #   2. meson subproject — fall back to `subprojects/libtypio.wrap`, which
 #      clones libtypio and builds it via cargo.
+# Version floor: 0.3.0 is the first release with the fd-3 Typio Engine
+# Protocol and the typio_registry_register_engine_process API.
 libtypio_dep = dependency('libtypio',
+    version: '>= 0.3.0',
     fallback: ['libtypio', 'libtypio_dep'],
     required: true,
 )
