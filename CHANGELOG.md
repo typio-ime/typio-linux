@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `-Denable_fuzzers=true` builds a libFuzzer harness for the TIP JSON
   parser (`tests/fuzz/fuzz_tip_json.c`, requires clang).
 
+### Fixed
+
+- Configure no longer fails on meson < 1.4 (Ubuntu 24.04 LTS): the C
+  standard is spelled `c2x`, which every supported meson and compiler
+  accepts. This was breaking every CI run at the configure step.
+- `subprojects/libtypio.wrap` pointed at the repository's pre-rename
+  location and a moving `main` revision; it now fetches
+  `typio-ime/libtypio` pinned to `v0.3.0`.
+
 ### Changed
 
 - The build now requires libtypio >= 0.3.0 (pkg-config version floor in

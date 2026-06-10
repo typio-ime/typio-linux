@@ -1,6 +1,9 @@
+# 'c2x' is the pre-ratification compiler spelling of C23; meson < 1.4
+# (e.g. Ubuntu 24.04 LTS) does not know the 'c23' value. Switch to 'c23'
+# when the supported meson floor reaches 1.4.
 project('typio-linux', 'c',
   version: '0.2.0',
-  default_options: ['warning_level=2', 'c_std=c23'],
+  default_options: ['warning_level=2', 'c_std=c2x'],
   meson_version: '>=1.0.0',
 )
 
