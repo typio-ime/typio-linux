@@ -113,6 +113,7 @@ if enable_systray
     host_sources += files(
         'tray/bus.c',
         'tray/sni.c',
+        'tray/menu_model.c',
         'tray/icon_badge.c',
     )
 endif

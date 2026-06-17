@@ -168,6 +168,39 @@ if badge_ft.found() and badge_hb.found() and badge_fc.found()
     test('icon_badge', test_icon_badge)
 endif
 
+# Menu model structure tests (ADR-0033): builds a TypioInstance fixture with
+# synthetic engines/languages and asserts the resulting in-memory menu tree's
+# shape (IDs, labels, radio state, submenu nesting, orphan section, script
+# disambiguation). Decoupled from sd_bus — that side is verified end-to-end.
+test_menu_model = executable('test_menu_model',
+    ['tray/test_menu_model.c',
+     '../src/tray/menu_model.c',
+     '../src/state/controller.c'],
+    include_directories: [wayland_test_inc, top_inc],
+    dependencies: [libtypio_dep],
+)
+test('menu_model', test_menu_model)
+
+# ── State controller ──────────────────────────────────────────────────────
+# Pure-function tests for the icon resolution chain (ADR-0033). The resolver
+# takes primitive inputs + a TypioConfig, so no TypioInstance fixture is
+# needed. controller.c is the only source pulled in.
+test_controller_icon = executable('test_controller_icon',
+    ['state/test_controller_icon.c', '../src/state/controller.c'],
+    include_directories: [wayland_test_inc, top_inc],
+    dependencies: [libtypio_dep],
+)
+test('controller_icon', test_controller_icon)
+
+# Pure-function tests for the language display helpers (endonym, badge,
+# menu label with script disambiguation). Same source set as the icon test.
+test_language_helpers = executable('test_language_helpers',
+    ['state/test_language_helpers.c', '../src/state/controller.c'],
+    include_directories: [wayland_test_inc, top_inc],
+    dependencies: [libtypio_dep],
+)
+test('language_helpers', test_language_helpers)
+
 # ── Fuzzers ─────────────────────────────────────────────────────────────────
 # Not run by `meson test`; build with -Denable_fuzzers=true and run the
 # binaries directly (see docs/dev/testing.md).

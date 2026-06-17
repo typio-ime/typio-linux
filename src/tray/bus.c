@@ -346,9 +346,13 @@ int typio_tray_dispatch(TypioTray *tray) {
 #endif
 }
 
-/* Assemble the tray tooltip from controller state. The active profile (e.g.
- * Rime schema name) rides on the keyboard line. The tray bus is the single
- * owner of all state-driven tray mutations (icon, engine, tooltip). */
+/* Assemble the tray tooltip from controller state. The tooltip carries the
+ * information the icon does NOT: the keyboard engine + active profile, and
+ * the voice engine when one is configured. The active language is already
+ * encoded by the tray icon (badge or per-language icon, ADR-0033), so it is
+ * not repeated here unless no language is active (legacy engine-cycling
+ * installs, where there is no icon-level language cue). The tray bus is the
+ * single owner of all state-driven tray mutations (icon, engine, tooltip). */
 static void tray_refresh_tooltip(TypioTray *tray, TypioStateController *ctrl) {
     const char *kb =
         typio_state_controller_get_active_engine_display_name(ctrl);
@@ -360,17 +364,8 @@ static void tray_refresh_tooltip(TypioTray *tray, TypioStateController *ctrl) {
                           ? mode->label : nullptr;
     char desc[256];
 
-    /* Language-first tooltip (ADR-0031): the active language leads, then the
-     * engines it resolved to. A layout-only language (e.g. Darija) shows the
-     * language with an empty keyboard slot. */
     const char *lang_label =
         typio_language_endonym(typio_state_controller_get_active_language(ctrl));
-    char lang_line[96];
-    if (lang_label) {
-        snprintf(lang_line, sizeof(lang_line), "Language: %s\n", lang_label);
-    } else {
-        lang_line[0] = '\0';
-    }
 
     if (!kb || !*kb) {
         kb = typio_state_controller_get_active_engine_name(ctrl);
@@ -381,19 +376,36 @@ static void tray_refresh_tooltip(TypioTray *tray, TypioStateController *ctrl) {
          * design — keys pass through to the system layout. */
         kb = lang_label ? "— (layout-only)" : "Unavailable";
     }
+    /* Voice engine is orthogonal (ADR-0026); only surface it when one is
+     * configured, so the common "no voice" case is not cluttered with a
+     * "Voice: Disabled" line. */
+    const char *voice_line = nullptr;
+    char voice_buf[160];
     if (!voice || !*voice) {
         voice = typio_state_controller_get_active_voice_engine_name(ctrl);
     }
-    if (!voice || !*voice) {
-        voice = "Disabled";
+    if (voice && *voice) {
+        snprintf(voice_buf, sizeof(voice_buf), "\nVoice: %s", voice);
+        voice_line = voice_buf;
     }
 
-    if (profile) {
-        snprintf(desc, sizeof(desc), "%sKeyboard: %s (%s)\nVoice: %s",
-                 lang_line, kb, profile, voice);
+    /* No language active: there is no language badge on the icon, so the
+     * tooltip must say what the keyboard slot actually is. Otherwise the
+     * language is redundant with the icon and is omitted. */
+    if (!lang_label) {
+        if (profile) {
+            snprintf(desc, sizeof(desc), "Keyboard: %s (%s)%s",
+                     kb, profile, voice_line ? voice_line : "");
+        } else {
+            snprintf(desc, sizeof(desc), "Keyboard: %s%s",
+                     kb, voice_line ? voice_line : "");
+        }
+    } else if (profile) {
+        snprintf(desc, sizeof(desc), "Keyboard: %s (%s)%s",
+                 kb, profile, voice_line ? voice_line : "");
     } else {
-        snprintf(desc, sizeof(desc), "%sKeyboard: %s\nVoice: %s",
-                 lang_line, kb, voice);
+        snprintf(desc, sizeof(desc), "Keyboard: %s%s",
+                 kb, voice_line ? voice_line : "");
     }
     typio_tray_set_tooltip(tray, "Typio", desc);
 }
@@ -450,11 +462,10 @@ static void tray_state_change_callback(void *user_data,
             tray_refresh_tooltip(tray, ctrl);
             break;
         case TYPIO_STATE_CHANGE_STATUS: {
-            const TypioKeyboardEngineMode *mode =
-                typio_state_controller_get_current_status(ctrl);
-            if (mode && mode->icon_name) {
-                typio_tray_set_icon(tray, mode->icon_name);
-            }
+            /* Engine mode/schema changes used to overwrite the tray base icon
+             * with the mode's `icon_name`. The tray icon is language-only now
+             * (ADR-0033); the mode label still rides the tooltip, so just
+             * refresh it. */
             tray_refresh_tooltip(tray, ctrl);
             break;
         }

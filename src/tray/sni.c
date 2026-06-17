@@ -5,6 +5,7 @@
 
 #include "typio_build_config.h"
 #include "tray_internal.h"
+#include "menu_model.h"
 
 #include "typio/abi/config.h"
 #include "typio/runtime/instance.h"
@@ -22,27 +23,45 @@
 #include <string.h>
 #include <stdio.h>
 
+/* Tray dbusmenu item IDs are partitioned into 1000-wide sections so the
+ * ranges never overlap regardless of how many items each section holds.
+ * Items are addressed as SECTION_BASE + index; the click handler reverses
+ * the mapping with a section-bounds check. Separators use sequentially
+ * allocated IDs from `item_id` starting at SECTION_MISC_BASE + 100, which
+ * sits above the small fixed MISC actions and below the next section. */
+#define TYPIO_TRAY_SECTION_MISC    1000   /* Restart, Quit, separators */
+#define TYPIO_TRAY_SECTION_LANG    2000   /* per-language entries (submenus or flat) */
+#define TYPIO_TRAY_SECTION_ENGINE  3000   /* per-engine entries inside a language submenu,
+                                           * plus the orphan-engine flat section */
+#define TYPIO_TRAY_SECTION_VOICE   4000   /* voice engine entries */
+#define TYPIO_TRAY_SECTION_PROP    5000   /* engine enum-property choices */
+#define TYPIO_TRAY_SECTION_CMD     6000   /* engine command invocations */
+
+#define TYPIO_TRAY_LANG_BASE       TYPIO_TRAY_SECTION_LANG
+#define TYPIO_TRAY_LANG_MAX        16
+
+#define TYPIO_TRAY_ENGINE_BASE     TYPIO_TRAY_SECTION_ENGINE
+#define TYPIO_TRAY_ENGINE_MAX      10
+
+#define TYPIO_TRAY_VOICE_BASE      TYPIO_TRAY_SECTION_VOICE
+#define TYPIO_TRAY_VOICE_MAX       16
+
 /* Generic engine-control menu IDs. Enum-property choices are addressed as
  * PROP_BASE + property_index*PROP_STRIDE + choice_index; commands as
  * CMD_BASE + command_index. The layout is recomputed from the active
  * engine's control surface on both build and click, so the ids are stable
- * within one menu render. */
-#define TYPIO_TRAY_PROP_BASE    200
-#define TYPIO_TRAY_PROP_STRIDE  32
-#define TYPIO_TRAY_PROP_MAX     8
-#define TYPIO_TRAY_CMD_BASE     600
-#define TYPIO_TRAY_CMD_MAX      32
+ * within one menu render. The 1000-wide section leaves room for 31
+ * properties (31 * 32 = 992) without spilling into the CMD section. */
+#define TYPIO_TRAY_PROP_BASE       TYPIO_TRAY_SECTION_PROP
+#define TYPIO_TRAY_PROP_STRIDE     32
+#define TYPIO_TRAY_PROP_MAX        8
+#define TYPIO_TRAY_CMD_BASE        TYPIO_TRAY_SECTION_CMD
+#define TYPIO_TRAY_CMD_MAX         32
 
-/* Language items (ADR-0031): the primary switch. Addressed as
- * LANG_BASE + index; engines below are the within-language choice. */
-#define TYPIO_TRAY_LANG_BASE    300
-#define TYPIO_TRAY_LANG_MAX     16
-
-/* Voice engine items (ADR-0026): the voice slot is orthogonal to the keyboard
- * slot and active simultaneously, so it gets its own list. Addressed as
- * VOICE_BASE + index. */
-#define TYPIO_TRAY_VOICE_BASE   400
-#define TYPIO_TRAY_VOICE_MAX    16
+/* Fixed MISC action IDs. */
+#define TYPIO_TRAY_ITEM_RESTART    (TYPIO_TRAY_SECTION_MISC + 1)
+#define TYPIO_TRAY_ITEM_QUIT       (TYPIO_TRAY_SECTION_MISC + 2)
+#define TYPIO_TRAY_ITEM_SEP_BEGIN  (TYPIO_TRAY_SECTION_MISC + 100)
 
 /* ── small sd-bus a{sv} helpers ────────────────────────────────────────── */
 
@@ -127,6 +146,21 @@ static int append_dict_bool(sd_bus_message *m, const char *key, int value) {
     r = sd_bus_message_open_container(m, 'v', "b");
     if (r < 0) return r;
     r = sd_bus_message_append_basic(m, 'b', &value);
+    if (r < 0) return r;
+    r = sd_bus_message_close_container(m); /* v */
+    if (r < 0) return r;
+    return sd_bus_message_close_container(m); /* e */
+}
+
+static int append_dict_int(sd_bus_message *m, const char *key, int32_t value) {
+    int r;
+    r = sd_bus_message_open_container(m, 'e', "sv");
+    if (r < 0) return r;
+    r = sd_bus_message_append_basic(m, 's', key);
+    if (r < 0) return r;
+    r = sd_bus_message_open_container(m, 'v', "i");
+    if (r < 0) return r;
+    r = sd_bus_message_append_basic(m, 'i', &value);
     if (r < 0) return r;
     r = sd_bus_message_close_container(m); /* v */
     if (r < 0) return r;
@@ -299,49 +333,89 @@ int typio_tray_menu_get_property(sd_bus *bus, const char *path,
     return menu_property_value(reply, property);
 }
 
+
 /* ── DBusMenu methods ──────────────────────────────────────────────────── */
 
-/* Build a menu item into the current container. The item's signature
- * is (ia{sv}av); the inner v/av children is always empty. */
-static int build_menu_item(sd_bus_message *parent, int32_t id,
-                           const char *label, const char *type, int enabled) {
+/* Recursively serialise a TypioTrayMenuItem into the dbusmenu struct
+ * signature `(ia{sv}av)`. The model is built by `menu_model.c` from live
+ * registry state; this function is the pure wire-encoder.
+ *
+ * Two entry points:
+ *   - serialize_struct: emits the bare `(ia{sv}av)` struct. Use for the
+ *     root item (the GetLayout reply is `u(ia{sv}av)` — root is top-level).
+ *   - serialize_child:  wraps the struct in a variant `v` for inclusion in
+ *     a parent's `av` children array. dbusmenu requires each child to be a
+ *     variant, not a bare struct.
+ *
+ * Properties are emitted in the order dbusmenu clients typically read them:
+ * label, children-display, type, toggle-state, enabled, accessible-desc. */
+static int serialize_struct(sd_bus_message *reply,
+                            const TypioTrayMenuItem *item) {
     int r;
-    r = sd_bus_message_open_container(parent, 'v', "(ia{sv}av)");
+    r = sd_bus_message_open_container(reply, 'r', "ia{sv}av");
     if (r < 0) return r;
-    r = sd_bus_message_open_container(parent, 'r', "ia{sv}av");
+
+    int32_t id = typio_tray_menu_item_get_id(item);
+    r = sd_bus_message_append_basic(reply, 'i', &id);
     if (r < 0) return r;
-    r = sd_bus_message_append_basic(parent, 'i', &id);
+
+    r = sd_bus_message_open_container(reply, 'a', "{sv}");
     if (r < 0) return r;
-    r = sd_bus_message_open_container(parent, 'a', "{sv}");
-    if (r < 0) return r;
+
+    const char *label = typio_tray_menu_item_get_label(item);
     if (label) {
-        r = append_dict_str(parent, "label", label);
+        r = append_dict_str(reply, "label", label);
         if (r < 0) return r;
     }
+    if (typio_tray_menu_item_is_submenu_parent(item)) {
+        r = append_dict_str(reply, "children-display", "submenu");
+        if (r < 0) return r;
+    }
+    const char *type = typio_tray_menu_item_get_type(item);
     if (type) {
-        r = append_dict_str(parent, "type", type);
+        r = append_dict_str(reply, "type", type);
         if (r < 0) return r;
     }
-    r = append_dict_bool(parent, "enabled", enabled);
+    int toggle_state = typio_tray_menu_item_get_toggle_state(item);
+    if (toggle_state >= 0) {
+        r = append_dict_int(reply, "toggle-state", toggle_state);
+        if (r < 0) return r;
+    }
+    int enabled = typio_tray_menu_item_get_enabled(item);
+    r = append_dict_bool(reply, "enabled", enabled);
     if (r < 0) return r;
-    r = sd_bus_message_close_container(parent);
+    const char *a11y = typio_tray_menu_item_get_accessible_desc(item);
+    if (a11y) {
+        r = append_dict_str(reply, "accessible-desc", a11y);
+        if (r < 0) return r;
+    }
+
+    r = sd_bus_message_close_container(reply); /* a{sv} */
     if (r < 0) return r;
-    r = sd_bus_message_open_container(parent, 'a', "v");
+
+    /* children: each one wrapped in its own variant. */
+    r = sd_bus_message_open_container(reply, 'a', "v");
     if (r < 0) return r;
-    r = sd_bus_message_close_container(parent);
+    size_t n = typio_tray_menu_item_get_child_count(item);
+    for (size_t i = 0; i < n; i++) {
+        const TypioTrayMenuItem *child = typio_tray_menu_item_get_child(item, i);
+        r = sd_bus_message_open_container(reply, 'v', "(ia{sv}av)");
+        if (r < 0) return r;
+        r = serialize_struct(reply, child);
+        if (r < 0) return r;
+        r = sd_bus_message_close_container(reply); /* v */
+        if (r < 0) return r;
+    }
+    r = sd_bus_message_close_container(reply); /* av */
     if (r < 0) return r;
-    r = sd_bus_message_close_container(parent); /* r */
-    if (r < 0) return r;
-    r = sd_bus_message_close_container(parent); /* v */
-    return r;
+
+    return sd_bus_message_close_container(reply); /* r */
 }
 
 static int handle_menu_getlayout(sd_bus_message *m, TypioTray *tray) {
     int32_t parent_id;
     int32_t depth;
     int r;
-    int32_t item_id = 1;
-    char label[256];
     sd_bus_message *reply = nullptr;
 
     r = sd_bus_message_read(m, "ii", &parent_id, &depth);
@@ -350,152 +424,37 @@ static int handle_menu_getlayout(sd_bus_message *m, TypioTray *tray) {
                                           "Invalid arguments");
     }
 
-    /* The reply is a fresh message — the incoming call message is
-     * sealed and cannot be appended to. Reply: u (revision) +
-     * (ia{sv}av) (root item). */
-    r = sd_bus_message_new_method_return(m, &reply);
-    if (r < 0) return r;
+    /* Build the in-memory model from current registry state, then encode it
+     * to the dbusmenu wire format. The model is testable without sd_bus. */
+    TypioTrayMenuItem *root = typio_tray_menu_build(tray->instance,
+                                                    tray->engine_name);
+    if (!root) {
+        return sd_bus_reply_method_errorf(m, SD_BUS_ERROR_FAILED,
+                                          "Menu model build failed");
+    }
 
+    r = sd_bus_message_new_method_return(m, &reply);
+    if (r < 0) {
+        typio_tray_menu_item_free(root);
+        return r;
+    }
+
+    /* Reply signature: u(ia{sv}av). Root struct sits at top level — no
+     * variant wrapper (children inside av each get their own wrapper). */
     r = sd_bus_message_append_basic(reply, 'u', &tray->menu_revision);
     if (r < 0) goto fail;
 
-    r = sd_bus_message_open_container(reply, 'r', "ia{sv}av");
-    if (r < 0) goto fail;
-    { int32_t root_id = 0;
-      r = sd_bus_message_append_basic(reply, 'i', &root_id);
-      if (r < 0) goto fail; }
-    r = sd_bus_message_open_container(reply, 'a', "{sv}");
-    if (r < 0) goto fail;
-    r = append_dict_str(reply, "children-display", "submenu");
-    if (r < 0) goto fail;
-    r = sd_bus_message_close_container(reply);
-    if (r < 0) goto fail;
-
-    r = sd_bus_message_open_container(reply, 'a', "v");
-    if (r < 0) goto fail;
-
-    TypioRegistry *registry = typio_instance_get_registry(tray->instance);
-
-    /* Language section first (ADR-0031): selecting a language is the primary
-     * switch; it re-resolves the keyboard/voice slots. The engine list below
-     * is a within-language choice. */
-    if (registry) {
-        size_t lang_count = 0;
-        char **langs = typio_registry_list_languages(registry, &lang_count);
-        char *active_lang = typio_registry_get_active_language(registry);
-        size_t lang_shown = 0;
-        for (size_t i = 0; i < lang_count && i < TYPIO_TRAY_LANG_MAX; i++) {
-            const char *display = typio_language_endonym(langs[i]);
-            bool is_current = active_lang && strcmp(langs[i], active_lang) == 0;
-            if (is_current) {
-                snprintf(label, sizeof(label), "● %s", display ? display : langs[i]);
-            } else {
-                snprintf(label, sizeof(label), "  %s", display ? display : langs[i]);
-            }
-            r = build_menu_item(reply, TYPIO_TRAY_LANG_BASE + (int32_t)i,
-                                label, nullptr, 1);
-            if (r < 0) {
-                typio_free_string(active_lang);
-                typio_free_string_array(langs, lang_count);
-                goto fail;
-            }
-            lang_shown++;
-        }
-        typio_free_string(active_lang);
-        typio_free_string_array(langs, lang_count);
-        if (lang_shown > 0) {
-            r = build_menu_item(reply, item_id++, nullptr, "separator", 1);
-            if (r < 0) goto fail;
-        }
-    }
-
-    if (registry) {
-        size_t engine_count;
-        char **engines = typio_registry_list_ordered_keyboards(registry, &engine_count);
-        size_t shown = 0;
-        for (size_t i = 0; i < engine_count && i < 10; i++) {
-            const TypioEngineInfo *info = typio_registry_get_engine_info(registry, engines[i]);
-            const char *display = (info && info->display_name && info->display_name[0])
-                ? info->display_name : engines[i];
-            bool is_current = tray->engine_name &&
-                              strcmp(engines[i], tray->engine_name) == 0;
-            if (is_current) {
-                snprintf(label, sizeof(label), "● %s", display);
-            } else {
-                snprintf(label, sizeof(label), "  %s", display);
-            }
-            r = build_menu_item(reply, 100 + (int32_t)i, label, nullptr, 1);
-            if (r < 0) {
-                typio_engine_info_free((TypioEngineInfo *)info);
-                typio_free_string_array(engines, engine_count);
-                goto fail;
-            }
-            typio_engine_info_free((TypioEngineInfo *)info);
-            shown++;
-        }
-        if (shown > 0) {
-            r = build_menu_item(reply, item_id++, nullptr, "separator", 1);
-            if (r < 0) {
-                typio_free_string_array(engines, engine_count);
-                goto fail;
-            }
-        }
-        typio_free_string_array(engines, engine_count);
-    }
-
-    /* Voice engine section (ADR-0026): the voice slot is independent of the
-     * keyboard slot, so it lists separately and marks its own active entry.
-     * Only shown when at least one voice engine is registered. */
-    if (registry) {
-        size_t voice_count = 0;
-        char **voices = typio_registry_list_voices(registry, &voice_count);
-        char *active_voice = typio_registry_get_active_voice(registry);
-        size_t voice_shown = 0;
-        for (size_t i = 0; i < voice_count && i < TYPIO_TRAY_VOICE_MAX; i++) {
-            const TypioEngineInfo *info = typio_registry_get_engine_info(registry, voices[i]);
-            const char *display = (info && info->display_name && info->display_name[0])
-                ? info->display_name : voices[i];
-            bool is_current = active_voice && strcmp(voices[i], active_voice) == 0;
-            if (is_current) {
-                snprintf(label, sizeof(label), "● %s", display);
-            } else {
-                snprintf(label, sizeof(label), "  %s", display);
-            }
-            r = build_menu_item(reply, TYPIO_TRAY_VOICE_BASE + (int32_t)i,
-                                label, nullptr, 1);
-            if (r < 0) {
-                typio_engine_info_free((TypioEngineInfo *)info);
-                typio_free_string(active_voice);
-                typio_free_string_array(voices, voice_count);
-                goto fail;
-            }
-            typio_engine_info_free((TypioEngineInfo *)info);
-            voice_shown++;
-        }
-        typio_free_string(active_voice);
-        typio_free_string_array(voices, voice_count);
-        if (voice_shown > 0) {
-            r = build_menu_item(reply, item_id++, nullptr, "separator", 1);
-            if (r < 0) goto fail;
-        }
-    }
-
-    r = build_menu_item(reply, 98, "Restart", nullptr, 1);
-    if (r < 0) goto fail;
-    r = build_menu_item(reply, 99, "Quit", nullptr, 1);
-    if (r < 0) goto fail;
-
-    r = sd_bus_message_close_container(reply); /* av */
-    if (r < 0) goto fail;
-    r = sd_bus_message_close_container(reply); /* root struct r */
+    r = serialize_struct(reply, root);
     if (r < 0) goto fail;
 
     r = sd_bus_send(nullptr, reply, nullptr);
     sd_bus_message_unref(reply);
+    typio_tray_menu_item_free(root);
     return r;
 
 fail:
     sd_bus_message_unref(reply);
+    typio_tray_menu_item_free(root);
     return r;
 }
 
@@ -512,21 +471,48 @@ static int handle_menu_event(sd_bus_message *m, TypioTray *tray) {
     typio_log_debug("Menu event: id=%d, type=%s", id, event_type ? event_type : "");
 
     if (event_type && strcmp(event_type, "clicked") == 0) {
-        if (id == 98) {
+        if (id == TYPIO_TRAY_ITEM_RESTART) {
             if (tray->menu_callback) {
                 tray->menu_callback(tray, "restart", tray->user_data);
             }
-        } else if (id == 99) {
+        } else if (id == TYPIO_TRAY_ITEM_QUIT) {
             if (tray->menu_callback) {
                 tray->menu_callback(tray, "quit", tray->user_data);
             }
-        } else if (id >= 100 && id < 110) {
-            int engine_idx = id - 100;
+        } else if (id >= TYPIO_TRAY_ENGINE_BASE &&
+                   id < TYPIO_TRAY_ENGINE_BASE + TYPIO_TRAY_ENGINE_MAX) {
+            int engine_idx = id - TYPIO_TRAY_ENGINE_BASE;
             TypioRegistry *registry = typio_instance_get_registry(tray->instance);
             if (registry) {
                 size_t engine_count;
                 char **engines = typio_registry_list_ordered_keyboards(registry, &engine_count);
                 if ((size_t)engine_idx < engine_count && tray->menu_callback) {
+                    /* If the engine declares any registered language, switch to
+                     * the first match before selecting the engine. This matches
+                     * the language→engine menu structure: picking an engine
+                     * commits to its language first. */
+                    size_t lang_count = 0;
+                    char **langs = typio_registry_list_languages(registry, &lang_count);
+                    char **engine_langs = nullptr;
+                    size_t engine_lang_count = 0;
+                    engine_langs = typio_registry_get_engine_languages(
+                        registry, engines[engine_idx], &engine_lang_count);
+                    for (size_t li = 0; li < engine_lang_count; li++) {
+                        const char *tag = engine_langs[li];
+                        if (!tag) continue;
+                        for (size_t la = 0; la < lang_count; la++) {
+                            if (langs[la] && strcmp(langs[la], tag) == 0) {
+                                char lang_action[128];
+                                snprintf(lang_action, sizeof(lang_action),
+                                         "language:%s", tag);
+                                tray->menu_callback(tray, lang_action, tray->user_data);
+                                break;
+                            }
+                        }
+                    }
+                    typio_free_string_array(engine_langs, engine_lang_count);
+                    typio_free_string_array(langs, lang_count);
+
                     char action[128];
                     snprintf(action, sizeof(action), "engine:%s", engines[engine_idx]);
                     tray->menu_callback(tray, action, tray->user_data);

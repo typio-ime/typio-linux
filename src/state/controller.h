@@ -19,6 +19,7 @@
 #define TYPIO_STATE_CONTROLLER_H
 
 #include "typio/abi/types.h"
+#include "typio/abi/config.h"
 
 #include <stddef.h>
 
@@ -111,6 +112,53 @@ const char *typio_language_endonym(const char *tag);
  * NULL/empty tag.
  */
 void typio_language_badge(const char *tag, char *out, size_t out_size);
+
+/**
+ * @brief Disambiguated language label for list/menu surfaces.
+ *
+ * Returns the endonym with a script qualifier appended when the tag carries
+ * an ISO 15924 script subtag: @c zh-Hans → "中文 (简)", @c zh-Hant →
+ * "中文 (繁)", @c sr-Latn → "Srpski (Latin)". Tags with only a primary
+ * subtag or a region subtag collapse to the bare endonym. Used by the tray
+ * menu where multiple script variants of one primary language would
+ * otherwise render indistinguishably. @p out is always NUL-terminated.
+ */
+void typio_language_menu_label(const char *tag, char *out, size_t out_size);
+
+/**
+ * @brief Resolve the tray/indicator status icon by the language-only chain
+ *        (ADR-0033).
+ *
+ * Pure over its inputs — does not query @c TypioInstance or @c TypioRegistry.
+ * This makes it unit-testable without fixtures. The chain is, most-specific
+ * first:
+ *
+ *   1. @c [languages.<tag>].icon config override
+ *   2. language badge (rendered text)
+ *   3. generic @c typio-keyboard-symbolic (anything active, no icon found)
+ *   4. @c typio-keyboard-off-symbolic (nothing active)
+ *
+ * @param active_language_tag Active BCP-47 tag, or NULL when no language is
+ *        active. May be a script/region-qualified tag (@c zh-Hans,
+ *        @c pt-BR); the badge lookup matches on the primary subtag.
+ * @param engine_active True when a keyboard engine is active even if no
+ *        language is set (legacy/engine-cycling installs).
+ * @param cfg Optional config, used to look up per-language icon overrides.
+ *        NULL is accepted (layer 1 is skipped).
+ * @param out_is_badge Set to true when the returned icon name is a fallback
+ *        and the caller should instead render @p out_badge_text as a pixmap.
+ *        Set to false otherwise. Must not be NULL.
+ * @param out_badge_text When @p out_is_badge is set to true, set to a freshly
+ *        allocated string the caller frees with @c free(). Set to NULL
+ *        otherwise. Must not be NULL.
+ * @return Freshly allocated icon name (never NULL); caller frees with
+ *         @c free().
+ */
+char *typio_resolve_language_icon(const char *active_language_tag,
+                                 bool engine_active,
+                                 TypioConfig *cfg,
+                                 bool *out_is_badge,
+                                 char **out_badge_text);
 
 /* -------------------------------------------------------------------------- */
 /* Notifications from Core — called by the daemon's Rust→C callbacks          */
