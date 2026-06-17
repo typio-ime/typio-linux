@@ -221,6 +221,10 @@ static const struct TypioLanguageDisplay {
     { "uk",  "Українська","УК" },
     { "vi",  "Tiếng Việt","VI" },
     { "zh",  "中文",       "中" },
+    { "yue", "粵語",       "粵" },   /* Cantonese — rime-supported */
+    { "wuu", "吳語",       "吳" },   /* Wu — rime-supported */
+    { "nan", "閩南語",     "閩" },   /* Min Nan — rime-supported */
+    { "hak", "客家話",     "客" },   /* Hakka — rime-supported */
 };
 
 /* Return the table row whose prefix matches the primary subtag of @p tag, or
@@ -667,6 +671,28 @@ void typio_state_controller_notify_status_icon_changed(
      * for any non-tray consumer that wants it. Broadcast so future listeners
      * can react without the tray base icon shifting. */
     (void)icon_name;
+    typio_state_controller_broadcast(ctrl, TYPIO_STATE_CHANGE_STATUS_ICON);
+}
+
+/* ADR-0034: an engine updated its declared languages at runtime. Refresh
+ * the cached active-language snapshot (the active language may have become
+ * unsupported), re-resolve the status icon against the new state, and
+ * broadcast TYPIO_STATE_CHANGE_LANGUAGES so listeners holding a language
+ * list snapshot rebuild it (tray menu, IPC language.list). */
+void typio_state_controller_notify_languages_changed(TypioStateController *ctrl) {
+    if (!ctrl) {
+        return;
+    }
+    bool lang_changed = typio_state_controller_refresh_language(ctrl);
+    /* The icon resolution keys off the active language; re-resolve even if
+     * the active language did not change, because the underlying language
+     * SET that the resolver sees through the registry may have. */
+    free(ctrl->status_icon);
+    ctrl->status_icon = typio_state_controller_resolve_status_icon(ctrl);
+    typio_state_controller_broadcast(ctrl, TYPIO_STATE_CHANGE_LANGUAGES);
+    if (lang_changed) {
+        typio_state_controller_broadcast(ctrl, TYPIO_STATE_CHANGE_LANGUAGE);
+    }
     typio_state_controller_broadcast(ctrl, TYPIO_STATE_CHANGE_STATUS_ICON);
 }
 

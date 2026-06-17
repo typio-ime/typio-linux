@@ -35,6 +35,10 @@ typedef enum {
     TYPIO_STATE_CHANGE_LANGUAGE,
     TYPIO_STATE_CHANGE_STATUS,
     TYPIO_STATE_CHANGE_STATUS_ICON,
+    /* ADR-0034: the set of registered languages changed (an engine updated
+     * its declared capabilities at runtime). Listeners that hold a snapshot
+     * of the language list (menu, IPC language.list) must rebuild. */
+    TYPIO_STATE_CHANGE_LANGUAGES,
 } TypioStateChangeType;
 
 typedef void (*TypioStateChangeCallback)(void *user_data,
@@ -176,6 +180,13 @@ void typio_state_controller_notify_status_changed(
 void typio_state_controller_notify_status_icon_changed(
     TypioStateController *ctrl,
     const char *icon_name);
+
+/* ADR-0034: an engine updated its declared languages at runtime (the host
+ * received the libtypio `TypioLanguagesChangedCallback`). The controller
+ * refreshes its active-language snapshot, re-resolves the status icon,
+ * and broadcasts TYPIO_STATE_CHANGE_LANGUAGES so listeners holding a
+ * language-list snapshot rebuild (tray menu, IPC language.list). */
+void typio_state_controller_notify_languages_changed(TypioStateController *ctrl);
 
 /**
  * @brief Re-read all state from Core and broadcast changes.

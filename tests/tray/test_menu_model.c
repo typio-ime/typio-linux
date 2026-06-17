@@ -90,6 +90,7 @@ static void check_streq(const char *case_name,
 static void check_int(const char *case_name, long expected, long actual) {
     bool ok = expected == actual;
     printf("  %-54s %s\n", case_name, ok ? "OK" : "FAIL");
+    fflush(stdout);
     if (!ok) {
         fprintf(stderr, "    expected=%ld actual=%ld\n", expected, actual);
         abort();
@@ -211,18 +212,27 @@ static void test_two_languages_with_engines(void) {
     check_int("English radio not selected", 0,
               typio_tray_menu_item_get_toggle_state(en));
 
-    /* Each language has its single engine as a child. */
+    /* Each language has its single engine as a child. Engine IDs are now
+     * composite (ADR-0034): SECTION_ENGINE + lang_idx * ENGINE_MAX +
+     * engine_idx. basic is engine_idx=0 under lang_idx=0 (English):
+     *     3000 + 0*16 + 0 = 3000
+     * rime is engine_idx=1 under lang_idx=1 (中文):
+     *     3000 + 1*16 + 1 = 3017
+     * The composite encoding lets the click handler recover both the
+     * language and the engine. */
     const TypioTrayMenuItem *basic = find_subchild(en, "Basic");
     const TypioTrayMenuItem *rime = find_subchild(zh, "Rime");
     check_bool("Basic under English", true, basic != NULL);
     check_bool("Rime under 中文", true, rime != NULL);
     if (basic) {
-        check_int("Basic id", 3000, typio_tray_menu_item_get_id(basic));
+        check_int("Basic composite id (lang=0,eng=0)", 3000,
+                  typio_tray_menu_item_get_id(basic));
         check_int("Basic toggle (not current)", 0,
                   typio_tray_menu_item_get_toggle_state(basic));
     }
     if (rime) {
-        check_int("Rime id", 3001, typio_tray_menu_item_get_id(rime));
+        check_int("Rime composite id (lang=1,eng=1)", 3017,
+                  typio_tray_menu_item_get_id(rime));
         check_int("Rime toggle (current)", 1,
                   typio_tray_menu_item_get_toggle_state(rime));
     }
@@ -317,6 +327,48 @@ static void test_script_disambiguation_in_label(void) {
     typio_instance_free(inst);
 }
 
+static void test_multi_language_engine_appears_under_each(void) {
+    printf("test_multi_language_engine_appears_under_each\n");
+    /* ADR-0034: an engine that declares multiple registered languages
+     * appears under EACH matching language submenu, with distinct composite
+     * IDs. This is the rime case (zh + yue + ...). */
+    TypioInstance *inst = make_instance();
+    TypioRegistry *reg = typio_instance_get_registry(inst);
+    const char *multi_langs[] = { "zh", "yue", NULL };
+    register_keyboard(reg, "poly", "PolyglotEngine", multi_langs);
+
+    TypioTrayMenuItem *root = typio_tray_menu_build(inst, NULL);
+    const TypioTrayMenuItem *zh = find_child(root, "中文");
+    const TypioTrayMenuItem *yue = find_child(root, "粵語");
+    check_bool("zh entry present", true, zh != NULL);
+    check_bool("yue entry present", true, yue != NULL);
+
+    /* Same engine appears in BOTH submenus. */
+    const TypioTrayMenuItem *zh_poly = zh ? find_subchild(zh, "PolyglotEngine") : NULL;
+    const TypioTrayMenuItem *yue_poly = yue ? find_subchild(yue, "PolyglotEngine") : NULL;
+    check_bool("PolyglotEngine under 中文", true, zh_poly != NULL);
+    check_bool("PolyglotEngine under 粵語", true, yue_poly != NULL);
+
+    /* Distinct composite IDs (lang=0 vs lang=1 for the same engine_idx=0).
+     * The stride between adjacent language slots is TYPIO_TRAY_ENGINE_MAX
+     * (defined in menu_model.c); hard-coded here as 16 so a change to the
+     * stride breaks this test loudly rather than silently. */
+    if (zh_poly && yue_poly) {
+        int32_t zh_id = typio_tray_menu_item_get_id(zh_poly);
+        int32_t yue_id = typio_tray_menu_item_get_id(yue_poly);
+        check_bool("zh poly id != yue poly id", true, zh_id != yue_id);
+        check_int("composite stride between lang slots", 16, yue_id - zh_id);
+    }
+
+    /* The engine is NOT in the orphan section (it has matching languages). */
+    const TypioTrayMenuItem *orphan_header = find_child(root, "Engines");
+    check_bool("no orphan Engines section (poly has language homes)",
+               true, orphan_header == NULL);
+
+    typio_tray_menu_item_free(root);
+    typio_instance_free(inst);
+}
+
 static void test_accessible_desc_default(void) {
     printf("test_accessible_desc_default\n");
     /* When accessible_desc is NULL (which the builder always passes), the
@@ -398,6 +450,7 @@ int main(void) {
     test_layout_only_language_is_flat_radio();
     test_orphan_engine_section();
     test_script_disambiguation_in_label();
+    test_multi_language_engine_appears_under_each();
     test_accessible_desc_default();
     test_null_instance_returns_null();
     test_node_constructors_and_tree_ops();

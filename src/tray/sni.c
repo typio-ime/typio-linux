@@ -23,35 +23,39 @@
 #include <string.h>
 #include <stdio.h>
 
-/* Tray dbusmenu item IDs are partitioned into 1000-wide sections so the
- * ranges never overlap regardless of how many items each section holds.
- * Items are addressed as SECTION_BASE + index; the click handler reverses
- * the mapping with a section-bounds check. Separators use sequentially
- * allocated IDs from `item_id` starting at SECTION_MISC_BASE + 100, which
- * sits above the small fixed MISC actions and below the next section. */
+/* Tray dbusmenu item IDs. This block MUST stay in sync with
+ * src/tray/menu_model.c — both files need the same layout because the model
+ * builder assigns IDs and the click handler here reverses the mapping.
+ *
+ * Sections are 1000-wide. Language entries and engine entries inside
+ * language submenus use composite IDs so a multi-language engine can appear
+ * under each declared language with a distinct ID (ADR-0034). */
 #define TYPIO_TRAY_SECTION_MISC    1000   /* Restart, Quit, separators */
-#define TYPIO_TRAY_SECTION_LANG    2000   /* per-language entries (submenus or flat) */
-#define TYPIO_TRAY_SECTION_ENGINE  3000   /* per-engine entries inside a language submenu,
-                                           * plus the orphan-engine flat section */
-#define TYPIO_TRAY_SECTION_VOICE   4000   /* voice engine entries */
-#define TYPIO_TRAY_SECTION_PROP    5000   /* engine enum-property choices */
-#define TYPIO_TRAY_SECTION_CMD     6000   /* engine command invocations */
+#define TYPIO_TRAY_SECTION_LANG    2000   /* per-language entries */
+#define TYPIO_TRAY_SECTION_ENGINE  3000   /* engines inside a language submenu */
+#define TYPIO_TRAY_SECTION_ORPHAN  4000   /* engines declaring no language */
+#define TYPIO_TRAY_SECTION_VOICE   5000   /* voice engine entries */
+#define TYPIO_TRAY_SECTION_PROP    6000   /* engine enum-property choices */
+#define TYPIO_TRAY_SECTION_CMD     7000   /* engine command invocations */
 
 #define TYPIO_TRAY_LANG_BASE       TYPIO_TRAY_SECTION_LANG
 #define TYPIO_TRAY_LANG_MAX        16
 
-#define TYPIO_TRAY_ENGINE_BASE     TYPIO_TRAY_SECTION_ENGINE
-#define TYPIO_TRAY_ENGINE_MAX      10
+#define TYPIO_TRAY_ENGINE_MAX      16
+/* Same composite formula as menu_model.c:
+ *     SECTION_ENGINE + lang_idx * ENGINE_MAX + engine_idx
+ * Range: 3000 .. 3255 with current caps. */
+#define TYPIO_TRAY_ENGINE_IN_LANG(lang_idx, engine_idx) \
+    (TYPIO_TRAY_SECTION_ENGINE + (lang_idx) * TYPIO_TRAY_ENGINE_MAX + (engine_idx))
+#define TYPIO_TRAY_ENGINE_IN_LANG_MAX \
+    (TYPIO_TRAY_LANG_MAX * TYPIO_TRAY_ENGINE_MAX)
+
+#define TYPIO_TRAY_ORPHAN_BASE     TYPIO_TRAY_SECTION_ORPHAN
+#define TYPIO_TRAY_ORPHAN_MAX      16
 
 #define TYPIO_TRAY_VOICE_BASE      TYPIO_TRAY_SECTION_VOICE
 #define TYPIO_TRAY_VOICE_MAX       16
 
-/* Generic engine-control menu IDs. Enum-property choices are addressed as
- * PROP_BASE + property_index*PROP_STRIDE + choice_index; commands as
- * CMD_BASE + command_index. The layout is recomputed from the active
- * engine's control surface on both build and click, so the ids are stable
- * within one menu render. The 1000-wide section leaves room for 31
- * properties (31 * 32 = 992) without spilling into the CMD section. */
 #define TYPIO_TRAY_PROP_BASE       TYPIO_TRAY_SECTION_PROP
 #define TYPIO_TRAY_PROP_STRIDE     32
 #define TYPIO_TRAY_PROP_MAX        8
@@ -479,41 +483,48 @@ static int handle_menu_event(sd_bus_message *m, TypioTray *tray) {
             if (tray->menu_callback) {
                 tray->menu_callback(tray, "quit", tray->user_data);
             }
-        } else if (id >= TYPIO_TRAY_ENGINE_BASE &&
-                   id < TYPIO_TRAY_ENGINE_BASE + TYPIO_TRAY_ENGINE_MAX) {
-            int engine_idx = id - TYPIO_TRAY_ENGINE_BASE;
+        } else if (id >= TYPIO_TRAY_SECTION_ENGINE &&
+                   id < TYPIO_TRAY_SECTION_ENGINE + TYPIO_TRAY_ENGINE_IN_LANG_MAX) {
+            /* Composite engine-in-language ID (ADR-0034). Decode both the
+             * language submenu (so we know which language to activate first)
+             * and the engine within it. */
+            int offset = id - TYPIO_TRAY_SECTION_ENGINE;
+            int lang_idx = offset / TYPIO_TRAY_ENGINE_MAX;
+            int engine_idx = offset % TYPIO_TRAY_ENGINE_MAX;
+            TypioRegistry *registry = typio_instance_get_registry(tray->instance);
+            if (registry) {
+                size_t lang_count = 0;
+                char **langs = typio_registry_list_languages(registry, &lang_count);
+                size_t engine_count = 0;
+                char **engines = typio_registry_list_ordered_keyboards(registry, &engine_count);
+                if ((size_t)lang_idx < lang_count && (size_t)engine_idx < engine_count
+                    && tray->menu_callback) {
+                    /* Switch to the parent language first, then the engine.
+                     * The language switch may resolve a default engine; the
+                     * explicit engine: overrides it. */
+                    char lang_action[160];
+                    snprintf(lang_action, sizeof(lang_action),
+                             "language:%s", langs[lang_idx]);
+                    tray->menu_callback(tray, lang_action, tray->user_data);
+                    char action[160];
+                    snprintf(action, sizeof(action), "engine:%s",
+                             engines[engine_idx]);
+                    tray->menu_callback(tray, action, tray->user_data);
+                }
+                typio_free_string_array(langs, lang_count);
+                typio_free_string_array(engines, engine_count);
+            }
+        } else if (id >= TYPIO_TRAY_ORPHAN_BASE &&
+                   id < TYPIO_TRAY_ORPHAN_BASE + TYPIO_TRAY_ORPHAN_MAX) {
+            /* Orphan engine (declares no registered language): just switch
+             * the engine slot, no language commit. */
+            int engine_idx = id - TYPIO_TRAY_ORPHAN_BASE;
             TypioRegistry *registry = typio_instance_get_registry(tray->instance);
             if (registry) {
                 size_t engine_count;
                 char **engines = typio_registry_list_ordered_keyboards(registry, &engine_count);
                 if ((size_t)engine_idx < engine_count && tray->menu_callback) {
-                    /* If the engine declares any registered language, switch to
-                     * the first match before selecting the engine. This matches
-                     * the language→engine menu structure: picking an engine
-                     * commits to its language first. */
-                    size_t lang_count = 0;
-                    char **langs = typio_registry_list_languages(registry, &lang_count);
-                    char **engine_langs = nullptr;
-                    size_t engine_lang_count = 0;
-                    engine_langs = typio_registry_get_engine_languages(
-                        registry, engines[engine_idx], &engine_lang_count);
-                    for (size_t li = 0; li < engine_lang_count; li++) {
-                        const char *tag = engine_langs[li];
-                        if (!tag) continue;
-                        for (size_t la = 0; la < lang_count; la++) {
-                            if (langs[la] && strcmp(langs[la], tag) == 0) {
-                                char lang_action[128];
-                                snprintf(lang_action, sizeof(lang_action),
-                                         "language:%s", tag);
-                                tray->menu_callback(tray, lang_action, tray->user_data);
-                                break;
-                            }
-                        }
-                    }
-                    typio_free_string_array(engine_langs, engine_lang_count);
-                    typio_free_string_array(langs, lang_count);
-
-                    char action[128];
+                    char action[160];
                     snprintf(action, sizeof(action), "engine:%s", engines[engine_idx]);
                     tray->menu_callback(tray, action, tray->user_data);
                 }
@@ -822,6 +833,30 @@ void typio_tray_update_engine(TypioTray *tray, const char *engine_name,
     tray->engine_name = engine_name ? typio_strdup(engine_name) : nullptr;
     tray->engine_active = is_active;
 
+    typio_tray_invalidate_menu(tray);
+
+    char tooltip[256];
+    if (engine_name) {
+        snprintf(tooltip, sizeof(tooltip), "Typio - %s%s",
+                 engine_name, is_active ? " (active)" : "");
+    } else {
+        snprintf(tooltip, sizeof(tooltip), "Typio - No engine");
+    }
+    typio_tray_set_tooltip(tray, tooltip, nullptr);
+
+    typio_tray_set_status(tray, is_active ? TYPIO_TRAY_STATUS_ACTIVE
+                                          : TYPIO_TRAY_STATUS_PASSIVE);
+}
+
+/* Bump the menu revision and emit the dbusmenu LayoutUpdated signal so
+ * clients re-fetch the layout on the next GetLayout call. Used when the
+ * menu structure changes for reasons other than the active engine: the set
+ * of registered languages changed (ADR-0034), an engine was unloaded, etc.
+ * No-op when the tray is not registered on the bus yet. */
+void typio_tray_invalidate_menu(TypioTray *tray) {
+    if (!tray) {
+        return;
+    }
     tray->menu_revision++;
 
 #ifdef HAVE_LIBSYSTEMD
@@ -844,18 +879,6 @@ void typio_tray_update_engine(TypioTray *tray, const char *engine_name,
         }
     }
 #endif
-
-    char tooltip[256];
-    if (engine_name) {
-        snprintf(tooltip, sizeof(tooltip), "Typio - %s%s",
-                 engine_name, is_active ? " (active)" : "");
-    } else {
-        snprintf(tooltip, sizeof(tooltip), "Typio - No engine");
-    }
-    typio_tray_set_tooltip(tray, tooltip, nullptr);
-
-    typio_tray_set_status(tray, is_active ? TYPIO_TRAY_STATUS_ACTIVE
-                                          : TYPIO_TRAY_STATUS_PASSIVE);
 }
 
 bool typio_tray_is_registered(TypioTray *tray) {

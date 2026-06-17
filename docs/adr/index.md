@@ -54,6 +54,7 @@ Decisions about the framework core (engine ABI, composition contract) live in th
 | [ADR-0031](0031-language-first-switching-surface.md) | Language-first switching surface (`language.*`, `languages` manifest key) | Accepted (amends ADR-0008/0026 surface; TIP v3) |
 | [ADR-0032](0032-tray-icon-composition.md) | Tray icon composition — language base + modality overlays | Accepted (extends ADR-0031 icon chain) |
 | [ADR-0033](0033-language-led-tray-surface.md) | Language-led tray surface (icon and menu) | Accepted (amends ADR-0031 menu structure and ADR-0032 icon chain) |
+| [ADR-0034](0034-dynamic-engine-capabilities.md) | Dynamic engine capabilities (runtime-mutable language declarations) | Accepted (amends ADR-0031 static-declaration assumption; revises ADR-0033 multi-language menu rule) |
 
 ## Looking for something else?
 

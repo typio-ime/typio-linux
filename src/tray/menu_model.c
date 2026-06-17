@@ -24,15 +24,27 @@
 
 /* ─── ID layout (kept in sync with sni.c — see ADR-0033 follow-ups) ─────── */
 
-#define TYPIO_TRAY_SECTION_MISC    1000
-#define TYPIO_TRAY_SECTION_LANG    2000
-#define TYPIO_TRAY_SECTION_ENGINE  3000
-#define TYPIO_TRAY_SECTION_VOICE   4000
+#define TYPIO_TRAY_SECTION_MISC    1000   /* Restart, Quit, separators */
+#define TYPIO_TRAY_SECTION_LANG    2000   /* per-language entries (submenus or flat) */
+#define TYPIO_TRAY_SECTION_ENGINE  3000   /* per-engine entries inside a language submenu */
+#define TYPIO_TRAY_SECTION_ORPHAN  4000   /* engines that declare no registered language */
+#define TYPIO_TRAY_SECTION_VOICE   5000   /* voice engine entries */
 
 #define TYPIO_TRAY_LANG_BASE       TYPIO_TRAY_SECTION_LANG
 #define TYPIO_TRAY_LANG_MAX        16
-#define TYPIO_TRAY_ENGINE_BASE     TYPIO_TRAY_SECTION_ENGINE
-#define TYPIO_TRAY_ENGINE_MAX      10
+
+#define TYPIO_TRAY_ENGINE_MAX      16
+/* Composite ID: a single engine may legitimately appear under several
+ * language submenus (e.g. rime under both zh and yue). Each (language,
+ * engine) pair needs a distinct dbusmenu ID so the click handler knows
+ * which language the user picked the engine under. Layout:
+ *     ENGINE_BASE + lang_idx * ENGINE_MAX + engine_idx
+ * Range with current caps: 3000 .. 3000 + 15*16 + 15 = 3255. */
+#define TYPIO_TRAY_ENGINE_IN_LANG(lang_idx, engine_idx) \
+    (TYPIO_TRAY_SECTION_ENGINE + (lang_idx) * TYPIO_TRAY_ENGINE_MAX + (engine_idx))
+
+#define TYPIO_TRAY_ORPHAN_BASE     TYPIO_TRAY_SECTION_ORPHAN
+
 #define TYPIO_TRAY_VOICE_BASE      TYPIO_TRAY_SECTION_VOICE
 #define TYPIO_TRAY_VOICE_MAX       16
 
@@ -237,6 +249,11 @@ static int append_language_section(TypioTrayMenuItem *root,
                                                            &engine_count);
     size_t const engine_cap = engine_count < TYPIO_TRAY_ENGINE_MAX
                               ? engine_count : TYPIO_TRAY_ENGINE_MAX;
+    /* Track which engines are placed under at least one language so the
+     * orphan section below can skip them. NOTE: an engine that declares
+     * multiple languages appears under EACH matching language submenu
+     * (ADR-0034) — `engine_placed` here is only used to decide orphan
+     * section inclusion, not to dedupe across languages. */
     bool *engine_placed = engine_cap > 0
         ? calloc(engine_cap, sizeof(bool)) : NULL;
     int rc = 0;
@@ -249,14 +266,14 @@ static int append_language_section(TypioTrayMenuItem *root,
 
         size_t child_match = 0;
         for (size_t j = 0; j < engine_cap; j++) {
-            if (!engine_placed[j] &&
-                engine_declares_language(registry, engines[j], langs[i])) {
+            if (engine_declares_language(registry, engines[j], langs[i])) {
                 child_match++;
             }
         }
 
         TypioTrayMenuItem *lang_item;
         if (child_match == 0) {
+            /* Layout-only language: clicking switches the language slot. */
             lang_item = typio_tray_menu_item_new_radio(
                 TYPIO_TRAY_LANG_BASE + (int32_t)i, lang_label, true,
                 is_current, NULL);
@@ -265,8 +282,7 @@ static int append_language_section(TypioTrayMenuItem *root,
                 TYPIO_TRAY_LANG_BASE + (int32_t)i, lang_label, true,
                 is_current, NULL);
             for (size_t j = 0; j < engine_cap; j++) {
-                if (engine_placed[j] ||
-                    !engine_declares_language(registry, engines[j], langs[i])) {
+                if (!engine_declares_language(registry, engines[j], langs[i])) {
                     continue;
                 }
                 engine_placed[j] = true;
@@ -277,9 +293,12 @@ static int append_language_section(TypioTrayMenuItem *root,
                         ? info->display_name : engines[j];
                 bool eng_current = engine_name &&
                                    strcmp(engines[j], engine_name) == 0;
+                /* Composite ID encodes both the language submenu and the
+                 * engine within it, so the click handler knows which
+                 * language to activate first. */
                 TypioTrayMenuItem *eng_item = typio_tray_menu_item_new_radio(
-                    TYPIO_TRAY_ENGINE_BASE + (int32_t)j, display, true,
-                    eng_current, NULL);
+                    TYPIO_TRAY_ENGINE_IN_LANG((int32_t)i, (int32_t)j),
+                    display, true, eng_current, NULL);
                 typio_engine_info_free((TypioEngineInfo *)info);
                 if (!eng_item || !typio_tray_menu_item_add_child(lang_item,
                                                                  eng_item)) {
@@ -334,7 +353,7 @@ static int append_language_section(TypioTrayMenuItem *root,
         bool is_current = engine_name &&
                           strcmp(engines[j], engine_name) == 0;
         TypioTrayMenuItem *eng_item = typio_tray_menu_item_new_radio(
-            TYPIO_TRAY_ENGINE_BASE + (int32_t)j, display, true, is_current,
+            TYPIO_TRAY_ORPHAN_BASE + (int32_t)j, display, true, is_current,
             NULL);
         typio_engine_info_free((TypioEngineInfo *)info);
         if (!eng_item || !typio_tray_menu_item_add_child(root, eng_item)) {

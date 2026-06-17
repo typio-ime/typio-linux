@@ -461,6 +461,17 @@ static void tray_state_change_callback(void *user_data,
             tray_apply_icon(tray, ctrl);
             tray_refresh_tooltip(tray, ctrl);
             break;
+        case TYPIO_STATE_CHANGE_LANGUAGES: {
+            /* ADR-0034: an engine updated its declared languages. The menu
+             * model must be rebuilt (the set of language entries changed),
+             * and the icon/tooltip re-applied in case the active language
+             * snapshot moved. */
+            tray_apply_icon(tray, ctrl);
+            tray_apply_overlay(tray, ctrl);
+            tray_refresh_tooltip(tray, ctrl);
+            typio_tray_invalidate_menu(tray);
+            break;
+        }
         case TYPIO_STATE_CHANGE_STATUS: {
             /* Engine mode/schema changes used to overwrite the tray base icon
              * with the mode's `icon_name`. The tray icon is language-only now

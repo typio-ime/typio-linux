@@ -139,6 +139,15 @@ void typio_tray_update_engine(TypioTray *tray, const char *engine_name,
                               bool is_active);
 
 /**
+ * @brief Bump the menu revision and emit LayoutUpdated.
+ *
+ * Call when the menu structure changes for reasons other than the active
+ * engine: an engine updated its declared languages (ADR-0034), an engine
+ * was unloaded, etc. Clients re-fetch the layout on the next GetLayout.
+ */
+void typio_tray_invalidate_menu(TypioTray *tray);
+
+/**
  * @brief Check if tray is registered with the system
  * @param tray System tray
  * @return true if registered and visible

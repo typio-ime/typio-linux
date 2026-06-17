@@ -384,6 +384,22 @@ static void typio_on_status_icon_change(TypioInstance *instance,
     }
 }
 
+/* ADR-0034: an engine updated its declared languages at runtime. Refresh
+ * the controller's snapshot and broadcast so the tray menu rebuilds. */
+static void typio_on_languages_changed(TypioInstance *instance,
+                                       const char *engine_name,
+                                       void *user_data) {
+    TypioApp *app = user_data;
+    (void) instance;
+    if (engine_name) {
+        typio_log_info("Engine '%s' updated its declared languages",
+                       engine_name);
+    }
+    if (app && app->state_controller) {
+        typio_state_controller_notify_languages_changed(app->state_controller);
+    }
+}
+
 static void typio_on_engine_availability_change(TypioInstance *instance,
                                                 TypioEngineAvailability availability,
                                                 const char *reason,
@@ -716,8 +732,11 @@ static int typio_run_wayland(TypioApp *app) {
                                                      typio_on_voice_engine_change,
                                                      app);
     typio_instance_set_status_icon_changed_callback(app->instance,
-                                                    typio_on_status_icon_change,
-                                                    app);
+                                                     typio_on_status_icon_change,
+                                                     app);
+    typio_instance_set_languages_changed_callback(app->instance,
+                                                  typio_on_languages_changed,
+                                                  app);
     typio_instance_set_keyboard_mode_changed_callback(app->instance,
                                               typio_on_mode_change,
                                               app);
