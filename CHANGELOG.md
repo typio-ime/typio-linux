@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-06-19
+
+### Fixed
+
+- **Tray icon blurriness.** The SNI `IconPixmap` channel previously
+  shipped only `{22, 44}` px rasters; common tray hosts (Waybar,
+  Swaybar, GNOME AppIndicator, KDE Plasma) request 16/22/24/32 px and
+  were forced to scale, producing a blurry badge especially on HiDPI /
+  fractional-scaled outputs. The ladder is now
+  `{16, 22, 24, 32, 44, 48, 64, 96, 128}` so the host can pick a close
+  fit at any DPI.
+- **Tray badge legibility with a voice engine configured.** The corner
+  microphone overlay (`OverlayIconName`) was composited on top of the
+  rendered language badge, turning 3-character badges (`Рус`, `الد`)
+  into an unreadable blob at typical tray sizes. The overlay is now
+  suppressed while a badge is active; the voice presence is still
+  advertised in the tooltip and the menu. Badge ⇄ icon transitions
+  also emit `NewOverlayIcon` so the host re-queries the corner overlay.
+
+### Added
+
+- **`summon_indicator` shortcut** (default `Ctrl+Super+i`). Actively
+  re-shows the on-screen indicator (language · engine · mode) on
+  demand, instead of only on focus/engine-change triggers. The
+  indicator uses `zwp_input_popup_surface_v2`, so the shortcut only
+  fires while a text field is focused — the coordinator drops the
+  request silently otherwise. Requires libtypio ≥ 0.4.2.
+
 ## [0.3.1] - 2026-06-19
 
 ### Fixed
