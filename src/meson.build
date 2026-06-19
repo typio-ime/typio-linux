@@ -51,6 +51,7 @@ if enable_wayland
     host_sources += files(
         'wayland/frontend_aux.c',
         'wayland/candidate_guard.c',
+        'wayland/candidate_snapshot.c',
         'engine/boundary.c',
         'wayland/foreign/identity.c',
         'wayland/keyboard/arbiter.c',

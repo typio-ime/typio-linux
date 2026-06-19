@@ -314,11 +314,20 @@ void typio_text_shaper_get_diag(TypioTextShaperDiag *out)
     out->atlas_packer_full   = a.packer_full;
     out->atlas_rebuilds      = a.rebuilds;
     out->glyphs_rasterized   = a.rasterized;
+    out->atlas_flushes       = a.flushes;
+    out->atlas_flush_total_regions = a.flush_total_regions;
+    out->atlas_flush_peak_batch    = a.flush_peak_batch;
 
     uint64_t hits = 0, misses = 0;
     font_resolve_get_diag(&hits, &misses);
     out->fb_resolve_hits   = hits;
     out->fb_resolve_misses = misses;
+    out->fc_purge_count    = font_resolve_purge_count();
+
+    out->font_obj_count     = font_cache_obj_count();
+    out->font_obj_cap       = FONT_OBJ_CACHE_CAP;
+    out->font_face_count    = font_cache_face_count();
+    out->font_obj_evictions = font_cache_eviction_count();
 }
 
 void typio_text_shaper_log_diag(const char *tag)
@@ -326,13 +335,22 @@ void typio_text_shaper_log_diag(const char *tag)
     TypioTextShaperDiag d;
     typio_text_shaper_get_diag(&d);
     unsigned long long fb_total = d.fb_resolve_hits + d.fb_resolve_misses;
-    typio_log_trace("text_shaper diag [%s]: atlas live=%u/%u shelf=%u/%upx full=%d "
-                    "rebuilds=%llu raster=%llu | fb_resolve hit=%llu miss=%llu (%llu total)",
+    typio_log_trace("text_shaper diag [%s]: "
+                    "atlas live=%u/%u shelf=%u/%upx full=%d "
+                    "rebuilds=%llu raster=%llu "
+                    "flushes=%llu peak_batch=%u total_regions=%llu | "
+                    "fb_resolve hit=%llu miss=%llu (%llu total) fc_purge=%llu | "
+                    "font obj=%u/%u face=%u evictions=%llu",
                     tag ? tag : "",
                     d.atlas_live, d.atlas_slot_capacity,
                     d.atlas_shelf_y, d.atlas_dim, (int)d.atlas_packer_full,
                     d.atlas_rebuilds, d.glyphs_rasterized,
-                    d.fb_resolve_hits, d.fb_resolve_misses, fb_total);
+                    d.atlas_flushes, d.atlas_flush_peak_batch,
+                    d.atlas_flush_total_regions,
+                    d.fb_resolve_hits, d.fb_resolve_misses, fb_total,
+                    d.fc_purge_count,
+                    d.font_obj_count, d.font_obj_cap, d.font_face_count,
+                    d.font_obj_evictions);
 }
 
 /* ── Engine lifecycle ────────────────────────────────────────────────────── */

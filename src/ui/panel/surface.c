@@ -19,6 +19,7 @@
 #include "paint.h"
 #include "theme.h"
 #include "text_shaper.h"
+#include "glyph_atlas.h"
 #include "device.h"
 #include "clock.h"
 #include "typio/abi/log.h"
@@ -495,6 +496,16 @@ static PanelPresentResult do_present(TypioPanelSurface *s,
 
     PanelPaintTarget target = { s->fx_canvas, &s->fx_arena };
     panel_record(&target, geom, selected);
+
+    /* Commit every glyph atlas upload queued during panel_record in a single
+     * vkQueueSubmit + fence wait. This MUST happen before flux_canvas_end /
+     * flux_frame_submit so the destination writes complete (and the layout
+     * transition back to SHADER_READ is in the command stream) before the
+     * render pass samples the atlas. Without batching, a cold atlas re-warm
+     * after a reclaim would issue one submit+wait per visible glyph — tens
+     * of round-trips per frame, which is the proximate cause of selection
+     * lag after long typing sessions. */
+    glyph_atlas_flush();
 
     flux_arena_reset(&s->fx_arena);
     flux_canvas_end(s->fx_canvas);

@@ -497,6 +497,9 @@ void typio_wl_commit(TypioWlFrontend *frontend);
 void typio_wl_session_request_ui_update(TypioWlSession *session);
 void typio_wl_session_cancel_ui_tracking(TypioWlSession *session);
 
+/* (typio_wl_session_clear_candidate_state is declared in
+ * candidate_snapshot.h, alongside the snapshot helpers it composes.) */
+
 #ifdef __cplusplus
 }
 #endif

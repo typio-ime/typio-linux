@@ -39,6 +39,7 @@
 #include "focus_controller.h"
 
 #include "internal.h"
+#include "candidate_snapshot.h"
 #include "wayland/keyboard/bridge.h"
 #include "wayland/foreign/identity.h"
 #include "panel.h"
@@ -212,6 +213,15 @@ typio_wl_focus_apply(TypioWlFrontend *frontend,
         typio_input_context_reset(frontend->session->ctx);
         typio_wl_panel_coordinator_hide(frontend, TYPIO_WL_UI_OWNER_CANDIDATE);
         typio_wl_session_cancel_ui_tracking(frontend->session);
+        /* The engine reset above silently clears libtypio's in-flight
+         * composition without firing the composition callback, so the
+         * host-side candidate snapshot (a deep copy used to re-render the
+         * panel) survives the focus transition and is replayed into the next
+         * field. Drop it here for symmetry with on_commit_callback (which
+         * also runs after a silent libtypio teardown). Without this, repeated
+         * focus-out / engine-switch events leak the snapshot's heap strings
+         * and the snapshot itself across each transition. */
+        typio_wl_session_clear_candidate_state(frontend->session);
     }
 
     if (effects->send_focus_out && frontend->session && frontend->session->ctx) {

@@ -16,6 +16,7 @@
  */
 
 #include "internal.h"
+#include "candidate_snapshot.h"
 #include "panel.h"
 #include "wayland/foreign/identity.h"
 #include "clock.h"
@@ -44,106 +45,6 @@ static void on_delete_surrounding_callback(TypioInputContext *ctx,
                                            uint32_t before, uint32_t after,
                                            void *user_data);
 static void update_wayland_text_ui(TypioWlSession *session, TypioInputContext *ctx);
-
-static char *typio_dup_or_null(const char *s) {
-    return s ? typio_strdup(s) : nullptr;
-}
-
-static void candidate_snapshot_clear(TypioCandidateList *snap) {
-    if (!snap)
-        return;
-    for (size_t i = 0; i < snap->count; i++) {
-        free((char *)snap->candidates[i].text);
-        free((char *)snap->candidates[i].comment);
-        free((char *)snap->candidates[i].label);
-    }
-    free(snap->candidates);
-    snap->candidates = nullptr;
-    snap->count = 0;
-    snap->selected = -1;
-    snap->total = 0;
-    snap->page = 0;
-    snap->page_size = 0;
-    snap->has_prev = false;
-    snap->has_next = false;
-    snap->content_signature = 0;
-}
-
-static bool candidate_snapshot_equal_content(const TypioCandidateList *snap,
-                                              const TypioComposition *comp)
-{
-    if (!snap || !comp) return false;
-    if (snap->count != comp->candidate_count) return false;
-    if (snap->page != comp->page || snap->page_size != comp->page_size) return false;
-    if (snap->total != comp->total) return false;
-    if (snap->has_prev != comp->has_prev || snap->has_next != comp->has_next) return false;
-    for (size_t i = 0; i < snap->count; i++) {
-        const char *t1 = snap->candidates[i].text    ? snap->candidates[i].text    : "";
-        const char *t2 = comp->candidates[i].text    ? comp->candidates[i].text    : "";
-        const char *c1 = snap->candidates[i].comment ? snap->candidates[i].comment : "";
-        const char *c2 = comp->candidates[i].comment ? comp->candidates[i].comment : "";
-        const char *l1 = snap->candidates[i].label   ? snap->candidates[i].label   : "";
-        const char *l2 = comp->candidates[i].label   ? comp->candidates[i].label   : "";
-        if (strcmp(t1, t2) != 0 || strcmp(c1, c2) != 0 || strcmp(l1, l2) != 0)
-            return false;
-    }
-    return true;
-}
-
-static void candidate_snapshot_assign(TypioCandidateList *snap,
-                                      const TypioComposition *composition) {
-    if (!composition || composition->candidate_count == 0) {
-        candidate_snapshot_clear(snap);
-        return;
-    }
-
-    /* Fast path: only the selected highlight moved.  Skip the expensive
-     * clear + calloc + strdup round-trip.  This is the common case when
-     * the user pages through RIME candidates with Up/Down. */
-    if (candidate_snapshot_equal_content(snap, composition)) {
-        snap->selected = composition->selected;
-        snap->content_signature = composition->content_signature;
-        return;
-    }
-
-    candidate_snapshot_clear(snap);
-    TypioCandidate *items = calloc(composition->candidate_count,
-                                    sizeof(TypioCandidate));
-    if (!items) {
-        return;
-    }
-    for (size_t i = 0; i < composition->candidate_count; i++) {
-        items[i].text    = typio_dup_or_null(composition->candidates[i].text);
-        items[i].comment = typio_dup_or_null(composition->candidates[i].comment);
-        items[i].label   = typio_dup_or_null(composition->candidates[i].label);
-    }
-    snap->candidates = items;
-    snap->count = composition->candidate_count;
-    snap->selected = composition->selected;
-    snap->total = composition->total;
-    snap->page = composition->page;
-    snap->page_size = composition->page_size;
-    snap->has_prev = composition->has_prev;
-    snap->has_next = composition->has_next;
-    snap->content_signature = composition->content_signature;
-}
-
-/* Reset all candidate-session state derived from a composition: the
- * candidate-guard scalars consulted on every key and the heap-owned snapshot
- * used to re-render the panel. libtypio's commit is silent (it clears the
- * in-flight composition without firing the composition callback; see
- * typio_input_context_commit), so the commit callback must run this teardown
- * itself. The composition callback's empty branch funnels through here too, so
- * both "engine cleared the composition" and "text was committed" reach the same
- * idle state. */
-static void session_clear_candidate_state(TypioWlSession *session) {
-    if (!session)
-        return;
-    session->last_candidate_count = 0;
-    session->last_candidate_selected = -1;
-    session->last_host_managed_selection = TYPIO_HOST_SEL_NONE;
-    candidate_snapshot_clear(&session->candidate_snapshot);
-}
 
 /* Input method event handlers */
 static void im_handle_activate(void *data, struct zwp_input_method_v2 *im);
@@ -213,6 +114,12 @@ void typio_wl_session_destroy(TypioWlSession *session) {
         typio_input_context_focus_out(session->ctx);
         typio_instance_destroy_context(session->frontend->instance, session->ctx);
     }
+
+    /* The candidate_snapshot is embedded by value but owns heap state (the
+     * candidates array + per-candidate text/comment/label strings). Drop it
+     * before the surrounding struct disappears, otherwise every reconnect /
+     * session recreate leaks a page-sized allocation plus N×3 small strings. */
+    typio_wl_session_clear_candidate_state(session);
 
     free(session->last_preedit_text);
     free(session->pending.surrounding_text);
@@ -480,7 +387,7 @@ static void on_commit_callback([[maybe_unused]] TypioInputContext *ctx, const ch
      * composition silently, so reset the host-side candidate-guard state here;
      * otherwise a later Left/Right would still be consumed as stale candidate
      * navigation. */
-    session_clear_candidate_state(session);
+    typio_wl_session_clear_candidate_state(session);
 
     /* Commit the text */
     typio_wl_commit_string(session->frontend, text);
@@ -526,9 +433,9 @@ static void on_composition_callback([[maybe_unused]] TypioInputContext *ctx,
         session->last_candidate_count = composition->candidate_count;
         session->last_candidate_selected = composition->selected;
         session->last_host_managed_selection = composition->host_managed_selection;
-        candidate_snapshot_assign(&session->candidate_snapshot, composition);
+        typio_candidate_snapshot_assign(&session->candidate_snapshot, composition);
     } else {
-        session_clear_candidate_state(session);
+        typio_wl_session_clear_candidate_state(session);
     }
 
     typio_wl_session_request_ui_update(session);

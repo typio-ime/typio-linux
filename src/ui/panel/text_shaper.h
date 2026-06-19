@@ -107,6 +107,14 @@ typedef struct TypioTextShaperDiag {
     unsigned long long glyphs_rasterized;  /* cumulative FT_Load_Glyph inserts  */
     unsigned long long fb_resolve_hits;    /* per-codepoint memo hits           */
     unsigned long long fb_resolve_misses;  /* FcFontSort runs (memo misses)     */
+    unsigned long long atlas_flushes;      /* batched flushes with ≥1 region    */
+    unsigned long long atlas_flush_total_regions; /* cumulative regions flushed */
+    uint32_t           atlas_flush_peak_batch;     /* largest single batch       */
+    uint32_t           font_obj_count;     /* current FontObj table occupancy   */
+    uint32_t           font_obj_cap;       /* FONT_OBJ_CACHE_CAP                */
+    uint32_t           font_face_count;    /* unique FT_Faces opened            */
+    unsigned long long font_obj_evictions; /* cumulative LRU evictions           */
+    unsigned long long fc_purge_count;     /* cumulative FcFini() drains         */
 } TypioTextShaperDiag;
 
 /* Fill @out with the current diagnostics counters. */

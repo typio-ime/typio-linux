@@ -7,6 +7,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Candidate-selection lag after long typing sessions.** Four independent
+  contributors compounded into progressively worse panel latency over hours
+  of mixed-scale CJK typing:
+
+  - **`font_cache` was unbounded and O(N) per lookup.** Every unique
+    `(font_path, size, weight)` tuple — multiplied by fractional-scale
+    jitter (1.0 / 1.25 / 1.5 / 1.75 / 2.0 …), output hot-plug events, and
+    per-codepoint CJK fallback expansion — appended a permanent entry to a
+    linearly-scanned array, lengthening the per-keystroke lookup that the
+    layout LRU performs on every candidate navigation. The table is now a
+    bounded open-addressing hash (`FONT_OBJ_CACHE_CAP = 256`) with LRU
+    eviction, so lookup stays O(1) regardless of session length. The
+    underlying `FT_Face` (the part that mmaps ~5–17 MB per file) is kept
+    alive in a separate face table for the process lifetime, since
+    `TypioTextShape` borrows it; only the per-tuple wrapper (`hb_font_t` +
+    path string) is evicted.
+  - **Fontconfig's internal caches grew monotonically.** Every
+    `FcFontSort` cache miss inflated Fontconfig's process-global state
+    without bound; `FcFini()` was only called on explicit config reload.
+    The font resolver now drains Fontconfig every 256 codepoint misses
+    (`FONTCONFIG_PURGE_PERIOD`), a cadence aligned with the per-codepoint
+    fallback memo's working set so it fires roughly once per "the memo has
+    fully churned" rather than on every lookup.
+  - **Glyph atlas reclaim contract mismatch.** The header documented
+    "rebuild on 75% load OR packer exhaustion" but the implementation only
+    honoured packer exhaustion, so a long session with many small glyphs
+    that filled the hash table without saturating the texture never
+    reclaimed — probe chains lengthened toward O(n) per glyph. Both
+    triggers now fire as documented.
+  - **Each cache miss was its own `vkQueueSubmit` + `vkWaitForFences`.**
+    After an atlas reclaim emptied the texture, the next frame
+    re-rasterised every visible glyph (tens for a 10-row CJK panel) as
+    separate GPU round-trips, producing a multi-millisecond hitch on the
+    first navigation after each reclaim. Misses within a frame now
+    coalesce into a single submit via the new `glyph_atlas_flush()` /
+    `glyph_upload_regions()` path, called from `do_present` after the
+    canvas is recorded and before the render pass is submitted.
+
+- **Two candidate-snapshot memory leaks.** `typio_wl_session_destroy`
+  freed the surrounding `TypioWlSession` struct without clearing the
+  `candidate_snapshot` embedded by value in it, leaking the heap-owned
+  `candidates` array plus 3×N strings on every reconnect / session
+  recreate. The `discard_composition` focus effect reset the engine and
+  hid the panel but never cleared the snapshot, leaking the same per
+  focus-out / engine-switch. Both paths now route through the shared
+  `typio_wl_session_clear_candidate_state()` helper (mirroring
+  `on_commit_callback`).
+
+### Added
+
+- **`font_cache` LRU + hash test suite** (`tests/ui/test_font_cache.c`).
+  Exercises the cap enforcement, FT_Face sharing across (size, weight)
+  variants, stable pointer identity for cache hits, face survival across
+  LRU eviction (the use-after-free guard), and clear/reset behaviour.
+  Skips with meson exit code 77 when the pinned Inter font path is
+  unavailable so the suite still builds on minimal toolchains.
+
+- **Candidate-snapshot lifecycle test suite**
+  (`tests/wayland/test_candidate_snapshot.c`). Exercises the
+  `typio_wl_session_clear_candidate_state` / `typio_candidate_snapshot_clear`
+  paths now shared by `session_destroy`, `discard_composition`,
+  `on_commit_callback`, and `on_composition_callback`. Verifies heap strings
+  are freed, the helper is idempotent (no double-free across the four call
+  sites that can fire in sequence on a focus-out → commit → destroy
+  transition), and the candidate-guard scalars are zeroed.
+
+- **Diagnostics for the font / atlas / Fontconfig layer.**
+  `TypioTextShaperDiag` and the slow-render `text_shaper_log_diag` trace
+  now report: atlas batched-flush count + peak batch size + total regions
+  flushed; current FontObj table occupancy (`font_obj_count`/`cap`) + face
+  count + cumulative LRU evictions; cumulative Fontconfig purge count.
+  These let a slow-render log distinguish steady-state warm-atlas operation
+  from a post-reclaim re-warm storm, and a font_cache thrash from a
+  Fontconfig cost spike — directly correlating the panel lag with the
+  cache layer responsible.
+
+### Changed
+
+- **Snapshot helpers extracted to `src/wayland/candidate_snapshot.{c,h}`.**
+  Previously static inside `input_method.c`, the snapshot clear / assign /
+  equal helpers now live in their own TU so the free path can be
+  unit-tested without linking the Wayland protocol surface. Behaviour is
+  unchanged; only location and visibility moved.
+
 ## [0.3.2] - 2026-06-19
 
 ### Fixed

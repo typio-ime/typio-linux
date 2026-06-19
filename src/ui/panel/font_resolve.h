@@ -65,6 +65,10 @@ void font_resolve_clear(void);
 /* Report cumulative per-codepoint memo hit / miss counts. */
 void font_resolve_get_diag(uint64_t *out_hits, uint64_t *out_misses);
 
+/* Cumulative count of FcFini() drain invocations since process start. For
+ * correlating candidate lag with Fontconfig cache churn. */
+uint64_t font_resolve_purge_count(void);
+
 #ifdef __cplusplus
 }
 #endif

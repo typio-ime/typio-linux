@@ -14,6 +14,42 @@
 static uint64_t g_fb_resolve_hits;
 static uint64_t g_fb_resolve_misses;
 
+/* ── Periodic Fontconfig cache drain ────────────────────────────────────────
+ *
+ * Fontconfig's internal caches (object pools, pattern caches, FcFontSet
+ * indices) grow monotonically across the process lifetime: every
+ * FcFontMatch / FcFontSort call inflates them, and we never call FcFini() on
+ * the hot path because it tears down every FcPattern we still borrow. Long
+ * CJK-heavy sessions accumulate noticeable per-query cost this way.
+ *
+ * Strategy: count cache misses (each miss is exactly one FcFontSort run that
+ * inflated Fontconfig's state) and call FcFini() once the count crosses
+ * FONTCONFIG_PURGE_PERIOD. The function is safe to call from any
+ * single-threaded caller — it re-initialises lazily via FcInit() on the next
+ * lookup, and our own fb_cp_cache (which holds the *resolved* paths as our
+ * own copies) stays hot across the drain, so only genuinely new codepoints
+ * re-query Fontconfig.
+ *
+ * The period matches FB_CP_CACHE_CAP so the drain fires roughly once per
+ * "the cache has fully churned" — bounded, self-throttling, and aligned with
+ * the working-set reality of CJK fallback expansion.
+ */
+#define FONTCONFIG_PURGE_PERIOD 256u
+static uint32_t g_misses_since_fc_purge;
+static uint64_t g_fc_purge_count;   /* cumulative FcFini() invocations (diagnostics) */
+
+static void maybe_drain_fontconfig(void)
+{
+    if (g_misses_since_fc_purge < FONTCONFIG_PURGE_PERIOD) return;
+    typio_log_debug("font_resolve: draining Fontconfig internal caches "
+                    "(misses=%u purges=%llu)",
+                    g_misses_since_fc_purge,
+                    (unsigned long long)(g_fc_purge_count + 1));
+    FcFini();
+    g_misses_since_fc_purge = 0;
+    g_fc_purge_count++;
+}
+
 /* ── Weight helpers ─────────────────────────────────────────────────────── */
 
 static int32_t parse_weight_keyword(const char *s, size_t len)
@@ -311,6 +347,8 @@ static FbCpEntry *resolve_codepoint_fonts(FcChar32 ch, int32_t weight)
     if (!FcInit()) return NULL;
 
     g_fb_resolve_misses++;
+    g_misses_since_fc_purge++;
+    maybe_drain_fontconfig();
     typio_log_debug("font_resolve: fallback resolve U+%04X weight=%d (FcFontSort)",
                     ch, weight);
 
@@ -397,10 +435,19 @@ void font_resolve_clear(void)
 {
     font_file_cache_clear();
     fb_cp_cache_clear();
+    /* typio_text_shaper_purge_font_caches() also calls FcFini(), so reset our
+     * miss counter to keep the periodic-drain cadence aligned with the manual
+     * purge rather than firing again on the very next miss. */
+    g_misses_since_fc_purge = 0;
 }
 
 void font_resolve_get_diag(uint64_t *out_hits, uint64_t *out_misses)
 {
     if (out_hits)   *out_hits   = g_fb_resolve_hits;
     if (out_misses) *out_misses = g_fb_resolve_misses;
+}
+
+uint64_t font_resolve_purge_count(void)
+{
+    return g_fc_purge_count;
 }

@@ -8,8 +8,17 @@
  * font_id, but reference the shared FT_Face. The face's pixel size and
  * variable-font weight are applied on demand via font_cache_apply() before
  * each shaping or rasterisation call.
+ *
+ * The FontObj table is a bounded open-addressing hash with LRU eviction so
+ * the per-keystroke lookup cost stays O(1) regardless of how many fractional
+ * scales, weights, and fallback fonts accumulate over a long session. Eviction
+ * is safe: TypioTextShape borrows only the FT_Face (kept alive in the face
+ * table) and carries a font_id that the atlas treats as opaque — a retired
+ * id becomes bounded dead weight until the next atlas rebuild, never a crash.
  */
 #include "font_cache.h"
+
+#include <typio/abi/log.h>
 
 #include <harfbuzz/hb-ft.h>
 
@@ -69,24 +78,146 @@ static FaceEntry *face_insert(const char *path, FT_Face face)
     return e;
 }
 
-/* ── Object cache (one FontObj per path × size × weight) ───────────────── */
-#define FONT_OBJ_CACHE_INIT_CAP 64
+/* ── FontObj table: open-addressing hash + LRU eviction ───────────────────
+ *
+ * Layout: a fixed-size array (FONT_OBJ_CACHE_CAP slots, must be a power of
+ * two). Lookup hashes (path, size, weight) and linear-probes for a matching
+ * occupied slot or the first empty slot. Each slot carries an lru_tick that is
+ * bumped on every hit; insertions on a full table evict the slot with the
+ * smallest lru_tick.
+ *
+ * Eviction frees hb_font and the path string but deliberately does NOT touch
+ * the FT_Face (it lives in the face table above and is borrowed by TypioTextShape).
+ */
+typedef struct {
+    FontObj  obj;        /* zero-initialised → unoccupied (path == NULL)       */
+    uint32_t lru_tick;   /* 0 for unoccupied slots; bumped on every hit        */
+    bool     occupied;
+} FontObjSlot;
 
-static FontObj  *cache;
-static size_t    cache_count;
-static size_t    cache_cap;
-static uint32_t  next_font_id = 1;   /* monotonic; never reset (see header) */
+static FontObjSlot g_obj_table[FONT_OBJ_CACHE_CAP];
+static uint32_t    g_obj_count;
+static uint32_t    g_obj_tick;
+static uint32_t    g_obj_evictions;   /* cumulative LRU evictions (diagnostics) */
+static uint32_t    next_font_id = 1;   /* monotonic; never reset (see header) */
+
+/* FNV-1a over @path, then mix in @size and @weight so the table spreads
+ * different (size, weight) variants of the same file across slots instead of
+ * clustering them on the same home index. */
+static uint32_t obj_hash(const char *path, float size, int32_t weight)
+{
+    uint32_t h = 2166136261u;
+    for (const unsigned char *p = (const unsigned char *)path; *p; ++p) {
+        h ^= *p;
+        h *= 16777619u;
+    }
+    /* Bit-mix float + int32 into the hash without UB on float reinterpretation. */
+    uint32_t size_bits;
+    memcpy(&size_bits, &size, sizeof(size_bits));
+    h ^= size_bits;
+    h *= 16777619u;
+    h ^= (uint32_t)weight;
+    h *= 16777619u;
+    return h;
+}
+
+static FontObjSlot *obj_find(const char *path, float size, int32_t weight)
+{
+    const uint32_t mask = FONT_OBJ_CACHE_CAP - 1u;
+    uint32_t i = obj_hash(path, size, weight) & mask;
+    for (uint32_t probe = 0; probe < FONT_OBJ_CACHE_CAP; ++probe) {
+        FontObjSlot *s = &g_obj_table[i];
+        if (!s->occupied) return s;                          /* insertion point */
+        if (s->obj.size == size && s->obj.weight == weight &&
+            strcmp(s->obj.path, path) == 0) {
+            return s;                                        /* hit */
+        }
+        i = (i + 1u) & mask;
+    }
+    return NULL;   /* table pathologically full (cannot happen at <75% load) */
+}
+
+/* Release the wrapper's owned state. The FT_Face is NOT freed here — it lives
+ * in the face table and may be borrowed by live TypioTextShapes. */
+static void obj_slot_release(FontObjSlot *s)
+{
+    if (!s->occupied) return;
+    if (s->obj.hb_font) hb_font_destroy(s->obj.hb_font);
+    free(s->obj.path);
+    s->obj = (FontObj){0};
+    s->lru_tick = 0;
+    s->occupied = false;
+    g_obj_count--;
+}
+
+/* Insert into the table, evicting the LRU victim if full. Steals ownership of
+ * @path_dup and @hb_font. Returns a pointer to the populated slot or NULL on
+ * allocation failure (in which case @path_dup and @hb_font are consumed). */
+static FontObjSlot *obj_insert(char *path_dup, float size, int32_t weight,
+                                FT_Face face, hb_font_t *hb_font, uint32_t font_id)
+{
+    FontObjSlot *victim = NULL;
+    if (g_obj_count >= FONT_OBJ_CACHE_CAP) {
+        /* Find LRU victim among occupied slots. Linear scan over a fixed
+         * power-of-two table is bounded (FONT_OBJ_CACHE_CAP iterations) and
+         * amortised across many cache hits, matching the pattern already used
+         * by the codepoint-fallback memo (font_resolve.c:fb_cp_cache_insert). */
+        uint32_t oldest = UINT32_MAX;
+        for (uint32_t i = 0; i < FONT_OBJ_CACHE_CAP; ++i) {
+            FontObjSlot *s = &g_obj_table[i];
+            if (!s->occupied) { victim = s; break; }
+            if (s->lru_tick < oldest) {
+                oldest = s->lru_tick;
+                victim = s;
+            }
+        }
+        if (victim) {
+            obj_slot_release(victim);
+            g_obj_evictions++;
+            typio_log_debug("font_cache: LRU evict (font_obj_count=%u evictions=%u)",
+                            (unsigned)g_obj_count, (unsigned)g_obj_evictions);
+        }
+    }
+
+    /* Re-walk from the hash home to find an empty slot (either the victim's
+     * slot, naturally near the home index, or another empty slot encountered
+     * during probing). obj_find returns the first empty slot when no key match
+     * exists, which is exactly the insertion site. */
+    FontObjSlot *slot = obj_find(path_dup, size, weight);
+    if (!slot) {
+        /* Pathological: every probe collided. Should be unreachable at the
+         * 75% load ceiling; degrade to a synchronous free of the input. */
+        free(path_dup);
+        if (hb_font) hb_font_destroy(hb_font);
+        return NULL;
+    }
+    if (slot->occupied) {
+        /* Key collision with an existing entry (e.g. concurrent insert of the
+         * same key from another code path). Free the old wrapper first. */
+        obj_slot_release(slot);
+    }
+    slot->obj.path    = path_dup;
+    slot->obj.size    = size;
+    slot->obj.weight  = weight;
+    slot->obj.face    = face;
+    slot->obj.hb_font = hb_font;
+    slot->obj.font_id = font_id;
+    slot->lru_tick    = ++g_obj_tick;
+    slot->occupied    = true;
+    g_obj_count++;
+    return slot;
+}
 
 void font_cache_clear(void)
 {
-    for (size_t i = 0; i < cache_count; ++i) {
-        if (cache[i].hb_font) hb_font_destroy(cache[i].hb_font);
-        free(cache[i].path);
+    for (uint32_t i = 0; i < FONT_OBJ_CACHE_CAP; ++i) {
+        obj_slot_release(&g_obj_table[i]);
     }
-    free(cache);
-    cache = NULL;
-    cache_count = 0;
-    cache_cap = 0;
+    g_obj_count = 0;
+    g_obj_tick  = 0;
+    /* g_obj_evictions is cumulative across the process lifetime (matching the
+     * atlas rebuild / glyph rasterised counters) so a slow-render log can
+     * correlate churn across config reloads. */
 
     for (size_t i = 0; i < face_count; ++i) {
         if (faces[i].face) FT_Done_Face(faces[i].face);
@@ -98,37 +229,9 @@ void font_cache_clear(void)
     face_cap = 0;
 }
 
-static FontObj *cache_lookup(const char *path, float size, int32_t weight)
-{
-    for (size_t i = 0; i < cache_count; ++i) {
-        if (cache[i].size == size && cache[i].weight == weight &&
-            strcmp(cache[i].path, path) == 0) {
-            return &cache[i];
-        }
-    }
-    return NULL;
-}
-
-static bool cache_insert(const char *path, float size, int32_t weight,
-                         FT_Face face, hb_font_t *hb_font, uint32_t font_id)
-{
-    if (cache_count == cache_cap) {
-        size_t newcap = cache_cap ? cache_cap * 2 : FONT_OBJ_CACHE_INIT_CAP;
-        FontObj *grown = (FontObj *)realloc(cache, newcap * sizeof(*grown));
-        if (!grown) return false;
-        cache = grown;
-        cache_cap = newcap;
-    }
-
-    FontObj *e = &cache[cache_count++];
-    e->path    = strdup(path);
-    e->size    = size;
-    e->weight  = weight;
-    e->face    = face;
-    e->hb_font = hb_font;
-    e->font_id = font_id;
-    return true;
-}
+uint32_t font_cache_obj_count(void)    { return g_obj_count; }
+uint32_t font_cache_face_count(void)   { return (uint32_t)face_count; }
+uint32_t font_cache_eviction_count(void) { return g_obj_evictions; }
 
 /* Drive a variable font's 'wght' axis to @weight, if it has one. */
 static bool set_face_weight(FT_Face face, int32_t weight)
@@ -188,10 +291,11 @@ void font_cache_apply(FT_Face face, float size, int32_t weight)
 
 FontObj *font_cache_get_or_create(const char *path, float size, int32_t weight)
 {
-    FontObj *entry = cache_lookup(path, size, weight);
-    if (entry) {
-        font_cache_apply(entry->face, size, weight);
-        return entry;
+    FontObjSlot *hit = obj_find(path, size, weight);
+    if (hit && hit->occupied) {
+        hit->lru_tick = ++g_obj_tick;
+        font_cache_apply(hit->obj.face, size, weight);
+        return &hit->obj;
     }
 
     FT_Face face = face_lookup(path);
@@ -216,10 +320,14 @@ FontObj *font_cache_get_or_create(const char *path, float size, int32_t weight)
     hb_font_t *hb_font = hb_ft_font_create_referenced(face);
     if (!hb_font) return NULL;
 
-    uint32_t font_id = next_font_id++;
-    if (!cache_insert(path, size, weight, face, hb_font, font_id)) {
+    char *path_dup = strdup(path);
+    if (!path_dup) {
         hb_font_destroy(hb_font);
         return NULL;
     }
-    return cache_lookup(path, size, weight);
+
+    uint32_t font_id = next_font_id++;
+    FontObjSlot *slot = obj_insert(path_dup, size, weight, face, hb_font, font_id);
+    if (!slot) return NULL;   /* obj_insert already freed path_dup + hb_font */
+    return &slot->obj;
 }

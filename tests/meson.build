@@ -138,6 +138,22 @@ test_glyph_pack = executable('test_glyph_pack',
 )
 test('glyph_pack', test_glyph_pack)
 
+# font_cache LRU + hash table regression tests. FreeType is required because
+# the test opens a real font file via FT_New_Face; skip (meson exit 77) if the
+# Inter font path it pins is absent on the host. Verifies that long sessions
+# with many (size, weight, fractional-scale) variants do not grow the FontObj
+# table without bound and that LRU eviction keeps the shared FT_Face alive.
+test_font_cache_ft = dependency('freetype2', required: false)
+test_font_cache_hb = dependency('harfbuzz', required: false)
+if test_font_cache_ft.found() and test_font_cache_hb.found()
+    test_font_cache = executable('test_font_cache',
+        ['ui/test_font_cache.c', '../src/ui/panel/font_cache.c'],
+        include_directories: wayland_test_inc,
+        dependencies: [libtypio_dep, test_font_cache_ft, test_font_cache_hb],
+    )
+    test('font_cache', test_font_cache)
+endif
+
 test_vk_bridge = executable('test_vk_bridge',
     ['wayland/keyboard/test_vk_bridge.c', '../src/wayland/keyboard/bridge.c'],
     include_directories: [wayland_test_inc, top_inc],
@@ -151,6 +167,21 @@ test_candidate_guard = executable('test_candidate_guard',
     dependencies: libtypio_dep,
 )
 test('candidate_guard', test_candidate_guard)
+
+# Candidate-snapshot lifecycle regression tests. Verifies that the snapshot's
+# heap-owned candidates array + per-candidate strings are released by
+# typio_wl_session_clear_candidate_state (the helper now shared by
+# session_destroy, discard_composition, on_commit_callback, and
+# on_composition_callback) and that the helper is idempotent + NULL-safe.
+# Links internal.h (via candidate_snapshot.c), which pulls in the generated
+# Wayland protocol headers, so protocol_headers are required at compile time.
+test_candidate_snapshot = executable('test_candidate_snapshot',
+    ['wayland/test_candidate_snapshot.c', '../src/wayland/candidate_snapshot.c',
+     protocol_headers],
+    include_directories: [wayland_test_inc, top_inc],
+    dependencies: libtypio_dep,
+)
+test('candidate_snapshot', test_candidate_snapshot)
 
 # ── Tray ──────────────────────────────────────────────────────────────────
 # The language-badge rasteriser needs FreeType + HarfBuzz + Fontconfig. Resolve

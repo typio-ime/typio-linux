@@ -15,6 +15,13 @@
  * slots, packer, counts), reclaiming the space; the next draw re-rasterises the
  * visible page lazily. See the .c for the device-idle safety argument.
  *
+ * Upload batching: glyph_atlas_get() does NOT perform its own vkQueueSubmit.
+ * Misses are queued into a per-call staging area and committed by
+ * glyph_atlas_flush() in a single submit+fence, so a cold atlas re-warm after
+ * a reclaim (or a fresh font-cache expansion) costs one GPU round-trip per
+ * frame instead of one per glyph — important because a candidate panel can
+ * surface tens of previously-unseen CJK glyphs in a single redraw.
+ *
  *   Bound:   GLYPH_SLOT_CAP hash slots; GLYPH_ATLAS_DIM² texture.
  *   Evict:   none per-entry — reclaimed wholesale.
  *   Reclaim: glyph_atlas_reclaim() on 75% load OR packer exhaustion.
@@ -53,17 +60,35 @@ typedef struct GlyphAtlasDiag {
     bool     packer_full;   /* image saturated, awaiting reclaim             */
     uint64_t rebuilds;      /* cumulative reclaim count                      */
     uint64_t rasterized;    /* cumulative FT_Load_Glyph inserts              */
+    uint64_t flushes;       /* cumulative glyph_atlas_flush() calls with work*/
+    uint32_t flush_peak_batch;  /* largest single batch observed             */
+    uint64_t flush_total_regions; /* cumulative regions across all batches   */
 } GlyphAtlasDiag;
 
-/* Look up a glyph's atlas slot, rasterising + uploading it on first sight.
+/* Look up a glyph's atlas slot, rasterising it on first sight. The pixel
+ * upload is deferred to the next glyph_atlas_flush() so that all misses in a
+ * frame coalesce into a single vkQueueSubmit; the returned slot's u/v/w/h are
+ * valid immediately, and @drawable is set as soon as placement + rasterisation
+ * succeed (the actual GPU write happens at flush time but completes before
+ * the panel's render pass samples the atlas).
  * After warm-up every panel glyph is a hash hit with zero GPU work. Returns
  * NULL only if no render device exists yet or the table is pathologically
  * full; the slot may be non-drawable (whitespace / load failure / no fit).
+ *
+ * The caller MUST invoke glyph_atlas_flush() once after every batch of
+ * glyph_atlas_get() calls that participates in the same rendered frame, before
+ * the frame's render pass executes. The panel's present path does this.
  *
  * @size_px and @weight are applied to @face before FT_Load_Glyph on a miss;
  * required because the FT_Face is shared across (size, weight) tuples. */
 const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t glyph_id,
                                   float size_px, int32_t weight);
+
+/* Commit every queued glyph upload in a single vkQueueSubmit + vkWaitForFences.
+ * Safe to call when nothing is queued (no-op). Returns true if every queued
+ * region uploaded successfully; on false, the queued slots are marked
+ * non-drawable so the next draw skips them instead of sampling garbage. */
+bool glyph_atlas_flush(void);
 
 /* The atlas texture, for sampling sub-rects at draw time. Builds the atlas on
  * demand; returns NULL only when no render device exists yet. */
