@@ -8,7 +8,12 @@
 #include "font_cache.h"
 #include "device.h"
 
+#include <flux/flux.h>
+
 #include <typio/abi/log.h>
+
+#include <ft2build.h>
+#include FT_FREETYPE_H
 
 #include <stdlib.h>
 #include <string.h>
@@ -24,8 +29,8 @@
  * generous: a 16-row candidate panel with up to ~32 glyphs per row plus
  * preedit + mode label is ~600 entries; the cap covers a worst-case page with
  * headroom while staying bounded. On overflow (unreachable in practice) we
- * flush inline, which degrades to the legacy per-frame behaviour. */
-#define GLYPH_PENDING_CAP 1024u
+ * flush inline, which degrades to the legacy per-frame behaviour.
+ * GLYPH_PENDING_CAP is defined in the header so tests can verify overflow. */
 
 typedef struct {
     uint8_t *data;         /* tightly packed @w×@h R8 coverage (owned)        */
@@ -44,9 +49,25 @@ typedef struct {
 
 static GlyphAtlas g_atlas;
 
-/* Per-frame upload queue. Entries own their @data; flush frees them. */
+/* Per-frame upload queue. Entries own their @data; flush frees them. The cap
+ * is exposed in the header (GLYPH_PENDING_CAP) for tests that verify overflow. */
 static PendingUpload g_pending[GLYPH_PENDING_CAP];
 static uint32_t      g_pending_count;
+
+/* Upload backend. Defaults to the Vulkan batched upload; tests override via
+ * glyph_atlas_set_upload_fn to verify the queue/batching contract without
+ * a GPU. */
+static bool default_upload_fn(const GlyphUploadRegion *regions, size_t count,
+                               void *user)
+{
+    (void)user;
+    flux_image *img = glyph_atlas_image();
+    if (!img) return false;
+    return glyph_upload_regions(img, regions, count);
+}
+
+static GlyphAtlasUploadFn g_upload_fn = default_upload_fn;
+static void              *g_upload_user;
 
 /* Cumulative diagnostics counters (session-wide). */
 static uint64_t g_atlas_rebuilds;
@@ -113,36 +134,41 @@ static void glyph_atlas_reset(void)
     g_atlas_rebuilds++;
 }
 
+bool glyph_atlas_should_reclaim(uint32_t live_count, bool packer_exhausted,
+                                 uint32_t slot_capacity, uint32_t threshold_pct)
+{
+    /* Both triggers documented in the header must fire:
+     *   - packer exhaustion: texture shelf space ran out
+     *   - load factor: hash table crossed threshold_pct occupancy
+     * Either condition forces a wholesale rebuild. */
+    if (packer_exhausted) return true;
+    if (slot_capacity == 0) return false;   /* avoid divide-by-zero in bad calls */
+    uint32_t threshold =
+        (uint32_t)((uint64_t)slot_capacity * threshold_pct / 100);
+    return live_count >= threshold;
+}
+
 bool glyph_atlas_reclaim(void)
 {
     if (!g_atlas.slots) return false;
 
-    /* Reclaim when EITHER the hash load factor crosses 75% OR the shelf packer
-     * has run out of texture space. The header documents both triggers; the
-     * load-factor arm matters when many small glyphs fill the hash table
-     * without exhausting the texture (e.g. a long session with diverse CJK
-     * fallback chains across several fractional scales, each unique
-     * (font_id, glyph_id) tuple consuming a hash slot). At ~131k slots and a
-     * typical CJK working set of 3–10k glyphs, normal use stays well under
-     * the threshold, but a multi-font multi-scale session can cross it after
-     * hours of typing — at which point probe chains lengthen and per-glyph
-     * lookup cost grows. Reclaiming collapses the table back to empty.
-     *
-     * This is called from the panel render path; either trigger causes a
-     * full GPU drain via flux_device_wait_idle. To avoid stalling every
-     * frame, the packer-exhaustion arm fires once per exhaustion event (the
-     * flag is cleared by glyph_atlas_reset) and the load-factor arm fires
-     * once per threshold crossing (live_count drops to 0 on reset, so the
-     * next reclaim is also gated on re-accumulating past the threshold). */
-    uint32_t threshold =
-        (uint32_t)((uint64_t)GLYPH_SLOT_CAP * ATLAS_RECLAIM_THRESHOLD_PCT / 100);
-    bool load_high = g_atlas.live_count >= threshold;
-    if (!g_atlas.packer_exhausted && !load_high) return false;
+    /* Delegate the trigger decision to the pure predicate so the contract is
+     * unit-testable without a GPU. See glyph_atlas_should_reclaim for the
+     * rationale (the historical bug: only packer-exhaustion was honoured
+     * even though the header documented both triggers). */
+    if (!glyph_atlas_should_reclaim(g_atlas.live_count,
+                                     g_atlas.packer_exhausted,
+                                     GLYPH_SLOT_CAP,
+                                     ATLAS_RECLAIM_THRESHOLD_PCT))
+        return false;
 
     typio_log_debug("Glyph atlas reclaim: rebuild (live=%u/%u, reason=%s)",
                     g_atlas.live_count, (unsigned)GLYPH_SLOT_CAP,
                     g_atlas.packer_exhausted
-                        ? (load_high ? "load+packer" : "image-full")
+                        ? (glyph_atlas_should_reclaim(g_atlas.live_count, false,
+                                                       GLYPH_SLOT_CAP,
+                                                       ATLAS_RECLAIM_THRESHOLD_PCT)
+                              ? "load+packer" : "image-full")
                         : "load-factor");
     glyph_atlas_reset();
     return true;
@@ -185,9 +211,13 @@ void glyph_atlas_shutdown(void)
 /* Push a pending upload. Steals @data (caller must not free it on success).
  * Returns false (and frees @data itself) if the queue is full; on overflow we
  * flush inline and retry, so a false return here propagates as "slot not
- * drawable" rather than as a crash. */
-static bool pending_push(uint32_t slot_index, uint32_t x, uint32_t y,
-                          uint32_t w, uint32_t h, uint8_t *data, size_t bytes)
+ * drawable" rather than as a crash.
+ *
+ * Exposed as glyph_atlas_test_push_pending for tests; production callers go
+ * through this same body via the static alias below. */
+bool glyph_atlas_test_push_pending(uint32_t slot_index, uint32_t x, uint32_t y,
+                                    uint32_t w, uint32_t h,
+                                    uint8_t *data, size_t bytes)
 {
     if (g_pending_count >= GLYPH_PENDING_CAP) {
         /* Pathological: more than GLYPH_PENDING_CAP cache misses in a single
@@ -210,6 +240,67 @@ static bool pending_push(uint32_t slot_index, uint32_t x, uint32_t y,
     p->x = x; p->y = y; p->w = w; p->h = h;
     p->bytes      = bytes;
     return true;
+}
+
+uint32_t glyph_atlas_pending_count(void)
+{
+    return g_pending_count;
+}
+
+void glyph_atlas_set_upload_fn(GlyphAtlasUploadFn fn, void *user)
+{
+    g_upload_fn   = fn ? fn : default_upload_fn;
+    g_upload_user = fn ? user : NULL;
+}
+
+void glyph_atlas_test_init_slots(void)
+{
+    if (g_atlas.slots) return;
+    /* Allocate the hash-slot array only; no atlas image, no GPU. Matches the
+     * slot-only fields a CPU test exercises (the .drawable flag and the
+     * .key/.occupied bookkeeping). */
+    g_atlas.slots = (GlyphSlot *)calloc(GLYPH_SLOT_CAP, sizeof(GlyphSlot));
+}
+
+void glyph_atlas_test_reset(void)
+{
+    for (uint32_t k = 0; k < g_pending_count; ++k) free(g_pending[k].data);
+    g_pending_count = 0;
+    free(g_atlas.slots);
+    /* Keep the image pointer intact if there is one — we don't own the device
+     * here. Tests that initialised via test_init_slots never set g_atlas.image,
+     * so this leaves g_atlas in the same state test_init_slots started from. */
+    g_atlas.slots = NULL;
+    g_atlas.live_count = 0;
+    g_atlas.packer_exhausted = false;
+    g_atlas.packer = (GlyphPacker){0};
+    g_upload_fn = default_upload_fn;
+    g_upload_user = NULL;
+}
+
+/* Mark the slot at @idx non-drawable, NULL-safe: tests can run without ever
+ * allocating g_atlas.slots (queue-only tests), in which case there is nothing
+ * to mark. */
+static void mark_slot_non_drawable(uint32_t idx)
+{
+    if (g_atlas.slots && idx < GLYPH_SLOT_CAP) {
+        g_atlas.slots[idx].drawable = false;
+    }
+}
+
+void glyph_atlas_test_set_drawable(uint32_t idx, bool drawable)
+{
+    if (g_atlas.slots && idx < GLYPH_SLOT_CAP) {
+        g_atlas.slots[idx].drawable = drawable;
+    }
+}
+
+bool glyph_atlas_test_get_drawable(uint32_t idx)
+{
+    if (g_atlas.slots && idx < GLYPH_SLOT_CAP) {
+        return g_atlas.slots[idx].drawable;
+    }
+    return false;
 }
 
 const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t glyph_id,
@@ -256,8 +347,8 @@ const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t glyph_
                 for (uint32_t row = 0; row < b->rows; ++row)
                     memcpy(tight + (size_t)row * b->width,
                            b->buffer + (size_t)row * (size_t)b->pitch, b->width);
-                if (pending_push(i, u, v, b->width, b->rows, tight,
-                                  (size_t)b->width * b->rows)) {
+                if (glyph_atlas_test_push_pending(i, u, v, b->width, b->rows, tight,
+                                   (size_t)b->width * b->rows)) {
                     slot.u = (uint16_t)u;        slot.v = (uint16_t)v;
                     slot.w = (uint16_t)b->width; slot.h = (uint16_t)b->rows;
                     slot.drawable = true;
@@ -290,21 +381,9 @@ bool glyph_atlas_flush(void)
 {
     if (g_pending_count == 0) return true;
 
-    flux_image *img = glyph_atlas_image();
-    if (!img) {
-        /* No device yet — every queued slot's data is just noise. Mark the
-         * slots non-drawable and drop the pending bytes. */
-        for (uint32_t k = 0; k < g_pending_count; ++k) {
-            g_atlas.slots[g_pending[k].slot_index].drawable = false;
-            free(g_pending[k].data);
-        }
-        g_pending_count = 0;
-        return false;
-    }
-
     /* Build the batched region array from the pending queue. The regions
      * reference each PendingUpload's @data buffer; that is safe because the
-     * queue is not mutated during upload_batch. */
+     * queue is not mutated during the upload call. */
     GlyphUploadRegion *regions =
         (GlyphUploadRegion *)calloc(g_pending_count, sizeof(GlyphUploadRegion));
     bool ok = false;
@@ -316,25 +395,28 @@ bool glyph_atlas_flush(void)
                 .data = g_pending[k].data, .bytes = g_pending[k].bytes,
             };
         }
-        ok = glyph_upload_regions(img, regions, g_pending_count);
+        /* Default upload fn calls glyph_upload_regions(glyph_atlas_image(), ...);
+         * a test injects a counting / failure-simulating stub via
+         * glyph_atlas_set_upload_fn. The image acquisition is the fn's
+         * responsibility so a CPU-only test never needs a GPU. */
+        ok = g_upload_fn(regions, g_pending_count, g_upload_user);
         free(regions);
     }
 
     if (!ok) {
-        /* Flush failed (fence timeout, OOM). Mark every affected slot
-         * non-drawable so the in-progress render pass skips them instead of
-         * sampling whatever bytes happened to be in the staging buffer. The
-         * next frame will re-request these glyphs via the normal miss path
-         * because... well, actually the slot is now permanently recorded as
-         * occupied+non-drawable in the hash table, so future lookups will
-         * return the cached non-drawable slot and skip re-rasterisation. That
-         * is the correct degradation: the panel shows a hole (rather than
-         * retrying every frame and re-triggering the failed upload), and the
-         * next atlas reclaim re-builds from a clean slate. */
+        /* Flush failed (fence timeout, OOM, no device, or a test stub
+         * simulating failure). Mark every affected slot non-drawable so the
+         * in-progress render pass skips them instead of sampling whatever
+         * bytes happened to be in the staging buffer. The slot is now
+         * permanently recorded as occupied+non-drawable in the hash table,
+         * so future lookups return the cached non-drawable slot and skip
+         * re-rasterisation. That is the correct degradation: the panel shows
+         * a hole (rather than retrying every frame and re-triggering the
+         * failed upload), and the next atlas reclaim re-builds clean. */
         typio_log_warning("glyph_atlas: flush failed for %u regions; marking "
                           "non-drawable", g_pending_count);
         for (uint32_t k = 0; k < g_pending_count; ++k) {
-            g_atlas.slots[g_pending[k].slot_index].drawable = false;
+            mark_slot_non_drawable(g_pending[k].slot_index);
         }
     }
 

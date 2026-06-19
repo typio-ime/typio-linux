@@ -138,20 +138,57 @@ test_glyph_pack = executable('test_glyph_pack',
 )
 test('glyph_pack', test_glyph_pack)
 
+# Resolve the font stack deps once so all font/glyph tests share them. Each
+# test below declares only the subset it actually links; the lookup cost is
+# negligible because meson caches the result.
+test_ft_dep = dependency('freetype2', required: false)
+test_hb_dep = dependency('harfbuzz', required: false)
+test_fc_dep = dependency('fontconfig', required: false)
+
 # font_cache LRU + hash table regression tests. FreeType is required because
 # the test opens a real font file via FT_New_Face; skip (meson exit 77) if the
 # Inter font path it pins is absent on the host. Verifies that long sessions
 # with many (size, weight, fractional-scale) variants do not grow the FontObj
 # table without bound and that LRU eviction keeps the shared FT_Face alive.
-test_font_cache_ft = dependency('freetype2', required: false)
-test_font_cache_hb = dependency('harfbuzz', required: false)
-if test_font_cache_ft.found() and test_font_cache_hb.found()
+if test_ft_dep.found() and test_hb_dep.found()
     test_font_cache = executable('test_font_cache',
         ['ui/test_font_cache.c', '../src/ui/panel/font_cache.c'],
         include_directories: wayland_test_inc,
-        dependencies: [libtypio_dep, test_font_cache_ft, test_font_cache_hb],
+        dependencies: [libtypio_dep, test_ft_dep, test_hb_dep],
     )
     test('font_cache', test_font_cache)
+endif
+
+# Glyph-atlas pure-predicate + queue/flush regression tests. Pure CPU; no GPU
+# required (the upload backend is injected via glyph_atlas_set_upload_fn so a
+# stub replaces the Vulkan submit). Guards two regression surfaces:
+#   - glyph_atlas_should_reclaim load-factor arm (the historical bug only
+#     honoured packer exhaustion, contradicting the documented 75% threshold)
+#   - the batched-upload contract (N misses → exactly one upload call, plus
+#     failure-path slot marking and overflow handling)
+test_glyph_atlas_predicates = executable('test_glyph_atlas_predicates',
+    ['ui/test_glyph_atlas_predicates.c',
+     'ui/glyph_atlas_test_stubs.c',
+     '../src/ui/panel/glyph_atlas.c',
+     '../src/ui/panel/glyph_pack.c'],
+    include_directories: [wayland_test_inc, top_inc],
+    dependencies: [libtypio_dep, test_ft_dep, flux_dep],
+)
+test('glyph_atlas_predicates', test_glyph_atlas_predicates)
+
+# Fontconfig periodic-purge regression tests. Pure-predicate cases do not need
+# Fontconfig; the behavioural case drives 300 distinct codepoints through the
+# real resolver and verifies font_resolve_purge_count() increments once after
+# the threshold.
+if test_ft_dep.found() and test_hb_dep.found() and test_fc_dep.found()
+    test_font_resolve_purge = executable('test_font_resolve_purge',
+        ['ui/test_font_resolve_purge.c',
+         '../src/ui/panel/font_resolve.c',
+         '../src/ui/panel/font_cache.c'],
+        include_directories: wayland_test_inc,
+        dependencies: [libtypio_dep, test_ft_dep, test_hb_dep, test_fc_dep],
+    )
+    test('font_resolve_purge', test_font_resolve_purge)
 endif
 
 test_vk_bridge = executable('test_vk_bridge',

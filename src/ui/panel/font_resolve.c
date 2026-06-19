@@ -40,7 +40,8 @@ static uint64_t g_fc_purge_count;   /* cumulative FcFini() invocations (diagnost
 
 static void maybe_drain_fontconfig(void)
 {
-    if (g_misses_since_fc_purge < FONTCONFIG_PURGE_PERIOD) return;
+    if (!font_resolve_should_purge(g_misses_since_fc_purge, FONTCONFIG_PURGE_PERIOD))
+        return;
     typio_log_debug("font_resolve: draining Fontconfig internal caches "
                     "(misses=%u purges=%llu)",
                     g_misses_since_fc_purge,
@@ -450,4 +451,12 @@ void font_resolve_get_diag(uint64_t *out_hits, uint64_t *out_misses)
 uint64_t font_resolve_purge_count(void)
 {
     return g_fc_purge_count;
+}
+
+bool font_resolve_should_purge(uint32_t misses_since_purge, uint32_t period)
+{
+    /* period == 0 would cause an infinite-purge loop; treat it as "never
+     * purge" so a misconfiguration cannot deadlock the resolver. */
+    if (period == 0) return false;
+    return misses_since_purge >= period;
 }

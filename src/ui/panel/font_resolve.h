@@ -69,6 +69,20 @@ void font_resolve_get_diag(uint64_t *out_hits, uint64_t *out_misses);
  * correlating candidate lag with Fontconfig cache churn. */
 uint64_t font_resolve_purge_count(void);
 
+/* Pure decision predicate extracted from the per-miss purge check so the
+ * trigger cadence is unit-testable without Fontconfig. Returns true iff
+ * the caller should invoke FcFini() now to drain Fontconfig's internal
+ * caches.
+ *
+ *   @misses_since_purge — cache misses accumulated since the last drain
+ *   @period             — drain cadence (typically FONTCONFIG_PURGE_PERIOD)
+ *
+ * The historical concern: Fontconfig's process-global state grows with
+ * every FcFontMatch / FcFontSort call and is only drained by FcFini(); on
+ * the hot path the drain was gated on a manual config reload, so long
+ * CJK-heavy sessions accumulated per-query cost without bound. */
+bool font_resolve_should_purge(uint32_t misses_since_purge, uint32_t period);
+
 #ifdef __cplusplus
 }
 #endif

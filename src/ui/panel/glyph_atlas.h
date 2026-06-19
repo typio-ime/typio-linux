@@ -30,12 +30,17 @@
 #ifndef TYPIO_WL_GLYPH_ATLAS_H
 #define TYPIO_WL_GLYPH_ATLAS_H
 
-#include <flux/flux.h>
-
-#include <ft2build.h>
-#include FT_FREETYPE_H
+/* flux_image and FT_Face are opaque pointer types throughout this header.
+ * Forward-declare them so the header is includable from CPU-only tests
+ * (which exercise only the pure predicates, the queue/flush mechanics, and
+ * the diagnostic counters) without dragging in <flux/flux.h> or <ft2build.h>.
+ * TUs that call glyph_atlas_get / glyph_atlas_image must still include those
+ * headers themselves to get the complete type. */
+typedef struct flux_image flux_image;
+typedef struct FT_FaceRec_ *FT_Face;
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -90,6 +95,58 @@ const GlyphSlot *glyph_atlas_get(uint32_t font_id, FT_Face face, uint32_t glyph_
  * non-drawable so the next draw skips them instead of sampling garbage. */
 bool glyph_atlas_flush(void);
 
+/* Current pending-queue depth. Diagnostic: lets a test verify the queue
+ * accumulated the expected misses before a flush, and lets the slow-render
+ * path correlate "flush took ms" with "flush had N pending regions". */
+uint32_t glyph_atlas_pending_count(void);
+
+/* Cap on the pending queue, exposed for tests that verify overflow handling. */
+#define GLYPH_PENDING_CAP 1024u
+
+/* ── Test-only hooks ───────────────────────────────────────────────────────
+ *
+ * The full glyph_atlas_get → glyph_atlas_flush path needs a GPU (FreeType
+ * rasterisation + Vulkan submit). The queue management and batching contract
+ * are pure CPU, so we expose minimal injection points to verify them without
+ * a device. Production code does not call these.
+ */
+
+typedef struct GlyphUploadRegion GlyphUploadRegion;
+
+/* Upload function signature used by glyph_atlas_flush. The default
+ * implementation calls glyph_upload_regions(glyph_atlas_image(), ...); a test
+ * injects a counting / failure-simulating stub. */
+typedef bool (*GlyphAtlasUploadFn)(const GlyphUploadRegion *regions, size_t count,
+                                    void *user);
+
+/* Override the upload function used by the next glyph_atlas_flush call. Pass
+ * NULL to restore the default. @user is forwarded to @fn on each call. */
+void glyph_atlas_set_upload_fn(GlyphAtlasUploadFn fn, void *user);
+
+/* Allocate just the hash-slot array, with no atlas image and no GPU. Lets a
+ * CPU-only test verify the slot-marking path on flush failure. Idempotent. */
+void glyph_atlas_test_init_slots(void);
+
+/* Drop the queue + slots without touching any GPU resource. Test-only
+ * teardown matching test_init_slots. */
+void glyph_atlas_test_reset(void);
+
+/* Push a synthetic pending upload entry without rasterising a glyph. The
+ * slot at @slot_index must already exist (caller has called
+ * glyph_atlas_test_init_slots). Steals @data (caller must not free it on
+ * success). Returns false if the queue overflowed past GLYPH_PENDING_CAP
+ * (the inline flush will already have fired). */
+bool glyph_atlas_test_push_pending(uint32_t slot_index,
+                                    uint32_t x, uint32_t y,
+                                    uint32_t w, uint32_t h,
+                                    uint8_t *data, size_t bytes);
+
+/* Direct slot-flag access for the failure-marking test: set / read the
+ * drawable bit at @idx without going through glyph_atlas_get. The slot must
+ * exist (caller has called glyph_atlas_test_init_slots). */
+void glyph_atlas_test_set_drawable(uint32_t idx, bool drawable);
+bool glyph_atlas_test_get_drawable(uint32_t idx);
+
 /* The atlas texture, for sampling sub-rects at draw time. Builds the atlas on
  * demand; returns NULL only when no render device exists yet. */
 flux_image *glyph_atlas_image(void);
@@ -99,6 +156,22 @@ flux_image *glyph_atlas_image(void);
  * (before any frame command recording); it fences the device idle. Returns
  * true if a rebuild occurred. */
 bool glyph_atlas_reclaim(void);
+
+/* Pure decision predicate extracted from glyph_atlas_reclaim so the trigger
+ * contract (75% load OR packer exhaustion, per the header doc) can be tested
+ * without a GPU. Returns true iff the caller should rebuild the atlas.
+ *
+ *   @live_count        — currently-occupied hash slots
+ *   @packer_exhausted  — shelf packer ran out of texture space
+ *   @slot_capacity     — total hash slots (denominator for the load factor)
+ *   @threshold_pct     — load-factor percent that triggers reclaim (e.g. 75)
+ *
+ * The historical bug this guards against: the implementation only checked
+ * packer exhaustion even though the header documented both triggers, so a
+ * long session that filled the hash table without saturating the texture
+ * never reclaimed — probe chains lengthened toward O(n) per glyph. */
+bool glyph_atlas_should_reclaim(uint32_t live_count, bool packer_exhausted,
+                                 uint32_t slot_capacity, uint32_t threshold_pct);
 
 /* Occupied hash-slot count (live glyph entries). */
 uint32_t glyph_atlas_entry_count(void);
