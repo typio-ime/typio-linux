@@ -199,7 +199,14 @@ static int sni_property_value(sd_bus_message *m, const char *property,
                strcmp(property, "AttentionIconPixmap") == 0) {
         return append_empty_pixmap_array(m);
     } else if (strcmp(property, "OverlayIconName") == 0) {
-        const char *val = tray->overlay_icon_name ? tray->overlay_icon_name : "";
+        /* Suppress the corner overlay while a badge is driving IconPixmap;
+         * otherwise the host composites the microphone glyph on top of the
+         * rendered language text, which turns a 3-character badge (e.g. `Рус`,
+         * `الد`) into an unreadable blob at typical tray sizes. The voice
+         * presence is still advertised in the tooltip and the menu. */
+        const char *val = (!tray_badge_active(tray) && tray->overlay_icon_name)
+                              ? tray->overlay_icon_name
+                              : "";
         return sd_bus_message_append_basic(m, 's', val);
     } else if (strcmp(property, "AttentionIconName") == 0) {
         return sd_bus_message_append_basic(m, 's', "");
@@ -743,27 +750,39 @@ void typio_tray_set_icon(TypioTray *tray, const char *icon_name) {
     free(tray->icon_name);
     tray->icon_name = typio_strdup(proposed);
     typio_tray_sni_emit_signal(tray, "NewIcon");
+    /* Dropping a badge re-exposes the corner overlay; nudge the host to
+     * re-read OverlayIconName (it was suppressed while the badge was active). */
+    if (had_badge) {
+        typio_tray_sni_emit_signal(tray, "NewOverlayIcon");
+    }
 }
 
 void typio_tray_set_badge(TypioTray *tray, const char *badge_text) {
     if (!tray) {
         return;
     }
+    bool had_badge = tray->badge_pixmap_count > 0;
     if (!badge_text || !badge_text[0]) {
-        if (tray->badge_pixmap_count > 0) {
+        if (had_badge) {
             tray_clear_badge(tray);
             typio_tray_sni_emit_signal(tray, "NewIcon");
+            /* Badge → no-badge transition re-exposes the corner overlay. */
+            typio_tray_sni_emit_signal(tray, "NewOverlayIcon");
         }
         return;
     }
     /* Unchanged badge already rendered — nothing to do. */
-    if (tray->badge_pixmap_count > 0 && tray->badge_text &&
+    if (had_badge && tray->badge_text &&
         strcmp(tray->badge_text, badge_text) == 0) {
         return;
     }
 
-    /* White glyphs with a dark halo (see icon_badge.c) read on any panel. */
-    const int sizes[TYPIO_TRAY_BADGE_SIZES] = { 22, 44 };
+    /* White glyphs with a dark halo (see icon_badge.c) read on any panel.
+     * The size ladder matches what SNI hosts typically request on Linux/Wayland
+     * (16/22/24/32) plus HiDPI and fractional-scale sizes (44/48/64/96/128),
+     * so the host can downscale from a close fit instead of upscaling from
+     * 22 px and producing a blurry badge. */
+    const int sizes[TYPIO_TRAY_BADGE_SIZES] = { 16, 22, 24, 32, 44, 48, 64, 96, 128 };
     TypioBadgePixmap rendered[TYPIO_TRAY_BADGE_SIZES] = {0};
     size_t n = typio_icon_badge_render(badge_text, sizes, TYPIO_TRAY_BADGE_SIZES,
                                        0xFFFFFFu, rendered,
@@ -781,6 +800,11 @@ void typio_tray_set_badge(TypioTray *tray, const char *badge_text) {
     tray->badge_pixmap_count = n;
     tray->badge_text = typio_strdup(badge_text);
     typio_tray_sni_emit_signal(tray, "NewIcon");
+    /* No-badge → badge transition suppresses the corner overlay so the host
+     * does not composite a microphone glyph over the rendered language text. */
+    if (!had_badge) {
+        typio_tray_sni_emit_signal(tray, "NewOverlayIcon");
+    }
 }
 
 void typio_tray_set_overlay_icon(TypioTray *tray, const char *icon_name) {

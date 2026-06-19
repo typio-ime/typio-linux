@@ -13,8 +13,12 @@
 #  include <systemd/sd-bus.h>
 #endif
 
-/* Pixmap sizes rendered for a language badge (22px + 44px for HiDPI). */
-#define TYPIO_TRAY_BADGE_SIZES 2
+/* Pixmap sizes rendered for a language badge. The ladder covers the common
+ * SNI host target sizes (16/22/24/32 for Waybar/Swaybar/Plasma/GNOME shell)
+ * plus 44/48/64/96/128 for HiDPI and fractional-scaled outputs. SNI has no
+ * scale channel, so we ship one pixmap per size and let the host pick the
+ * closest fit rather than upscaling a tiny raster (ADR-0032). */
+#define TYPIO_TRAY_BADGE_SIZES 9
 
 typedef struct TypioStateController TypioStateController;
 
