@@ -129,6 +129,7 @@ Parsed by libtypio.  All values are shortcut strings such as `Ctrl+Shift` or
 | `switch_keyboard_engine` | *(unbound)* | Cycle to the next keyboard engine. |
 | `exit` | `Ctrl+Shift+Escape` | Emergency shutdown of the daemon. |
 | `voice_ptt` | `Super+v` | Push-to-talk for voice input. |
+| `summon_indicator` | `Ctrl+Super+i` | Actively re-show the on-screen indicator (language · engine · mode). Only fires while a text field is focused — the indicator uses a `zwp_input_popup_surface_v2` bound to the active input-method session. |
 
 ### `[notifications]` — desktop notification policy
 

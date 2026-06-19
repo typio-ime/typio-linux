@@ -119,3 +119,4 @@
 # switch_keyboard_engine = ""        # unbound by default (ADR-0031)
 # exit = "Ctrl+Shift+Escape"
 # voice_ptt = "Super+v"
+# summon_indicator = "Ctrl+Super+i"  # re-show the language/engine/mode banner

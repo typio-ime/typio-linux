@@ -24,6 +24,10 @@ typedef struct TypioShortcutConfig {
     TypioShortcutBinding switch_language;
     TypioShortcutBinding emergency_exit;
     TypioShortcutBinding voice_ptt;
+    /* Ctrl+Super+i: actively summon the on-screen indicator (language ·
+     * engine · mode). Requires a focused text field because the indicator
+     * uses a zwp_input_popup_surface_v2. */
+    TypioShortcutBinding summon_indicator;
 } TypioShortcutConfig;
 
 /** Resolve every cached binding from the live config (or built-in defaults

@@ -228,6 +228,8 @@ const char *typio_wl_reserved_action_name(TypioWlReservedAction action) {
         return "emergency_exit";
     case TYPIO_WL_RESERVED_ACTION_VOICE_PTT:
         return "voice_ptt";
+    case TYPIO_WL_RESERVED_ACTION_SUMMON_INDICATOR:
+        return "summon_indicator";
     case TYPIO_WL_RESERVED_ACTION_NONE:
     default:
         return "none";
@@ -257,8 +259,13 @@ TypioWlReservedAction typio_wl_key_route_reserved_action(
     }
 
     if (typio_wl_key_route_binding_matches_press(&shortcuts->voice_ptt,
-                                                  keysym, modifiers)) {
+                                                   keysym, modifiers)) {
         return TYPIO_WL_RESERVED_ACTION_VOICE_PTT;
+    }
+
+    if (typio_wl_key_route_binding_matches_press(&shortcuts->summon_indicator,
+                                                   keysym, modifiers)) {
+        return TYPIO_WL_RESERVED_ACTION_SUMMON_INDICATOR;
     }
 
     return TYPIO_WL_RESERVED_ACTION_NONE;
@@ -389,6 +396,21 @@ void typio_wl_key_route_process_press(TypioWlKeyboard *keyboard,
                                  "emergency_exit");
         typio_wl_keyboard_release_grab(keyboard);
         typio_wl_frontend_stop(frontend);
+        return;
+    }
+
+    if (reserved_action == TYPIO_WL_RESERVED_ACTION_SUMMON_INDICATOR) {
+        /* Actively re-show the indicator on demand. Same entry point the
+         * engine-change callback uses, so it bypasses the recent-input
+         * cooldown. Needs a focused text field — the indicator surface is a
+         * zwp_input_popup_surface_v2 bound to the active session; if there is
+         * no focused context the coordinator will drop the request silently. */
+        typio_wl_frontend_show_indicator_for_state(frontend, nullptr);
+        decision = key_route_decision(TYPIO_WL_KEY_ACTION_CONSUME,
+                                      TYPIO_WL_KEY_REASON_TYPIO_RESERVED);
+        key_route_trace_decision(keyboard, "press-indicator", key, keysym,
+                                 modifiers, unicode, TYPIO_KEY_TRACK_IDLE,
+                                 decision, "summon_indicator");
         return;
     }
 

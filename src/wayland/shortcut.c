@@ -29,4 +29,5 @@ void typio_shortcut_config_load(TypioShortcutConfig *out,
     load_one(&out->switch_language, config, "switch_language");
     load_one(&out->emergency_exit,  config, "exit");
     load_one(&out->voice_ptt,       config, "voice_ptt");
+    load_one(&out->summon_indicator, config, "summon_indicator");
 }
