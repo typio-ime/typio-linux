@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-06-19
+
+### Fixed
+
+- README no longer mentions the D-Bus status interface (removed in
+  ADR-0008) and no longer references the nonexistent `-Denable_status_bus`
+  meson option; the systray is correctly described as sd-bus / libsystemd.
+- `docs/dev/setup.md` lists `libsystemd` (sd-bus) instead of `dbus-1` as
+  the systray prerequisite; dropped `enable_status_bus` from the meson
+  options table.
+- `docs/reference/stability.md` now reports the current `protocolVersion`
+  as `3` (was `2`) and includes `language.*` in the TIP method-surface row.
+
 ## [0.3.0] - 2026-06-13
 
 ### Added
