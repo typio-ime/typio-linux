@@ -33,7 +33,7 @@ Install these from your system package manager:
 - `wayland-scanner`, `glslangValidator`
 - Wayland client libraries, `xkbcommon`
 - Vulkan, FreeType, HarfBuzz, fontconfig
-- `dbus-1` (if `-Denable_systray=true`)
+- `libsystemd` (sd-bus, required when `-Denable_systray=true`)
 - `libpipewire-0.3` (if `-Denable_voice=true`)
 
 Versions are not capped; the project is tested against latest Arch Linux and
@@ -268,8 +268,7 @@ meson install -C build
 |--------|---------|---------|
 | `build_tests` | `true` | Build unit and integration tests |
 | `enable_wayland` | `true` | Enable the Wayland frontend |
-| `enable_status_bus` | `true` | Enable the D-Bus runtime status/control interface |
-| `enable_systray` | `false` | Enable StatusNotifierItem support |
+| `enable_systray` | `false` | Enable StatusNotifierItem support (requires libsystemd / sd-bus) |
 | `enable_voice` | `false` | Enable PipeWire audio capture and voice session infrastructure |
 | `enable_asan` | `false` | Enable AddressSanitizer |
 | `enable_ubsan` | `false` | Enable UndefinedBehaviorSanitizer |

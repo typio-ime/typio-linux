@@ -10,9 +10,10 @@ binary.
 It embeds [libtypio](../libtypio) and provides the platform adapter layer:
 the Wayland text-input/input-method v2 client, virtual-keyboard bridge,
 the candidate Panel (rendered with flux/Vulkan), the UDS control socket,
-the D-Bus status interface, the StatusNotifierItem tray, and PipeWire
-voice capture. It translates Wayland/D-Bus events into libtypio
-abstractions and drives libtypio's callbacks back onto the compositor.
+the StatusNotifierItem tray, and PipeWire voice capture. It translates
+Wayland events into libtypio abstractions and drives libtypio's callbacks
+back onto the compositor. (The old D-Bus status interface was removed in
+ADR-0008; the tray speaks SNI via sd-bus when `-Denable_systray=true`.)
 
 Engine discovery is host-owned: at startup `typio` scans
 `<datadir>/typio/engines` for `typio-engine-*.toml` manifests and registers
@@ -23,7 +24,8 @@ paths.
 
 Requires [libtypio](https://github.com/ming2k/libtypio) (either installed
 system-wide or available via the meson wrap), Wayland, xkbcommon,
-fontconfig/harfbuzz/freetype, D-Bus, and (for the Panel) flux.
+fontconfig/harfbuzz/freetype, libsystemd (for sd-bus, when systray is
+enabled), and (for the Panel) flux.
 
 `libtypio` is resolved by pkg-config first.  Set `PKG_CONFIG_PATH` to point
 at a local cargo build, or rely on a system install:
@@ -42,10 +44,11 @@ ninja -C build
 See [`docs/dev/setup.md`](docs/dev/setup.md) for the full setup steps and
 additional options.
 
-Options: `-Denable_systray=true`, `-Denable_status_bus=true` (default),
-`-Denable_voice=true` for voice input support. Voice engines run as worker
-processes at runtime; this option only enables the host-side PipeWire capture
-infrastructure.
+Options: `-Denable_systray=true` enables the StatusNotifierItem tray
+(via sd-bus / libsystemd). `-Denable_voice=true` enables PipeWire audio
+capture and the `voice_input` host capability; voice engines run as
+worker processes at runtime, this option only enables the host-side
+capture infrastructure.
 
 ## Running
 

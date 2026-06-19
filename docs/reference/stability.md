@@ -21,7 +21,7 @@ breaking changes require a major version bump.
 | Interface | Tier | Consumers | Reference |
 |-----------|------|-----------|-----------|
 | TIP v1 wire format (UDS framing, JSON-RPC envelope, `protocolVersion` handshake) | Stable | `typioctl`, third-party tools | [IPC Protocol Reference](ipc-protocol.md) |
-| TIP method surface (`engine.*`, `keyboard.*`, `voice.*`, `config.*`, `daemon.*`, `events.*`) | Unstable | `typioctl`, third-party tools | [IPC Protocol Reference](ipc-protocol.md) |
+| TIP method surface (`engine.*`, `keyboard.*`, `voice.*`, `language.*`, `config.*`, `daemon.*`, `events.*`) | Unstable | `typioctl`, third-party tools | [IPC Protocol Reference](ipc-protocol.md) |
 | `core.toml` / `platform.toml` keys | Unstable | End users | [Configuration Reference](configuration.md) |
 | Engine manifest format (`typio-engine-*.toml`) | Experimental | Engine package authors | [Engine Discovery Reference](engine-discovery.md) |
 | Typio Engine Protocol (fd 3 channel) | Experimental, defined by libtypio | Engine package authors | libtypio documentation |
@@ -33,7 +33,7 @@ breaking changes require a major version bump.
 
 | Mechanism | Location | Current value |
 |-----------|----------|---------------|
-| `protocolVersion` | TIP `hello` response | `2` |
+| `protocolVersion` | TIP `hello` response | `3` |
 | `protocol` | Engine manifest | `typio-engine-protocol` |
 
 Clients must check `protocolVersion` before using namespace verbs.
