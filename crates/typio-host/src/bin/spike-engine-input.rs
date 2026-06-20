@@ -10,14 +10,14 @@
 //! cargo run --bin spike-engine-input -- --engine-dir ../typio-engine-rime/build
 //! ```
 
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::process::ExitCode;
 use std::sync::Mutex;
 
-use typio_abi::{TypioEventType, TypioKeyEvent};
+use typio_abi::{TypioEngineInfo, TypioEngineType, TypioEventType, TypioKeyEvent, TypioResult};
 
-use typio_host::engine_loader::EngineLoader;
 use typio_host::input_method::{InputMethodFrontend, LifecycleEvent};
+use typio_host::engine_loader::manifest::EngineManifest;
 
 static COMMITTED_TEXT: Mutex<Option<String>> = Mutex::new(None);
 
@@ -58,28 +58,126 @@ fn main() -> ExitCode {
     }
     eprintln!("OK: TypioInstance initialized");
 
-    // 2. Load engines into the instance's registry.
+    // Get the instance raw pointer for C ABI calls.
+    let instance_ptr = instance.as_mut() as *mut _;
+
+    // 2. Load engines into the instance's registry via C ABI.
     if let Some(ref dir) = engine_dir {
-        let instance_ptr = instance.as_mut() as *mut _;
         let reg_ptr = typio::instance::typio_instance_get_registry(instance_ptr);
-        if !reg_ptr.is_null() {
-            let mut loader = EngineLoader::with_voice();
-            let report = loader.load_dir(
-                &mut typio::core::registry::EngineRegistry::new(),
-                std::path::Path::new(dir),
+
+        // Scan the directory using our Rust engine_loader to discover
+        // manifests, then register each via the C ABI because the
+        // instance's registry is a TypioRegistry (C-side).
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("WARN: cannot read engine dir {dir}: {e}");
+                return ExitCode::from(1);
+            }
+        };
+
+        let mut registered = 0u32;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if !name.starts_with("typio-engine-") || !name.ends_with(".toml") {
+                continue;
+            }
+
+            // Parse the manifest.
+            let manifest = match EngineManifest::read_from(&path) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("  SKIP {}: {e}", path.display());
+                    continue;
+                }
+            };
+
+            // Build C strings for TypioEngineInfo fields.
+            let c_name = CString::new(manifest.name.as_str()).unwrap();
+            let c_display = CString::new(
+                manifest.display_name.as_deref().unwrap_or(&manifest.name),
+            ).unwrap();
+            let c_desc = CString::new(manifest.description.as_deref().unwrap_or("")).unwrap();
+            let c_author = CString::new(manifest.author.as_deref().unwrap_or("")).unwrap();
+            let c_icon = manifest.icon.as_ref().map(|s| CString::new(s.as_str()).unwrap());
+            let c_lang = CString::new(manifest.primary_language()).unwrap();
+
+            // Build argv.
+            let argv_strings: Vec<CString> = match manifest.argv(&path) {
+                Ok(v) => v.into_iter().filter_map(|s| CString::new(s).ok()).collect(),
+                Err(_) => continue,
+            };
+            if argv_strings.is_empty() {
+                continue;
+            }
+            let argv_ptrs: Vec<*const c_char> = argv_strings
+                .iter()
+                .map(|s| s.as_ptr())
+                .chain(std::iter::once(std::ptr::null()))
+                .collect();
+
+            let info = TypioEngineInfo {
+                name: c_name.as_ptr(),
+                display_name: c_display.as_ptr(),
+                description: c_desc.as_ptr(),
+                author: c_author.as_ptr(),
+                icon: c_icon.as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null()),
+                language: c_lang.as_ptr(),
+                type_: if manifest.engine_type == "voice" {
+                    TypioEngineType::TypioEngineTypeVoice
+                } else {
+                    TypioEngineType::TypioEngineTypeKeyboard
+                },
+                required_capabilities: std::ptr::null(),
+                optional_capabilities: std::ptr::null(),
+            };
+
+            let result = typio::c_api::registry::typio_registry_register_engine_process(
+                reg_ptr,
+                &info,
+                argv_ptrs.as_ptr(),
             );
-            eprintln!(
-                "Engine scan {}: {} ok, {} skip, {} fail",
-                dir,
-                report.registered,
-                report.skipped.len(),
-                report.failed.len()
-            );
+
+            if result == TypioResult::TypioOk {
+                eprintln!("  REGISTERED: {} ({})", manifest.name, manifest.engine_type);
+                registered += 1;
+                // Leaks the CStrings — intentional; the engine process
+                // backend holds these pointers for the daemon lifetime.
+                std::mem::forget(c_name);
+                std::mem::forget(c_display);
+                std::mem::forget(c_desc);
+                std::mem::forget(c_author);
+                std::mem::forget(c_icon);
+                std::mem::forget(c_lang);
+                std::mem::forget(argv_strings);
+            } else {
+                eprintln!("  SKIP {}: register returned {result:?}", manifest.name);
+            }
+        }
+
+        eprintln!("OK: {registered} engine(s) registered");
+
+        // Activate the first keyboard engine.
+        let mut kb_count: usize = 0;
+        let kb_list = typio::c_api::registry::typio_registry_list_keyboards(
+            reg_ptr,
+            &mut kb_count,
+        );
+        if !kb_list.is_null() && kb_count > 0 {
+            let first = unsafe { *kb_list };
+            if !first.is_null() {
+                let name = unsafe { CStr::from_ptr(first) };
+                eprintln!("OK: activating first keyboard engine: {}", name.to_string_lossy());
+                typio::c_api::registry::typio_registry_set_active_keyboard(reg_ptr, first);
+            }
         }
     }
 
     // 3. Create input context + wire callbacks.
-    let instance_ptr = instance.as_mut() as *mut _;
     let ctx = typio::input_context::typio_input_context_new(instance_ptr);
     if ctx.is_null() {
         eprintln!("FAIL: cannot create input context");
