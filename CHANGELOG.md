@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rust engine_loader port (`typio_host::engine_loader`).** Phase 1
+  port of `src/engine_loader.c` (678 lines of C). Discovers
+  `typio-engine-*.toml` manifests on disk, parses them with the `toml`
+  crate (the C version rolled its own line-based parser because there is
+  no good C TOML library), negotiates host-vs-engine capabilities, and
+  registers out-of-process engine backends with libtypio's native Rust
+  `EngineRegistry` — bypassing the C ABI entirely. 30 unit tests +
+  4 integration tests, the integration tests verifying that every real
+  engine manifest shipped by the sibling repos (mozc, rime, sherpa,
+  whisper) parses and registers successfully against live libtypio.
+  The C version is unchanged and still ships; this is the parallel Rust
+  implementation.
+
 - **Rust host crate skeleton (`typio-host`) + Phase 0 wayland spike.**
   Added a cargo workspace at the repo root and `crates/typio-host/` as
   its first member. The spike connects to the live compositor, snapshots
