@@ -114,6 +114,10 @@ pub struct InputMethodState {
     popup_surface: ZwpInputPopupSurfaceV2,
     /// Text input rectangle from the compositor (cursor position).
     pub text_input_rect: Option<(i32, i32, i32, i32)>,
+    /// Current candidate list for the panel to render.
+    pub candidates: Vec<String>,
+    /// Index of the highlighted candidate.
+    pub selected_candidate: usize,
     serial: u32,
     active: bool,
     initialized: bool,
@@ -166,6 +170,12 @@ impl InputMethodState {
     /// Forward modifier state to the focused app.
     pub fn forward_modifiers(&self, depressed: u32, latched: u32, locked: u32, group: u32) {
         self.virtual_keyboard.modifiers(depressed, latched, locked, group);
+    }
+
+    /// Set the current candidate list + selected index for the panel.
+    pub fn set_candidates(&mut self, candidates: Vec<String>, selected: usize) {
+        self.candidates = candidates;
+        self.selected_candidate = selected;
     }
 
     /// Take the pending key event for processing by the event loop.
@@ -317,6 +327,8 @@ impl InputMethodFrontend {
             popup_surface_obj,
             popup_surface,
             text_input_rect: None,
+            candidates: Vec::new(),
+            selected_candidate: 0,
             serial: 0,
             active: false,
             initialized: false,
