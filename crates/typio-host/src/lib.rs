@@ -11,6 +11,13 @@
 //!   `typio-engine-*.toml` manifests, parses them with the `toml` crate,
 //!   negotiates capabilities, and registers out-of-process engine backends
 //!   with libtypio's `EngineRegistry` via its native Rust API.
+//! - [`config_watcher`] — Phase 2 port of the watch mechanism in
+//!   `src/wayland/runtime_config.c`. Watches the config directory and
+//!   engine-manifest subdirectory via inotify, filters events to the
+//!   relevant files, and debounces with a one-shot timerfd. Pure
+//!   mechanism — no frontend side effects; the caller receives a
+//!   callback when a confirmed reload should fire.
 
+pub mod config_watcher;
 pub mod engine_loader;
 pub mod protocols;

@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rust config_watcher port + calloop spike (`typio_host::config_watcher`
+  + `spike-config-watcher` bin).** Phase 2 port of the watch mechanism
+  in `src/wayland/runtime_config.c`. Watches the config directory (and
+  optionally the engines subdir) via inotify, filters events to
+  `core.toml` / `platform.toml`, and debounces reload triggers with a
+  one-shot Linux timerfd. Pure mechanism — the frontend side effects
+  that the C version mixes in (purge font caches, invalidate panel,
+  reload shortcuts, switch voice engine) are intentionally NOT ported;
+  the caller receives a typed reload trigger and decides what to do.
+
+  The watcher owns an inotify instance + a timerfd and exposes both raw
+  fds for integration with any event loop. The accompanying
+  `spike-config-watcher` bin verifies end-to-end: it plugs both fds
+  into a real `calloop::EventLoop`, drives the state machine, and
+  demonstrates that three burst writes to `core.toml` collapse into a
+  single debounced reload (verified live against `/tmp/typio-spike-cfg`).
+  Introduces `calloop` as the event-loop foundation for subsequent
+  fd-handling subsystem ports (IPC UDS server, PipeWire, sd-bus tray).
+
+  7 unit tests + the live spike. The C version is unchanged and still
+  ships; this is the parallel Rust implementation.
+
 - **Rust engine_loader port (`typio_host::engine_loader`).** Phase 1
   port of `src/engine_loader.c` (678 lines of C). Discovers
   `typio-engine-*.toml` manifests on disk, parses them with the `toml`
