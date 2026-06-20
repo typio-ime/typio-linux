@@ -26,6 +26,7 @@ pub mod input_method;
 pub mod ipc;
 pub mod keyboard_policy;
 pub mod notifier;
+pub mod panel;
 pub mod protocols;
 pub mod repeat_timer;
 pub mod resume_signal;

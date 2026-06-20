@@ -23,6 +23,8 @@ calloop.workspace = true
 zbus.workspace = true
 libc.workspace = true
 xkbcommon.workspace = true
+ab_glyph.workspace = true
+flux-sys.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
