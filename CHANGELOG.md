@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`-Werror=switch` failure in `ipc_bus.c`.** `TYPIO_STATE_CHANGE_LANGUAGES`
+  (added in ADR-0034 alongside the dynamic engine capabilities work) was
+  handled by the tray's switch but not by the IPC bus's, so
+  `-Dwerror=true` (CI's build job) rejected the build. The case is now
+  present with a no-op body documenting the gap: IPC clients that cache
+  `language.list` results will be stale until a future `languages.changed`
+  topic is added (separate, protocol-bumping work).
+
 ### Changed
 
 - **flux dependency pinned to v0.1.0** (first standalone release). Bumped

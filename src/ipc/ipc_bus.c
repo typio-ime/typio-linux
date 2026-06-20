@@ -195,6 +195,14 @@ static void ipc_bus_state_listener(void *user_data,
     case TYPIO_STATE_CHANGE_STATUS_ICON:
         /* Status icon is consumed by the systray adapter, not pushed over UDS. */
         break;
+    case TYPIO_STATE_CHANGE_LANGUAGES:
+        /* ADR-0034: an engine's declared language set changed at runtime.
+         * The tray handles this by rebuilding its menu; the IPC bus does
+         * not yet surface a `languages.changed` event, so clients that
+         * cache `language.list` results will be stale until they re-query.
+         * Adding the topic is a protocol bump (v3 → v4) tracked
+         * separately. */
+        break;
     }
 }
 
