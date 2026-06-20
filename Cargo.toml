@@ -35,6 +35,7 @@ libc = "0.2"
 # blocking-api feature gives us Connection::system() and receive_signal()
 # — the sync API surface we use from the logind worker thread.
 zbus = { version = "5", default-features = true, features = ["blocking-api"] }
+xkbcommon = "0.9"
 
 # The framework library — sibling checkout at ../libtypio.
 # Production builds should resolve via PKG_CONFIG_PATH / published crate;

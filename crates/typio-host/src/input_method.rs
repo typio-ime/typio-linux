@@ -45,11 +45,27 @@ use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_manager_v1::ZwpV
 /// Callback type for input-method lifecycle events.
 pub type LifecycleCallback = Box<dyn FnMut(LifecycleEvent) + Send>;
 
+/// A decoded key event with xkbcommon-resolved keysym.
+#[derive(Debug, Clone)]
+pub struct DecodedKeyEvent {
+    /// Raw keycode from the compositor (evdev scancode).
+    pub keycode: u32,
+    /// XKB keycode (raw + 8). xkbcommon uses this internally.
+    pub xkb_keycode: u32,
+    /// Resolved keysym (e.g. XKB_KEY_a = 0x0061).
+    pub keysym: u32,
+    /// UTF-8 text produced by this key, if any (from xkb_state_key_get_utf8).
+    pub unicode: String,
+    /// Press (1) or release (0).
+    pub state: u32,
+    /// Timestamp in milliseconds (from the compositor).
+    pub time: u32,
+}
+
 /// Lifecycle events the frontend surfaces to the caller.
 #[derive(Debug, Clone)]
 pub enum LifecycleEvent {
-    /// Input method was activated — the compositor gave us the keyboard
-    /// grab.
+    /// Input method was activated.
     Activated,
     /// Input method was deactivated.
     Deactivated,
@@ -63,21 +79,11 @@ pub enum LifecycleEvent {
         cursor: u32,
         anchor: u32,
     },
-    /// Content type hint from the focused app (password, number, etc.).
+    /// Content type hint from the focused app.
     ContentType { hint: u32, purpose: u32 },
-    /// A key was pressed or released (from the keyboard grab).
-    Key {
-        time: u32,
-        key: u32,
-        state: u32,
-    },
-    /// Modifier state changed (from the keyboard grab).
-    Modifiers {
-        mods_depressed: u32,
-        mods_latched: u32,
-        mods_locked: u32,
-        group: u32,
-    },
+    /// A key was pressed or released. Carries the fully decoded
+    /// keysym + unicode text from xkbcommon.
+    Key(DecodedKeyEvent),
     /// Keyboard repeat rate / delay info.
     RepeatInfo { rate: i32, delay: i32 },
 }
@@ -90,16 +96,23 @@ pub struct InputMethodState {
     #[allow(dead_code)]
     seat: wl_seat::WlSeat,
     input_method: ZwpInputMethodV2,
-    /// The keyboard grab — created upfront so it's ready when the
-    /// compositor activates us. The C version creates it lazily in
-    /// the focus controller's "create grab" effect; the spike creates
-    /// it eagerly to simplify the code.
     #[allow(dead_code)]
     keyboard_grab: ZwpInputMethodKeyboardGrabV2,
     serial: u32,
     active: bool,
     initialized: bool,
     callback: Option<LifecycleCallback>,
+    /// xkbcommon context — created once, reused across keymap changes.
+    xkb_context: xkbcommon::xkb::Context,
+    /// Current keymap state — set when the compositor sends a keymap fd.
+    /// None until the first keymap event.
+    xkb_state: Option<xkbcommon::xkb::State>,
+    /// Current keymap keymap — kept alive alongside the state.
+    xkb_keymap: Option<xkbcommon::xkb::Keymap>,
+    /// Physical modifier state from the latest modifiers event.
+    mods_depressed: u32,
+    mods_latched: u32,
+    mods_locked: u32,
 }
 
 impl InputMethodState {
@@ -125,6 +138,43 @@ impl InputMethodState {
     fn fire(&mut self, event: LifecycleEvent) {
         if let Some(cb) = self.callback.as_mut() {
             cb(event);
+        }
+    }
+
+    /// Load an XKB keymap from a compositor-provided file descriptor.
+    fn load_keymap_from_fd(&mut self, fd: std::os::fd::OwnedFd, size: u32) {
+        use std::io::Read;
+        let mut file = std::fs::File::from(fd);
+        let mut buffer = vec![0u8; size as usize];
+        if file.read_exact(&mut buffer).is_err() {
+            return;
+        }
+        // xkb_keymap_new_from_buffer expects a C string-like buffer;
+        // the keymap text is null-terminated in practice.
+        let keymap_string = String::from_utf8_lossy(&buffer)
+            .trim_end_matches('\0')
+            .to_string();
+
+        let keymap = xkbcommon::xkb::Keymap::new_from_string(
+            &self.xkb_context,
+            keymap_string,
+            xkbcommon::xkb::KEYMAP_FORMAT_TEXT_V1,
+            xkbcommon::xkb::KEYMAP_COMPILE_NO_FLAGS,
+        );
+
+        if let Some(keymap) = keymap {
+            let mut xkb_state = xkbcommon::xkb::State::new(&keymap);
+            // Apply current modifier state.
+            xkb_state.update_mask(
+                self.mods_depressed,
+                self.mods_latched,
+                self.mods_locked,
+                0, // depressed_layout
+                0, // latched_layout
+                0, // locked_layout
+            );
+            self.xkb_keymap = Some(keymap);
+            self.xkb_state = Some(xkb_state);
         }
     }
 }
@@ -178,6 +228,12 @@ impl InputMethodFrontend {
             active: false,
             initialized: false,
             callback,
+            xkb_context: xkbcommon::xkb::Context::new(xkbcommon::xkb::CONTEXT_NO_FLAGS),
+            xkb_state: None,
+            xkb_keymap: None,
+            mods_depressed: 0,
+            mods_latched: 0,
+            mods_locked: 0,
         };
 
         Ok(Self {
@@ -405,24 +461,48 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
     ) {
         use zwp_input_method_keyboard_grab_v2::Event;
         match event {
-            Event::Keymap { format: _, fd: _, size: _ } => {
-                // The C version memory-maps the fd and creates an
-                // xkbcommon keymap. The spike just notes the event;
-                // xkbcommon integration comes with the keyboard router
-                // port.
+            Event::Keymap { format, fd, size } => {
+                let fmt_raw: u32 = match &format {
+                    wayland_client::WEnum::Value(v) => *v as u32,
+                    wayland_client::WEnum::Unknown(u) => *u,
+                };
+                if fmt_raw != 1 {
+                    return;
+                }
+                state.load_keymap_from_fd(fd, size);
             }
             Event::Key { time, key, state: key_state, serial: _ } => {
-                // key_state is WEnum<wl_keyboard::KeyState>; extract
-                // the raw u32 for the spike. Pressed=1, Released=0.
                 let raw_state: u32 = match &key_state {
                     wayland_client::WEnum::Value(v) => *v as u32,
                     wayland_client::WEnum::Unknown(u) => *u,
                 };
-                state.fire(LifecycleEvent::Key {
-                    time,
-                    key,
-                    state: raw_state,
+
+                let xkb_keycode = key + 8;
+                let kc = xkbcommon::xkb::Keycode::new(xkb_keycode);
+                let key_direction = if raw_state == 1 {
+                    xkbcommon::xkb::KeyDirection::Down
+                } else {
+                    xkbcommon::xkb::KeyDirection::Up
+                };
+                if let Some(ref mut xs) = state.xkb_state {
+                    xs.update_key(kc, key_direction);
+                }
+
+                let keysym: u32 = state.xkb_state.as_ref().map_or(0, |s| {
+                    s.key_get_one_sym(kc).into()
                 });
+                let unicode = state.xkb_state.as_ref().map_or(String::new(), |s| {
+                    s.key_get_utf8(kc)
+                });
+
+                state.fire(LifecycleEvent::Key(DecodedKeyEvent {
+                    keycode: key,
+                    xkb_keycode,
+                    keysym,
+                    unicode,
+                    state: raw_state,
+                    time,
+                }));
             }
             Event::Modifiers {
                 mods_depressed,
@@ -431,12 +511,19 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
                 group,
                 serial: _,
             } => {
-                state.fire(LifecycleEvent::Modifiers {
-                    mods_depressed,
-                    mods_latched,
-                    mods_locked,
-                    group,
-                });
+                state.mods_depressed = mods_depressed;
+                state.mods_latched = mods_latched;
+                state.mods_locked = mods_locked;
+                if let Some(ref mut xs) = state.xkb_state {
+                    xs.update_mask(
+                        mods_depressed,
+                        mods_latched,
+                        mods_locked,
+                        0,
+                        0,
+                        group,
+                    );
+                }
             }
             Event::RepeatInfo { rate, delay } => {
                 state.fire(LifecycleEvent::RepeatInfo { rate, delay });
