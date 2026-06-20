@@ -59,9 +59,9 @@ fn main() {
     eprintln!("  - A Rust host can drive libtypio via traits and Result<T, E>,");
     eprintln!("    paying nothing for the C ABI (which remains for engines).");
     eprintln!();
-    eprintln!("Known leak to fix later:");
-    eprintln!("  - EngineRegistry::set_instance takes `*mut TypioInstance` —");
-    eprintln!("    a C-shaped back-pointer for callbacks. This needs replacing");
-    eprintln!("    with a Rust closure / trait object in a follow-up so the");
-    eprintln!("    Rust host never has to construct TypioInstance.");
+    eprintln!("Former leak now closed:");
+    eprintln!("  - EngineRegistry::set_instance(*mut TypioInstance) was a no-op");
+    eprintln!("    vapor (InstanceHandle is a ZST with no methods). Removed in");
+    eprintln!("    libtypio; c_api/registry.rs no longer calls it. The Rust host");
+    eprintln!("    constructs EngineRegistry without ever needing TypioInstance.");
 }
