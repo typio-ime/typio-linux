@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit `version: '>= 0.1.0'` floor on the `dependency('flux')` lookup
   so a stale system install can no longer mask a broken wrap.
 
+- **flux diagnostics now flow through `typio_log`.** The device log
+  callback registered with `flux_device_create` was a no-op that swallowed
+  every `FLUX_LOG_*` record, including pipeline-creation warnings,
+  `frames_in_flight` clamps, and `flux_canvas_save` overflow reports. It
+  now maps the five flux log levels onto the matching `TypioLogLevel`
+  values and emits `flux: <msg> (<file>:<line>)` records, so GPU-side
+  diagnostics show up in `journalctl --user -u typio` next to the host's
+  own logs.
+
 ### Fixed
 
 - **Sibling-flux symlink resolved to the wrong path.** The meson helper

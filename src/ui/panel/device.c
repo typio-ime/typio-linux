@@ -11,15 +11,31 @@
 #include "device.h"
 
 #include <flux/flux.h>
+#include <typio/abi/log.h>
 
 static flux_device *global_device;
 
+/* Map flux's log levels onto typio's. The numeric values happen to match
+ * today (TRACE=0 ... ERROR=4 in both), but the names differ (FLUX_LOG_WARN
+ * vs TYPIO_LOG_WARNING), so the explicit switch guards against drift in
+ * either enum. flux passes the already-formatted @msg; we forward it
+ * verbatim with a flux: prefix and the source location. */
 static void flux_log_cb(flux_log_level level,
                         const char *file, int line,
                         const char *fmt, const char *msg,
                         void *user)
 {
-    (void)level; (void)file; (void)line; (void)fmt; (void)msg; (void)user;
+    (void)fmt; (void)user;
+    TypioLogLevel tl;
+    switch (level) {
+    case FLUX_LOG_TRACE: tl = TYPIO_LOG_TRACE;   break;
+    case FLUX_LOG_DEBUG: tl = TYPIO_LOG_DEBUG;   break;
+    case FLUX_LOG_INFO:  tl = TYPIO_LOG_INFO;    break;
+    case FLUX_LOG_WARN:  tl = TYPIO_LOG_WARNING; break;
+    case FLUX_LOG_ERROR: tl = TYPIO_LOG_ERROR;   break;
+    default:             tl = TYPIO_LOG_DEBUG;   break;
+    }
+    typio_logf(tl, "flux: %s (%s:%d)", msg ? msg : "", file ? file : "", line);
 }
 
 flux_device *typio_render_device_get(void)
