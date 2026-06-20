@@ -37,6 +37,23 @@ fn main() -> ExitCode {
             LifecycleEvent::ContentType { hint, purpose } => {
                 eprintln!("EVENT: content_type hint={hint} purpose={purpose}");
             }
+            LifecycleEvent::Key { time, key, state } => {
+                let state_str = if state == 1 { "PRESS" } else { "RELEASE" };
+                eprintln!("EVENT: key {state_str} keycode={key} time={time}");
+            }
+            LifecycleEvent::Modifiers {
+                mods_depressed,
+                mods_latched,
+                mods_locked,
+                group,
+            } => {
+                eprintln!(
+                    "EVENT: modifiers depressed=0x{mods_depressed:x} latched=0x{mods_latched:x} locked=0x{mods_locked:x} group={group}"
+                );
+            }
+            LifecycleEvent::RepeatInfo { rate, delay } => {
+                eprintln!("EVENT: repeat_info rate={rate} delay={delay}");
+            }
         }
     });
 

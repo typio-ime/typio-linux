@@ -35,6 +35,9 @@ use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::{wl_keyboard, wl_registry, wl_seat};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 
+use crate::protocols::input_method_v2::zwp_input_method_keyboard_grab_v2::{
+    self, ZwpInputMethodKeyboardGrabV2,
+};
 use crate::protocols::input_method_v2::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
 use crate::protocols::input_method_v2::zwp_input_method_v2::{self, ZwpInputMethodV2};
 use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
@@ -62,6 +65,21 @@ pub enum LifecycleEvent {
     },
     /// Content type hint from the focused app (password, number, etc.).
     ContentType { hint: u32, purpose: u32 },
+    /// A key was pressed or released (from the keyboard grab).
+    Key {
+        time: u32,
+        key: u32,
+        state: u32,
+    },
+    /// Modifier state changed (from the keyboard grab).
+    Modifiers {
+        mods_depressed: u32,
+        mods_latched: u32,
+        mods_locked: u32,
+        group: u32,
+    },
+    /// Keyboard repeat rate / delay info.
+    RepeatInfo { rate: i32, delay: i32 },
 }
 
 /// Wayland state — all bound protocol objects + tracking fields.
@@ -72,6 +90,12 @@ pub struct InputMethodState {
     #[allow(dead_code)]
     seat: wl_seat::WlSeat,
     input_method: ZwpInputMethodV2,
+    /// The keyboard grab — created upfront so it's ready when the
+    /// compositor activates us. The C version creates it lazily in
+    /// the focus controller's "create grab" effect; the spike creates
+    /// it eagerly to simplify the code.
+    #[allow(dead_code)]
+    keyboard_grab: ZwpInputMethodKeyboardGrabV2,
     serial: u32,
     active: bool,
     initialized: bool,
@@ -142,9 +166,14 @@ impl InputMethodFrontend {
 
         let input_method = im_manager.get_input_method(&seat, &qh, ());
 
+        // Create the keyboard grab upfront. The compositor will start
+        // delivering key events to it as soon as we're activated.
+        let keyboard_grab = input_method.grab_keyboard(&qh, ());
+
         let state = InputMethodState {
             seat,
             input_method,
+            keyboard_grab,
             serial: 0,
             active: false,
             initialized: false,
@@ -346,10 +375,6 @@ impl Dispatch<ZwpInputMethodV2, ()> for InputMethodState {
                 // Informational; recorded in the C version's focus_facts.
             }
             Event::ContentType { hint, purpose } => {
-                // ContentHint/ContentPurpose come in as WEnum wrappers
-                // around text-input-v3 enum types. For the spike, we
-                // pass the raw enum values via Debug formatting. The
-                // real daemon will interpret these for the engine.
                 state.fire(LifecycleEvent::ContentType {
                     hint: format!("{hint:?}").len() as u32,
                     purpose: format!("{purpose:?}").len() as u32,
@@ -364,6 +389,57 @@ impl Dispatch<ZwpInputMethodV2, ()> for InputMethodState {
             }
             Event::Unavailable => {
                 state.fire(LifecycleEvent::Unavailable);
+            }
+        }
+    }
+}
+
+impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwpInputMethodKeyboardGrabV2,
+        event: zwp_input_method_keyboard_grab_v2::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        use zwp_input_method_keyboard_grab_v2::Event;
+        match event {
+            Event::Keymap { format: _, fd: _, size: _ } => {
+                // The C version memory-maps the fd and creates an
+                // xkbcommon keymap. The spike just notes the event;
+                // xkbcommon integration comes with the keyboard router
+                // port.
+            }
+            Event::Key { time, key, state: key_state, serial: _ } => {
+                // key_state is WEnum<wl_keyboard::KeyState>; extract
+                // the raw u32 for the spike. Pressed=1, Released=0.
+                let raw_state: u32 = match &key_state {
+                    wayland_client::WEnum::Value(v) => *v as u32,
+                    wayland_client::WEnum::Unknown(u) => *u,
+                };
+                state.fire(LifecycleEvent::Key {
+                    time,
+                    key,
+                    state: raw_state,
+                });
+            }
+            Event::Modifiers {
+                mods_depressed,
+                mods_latched,
+                mods_locked,
+                group,
+                serial: _,
+            } => {
+                state.fire(LifecycleEvent::Modifiers {
+                    mods_depressed,
+                    mods_latched,
+                    mods_locked,
+                    group,
+                });
+            }
+            Event::RepeatInfo { rate, delay } => {
+                state.fire(LifecycleEvent::RepeatInfo { rate, delay });
             }
         }
     }
