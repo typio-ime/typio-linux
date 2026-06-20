@@ -41,6 +41,8 @@ use crate::protocols::input_method_v2::zwp_input_method_keyboard_grab_v2::{
 use crate::protocols::input_method_v2::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
 use crate::protocols::input_method_v2::zwp_input_method_v2::{self, ZwpInputMethodV2};
 use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
+use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1};
+use wayland_client::protocol::wl_compositor::WlCompositor;
 
 /// Callback type for input-method lifecycle events.
 pub type LifecycleCallback = Box<dyn FnMut(LifecycleEvent) + Send>;
@@ -98,6 +100,11 @@ pub struct InputMethodState {
     input_method: ZwpInputMethodV2,
     #[allow(dead_code)]
     keyboard_grab: ZwpInputMethodKeyboardGrabV2,
+    /// Virtual keyboard for forwarding unhandled keys to the focused app.
+    virtual_keyboard: ZwpVirtualKeyboardV1,
+    /// Compositor proxy (for creating panel surfaces later).
+    #[allow(dead_code)]
+    compositor: WlCompositor,
     serial: u32,
     active: bool,
     initialized: bool,
@@ -141,6 +148,22 @@ impl InputMethodState {
         self.input_method.commit(self.serial);
     }
 
+    /// Forward a key to the focused app via the virtual keyboard.
+    /// Used when the engine doesn't consume the key.
+    pub fn forward_key(&self, time: u32, key: u32, state: u32) {
+        self.virtual_keyboard.key(time, key, state);
+    }
+
+    /// Forward modifier state to the focused app.
+    pub fn forward_modifiers(&self, depressed: u32, latched: u32, locked: u32, group: u32) {
+        self.virtual_keyboard.modifiers(depressed, latched, locked, group);
+    }
+
+    /// Take the pending key event for processing by the event loop.
+    pub fn take_pending_key(&mut self) -> Option<DecodedKeyEvent> {
+        self.pending_key.take()
+    }
+
     fn fire(&mut self, event: LifecycleEvent) {
         if let Some(cb) = self.callback.as_mut() {
             cb(event);
@@ -155,14 +178,32 @@ impl InputMethodState {
         self.pending_commit.take()
     }
 
-    /// Flush a commit directly to the compositor. Convenience method
-    /// for the common case: commit the text, then flush via
-    /// `commit(serial)`.
+    /// Flush a commit directly to the compositor.
     pub fn commit_string_and_flush(&mut self, text: &str) {
         if !self.initialized || !self.active {
             return;
         }
         self.input_method.commit_string(text.to_string());
+        self.input_method.commit(self.serial);
+    }
+
+    /// Send preedit text to the compositor (shows inline composition
+    /// in the focused text field). Followed by commit(serial) to flush.
+    pub fn set_preedit_and_flush(&mut self, text: &str, cursor: u32) {
+        if !self.initialized || !self.active {
+            return;
+        }
+        self.input_method.set_preedit_string(text.to_string(), cursor as i32, cursor as i32);
+        self.input_method.commit(self.serial);
+    }
+
+    /// Clear any preedit and commit nothing (used on key release or
+    /// engine reset).
+    pub fn clear_preedit_and_flush(&mut self) {
+        if !self.initialized || !self.active {
+            return;
+        }
+        self.input_method.set_preedit_string(String::new(), 0, 0);
         self.input_method.commit(self.serial);
     }
 
@@ -239,16 +280,25 @@ impl InputMethodFrontend {
                 ConnectError::BindFailed("zwp_virtual_keyboard_manager_v1", format!("{e:?}"))
             })?;
 
+        // Bind wl_compositor (for creating panel surfaces).
+        let compositor: WlCompositor = globals
+            .bind(&qh, 1..=4, ())
+            .map_err(|e| ConnectError::BindFailed("wl_compositor", format!("{e:?}")))?;
+
         let input_method = im_manager.get_input_method(&seat, &qh, ());
 
-        // Create the keyboard grab upfront. The compositor will start
-        // delivering key events to it as soon as we're activated.
+        // Create the keyboard grab.
         let keyboard_grab = input_method.grab_keyboard(&qh, ());
+
+        // Create the virtual keyboard for forwarding unhandled keys.
+        let virtual_keyboard = _vk_manager.create_virtual_keyboard(&seat, &qh, ());
 
         let state = InputMethodState {
             seat,
             input_method,
             keyboard_grab,
+            virtual_keyboard,
+            compositor,
             serial: 0,
             active: false,
             initialized: false,
@@ -472,6 +522,30 @@ impl Dispatch<ZwpInputMethodV2, ()> for InputMethodState {
                 state.fire(LifecycleEvent::Unavailable);
             }
         }
+    }
+}
+
+impl Dispatch<ZwpVirtualKeyboardV1, ()> for InputMethodState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpVirtualKeyboardV1,
+        _event: zwp_virtual_keyboard_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WlCompositor, ()> for InputMethodState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlCompositor,
+        _event: <WlCompositor as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
     }
 }
 

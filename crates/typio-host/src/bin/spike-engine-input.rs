@@ -259,13 +259,12 @@ fn main() -> ExitCode {
                         frontend.state_mut().commit_string_and_flush(&text);
                     }
                 }
-            } else if !key.unicode.is_empty() && key.state == 1 {
-                // Engine didn't handle it — direct passthrough.
-                let blocking = mods & 0x4 != 0 || mods & 0x8 != 0 || mods & 0x10 != 0;
-                if !blocking {
-                    eprintln!("  PASS → {key:?}");
-                    frontend.state_mut().commit_string_and_flush(&key.unicode);
-                }
+            } else if key.state == 1 {
+                // Engine didn't handle it — forward to the focused app
+                // via the virtual keyboard so the keystroke doesn't
+                // disappear.
+                eprintln!("  FORWARD keycode={}", key.keycode);
+                frontend.state().forward_key(key.time, key.keycode, 1);
             }
         }
 

@@ -31,8 +31,6 @@
 //! - Font selection (flux default for now).
 
 use std::ffi::c_void;
-use std::os::fd::AsRawFd;
-use std::os::unix::io::RawFd;
 use std::ptr;
 
 // flux-sys re-exports all generated bindings at the crate root.
@@ -78,7 +76,7 @@ impl FluxPanel {
         height: u32,
     ) -> Result<Self, String> {
         // 1. Create Vulkan device with Wayland surface extension.
-        let wayland_ext = b"VK_KHR_wayland_surface\0".as_ptr() as *const _;
+        let wayland_ext = c"VK_KHR_wayland_surface".as_ptr() as *const _;
         let mut device_desc: flux_device_desc = std::mem::zeroed();
         device_desc.type_ = FType::FLUX_TYPE_DEVICE_DESC;
         device_desc.required_instance_extensions = &wayland_ext;
@@ -220,12 +218,12 @@ unsafe fn create_wayland_vk_surface(
     };
 
     // Load vkCreateWaylandSurfaceKHR from libvulkan.
-    let lib = unsafe { libc::dlopen(b"libvulkan.so.1\0".as_ptr() as *const _, libc::RTLD_NOW) };
+    let lib = unsafe { libc::dlopen(c"libvulkan.so.1".as_ptr() as *const _, libc::RTLD_NOW) };
     if lib.is_null() {
         return Err("cannot load libvulkan.so.1".into());
     }
 
-    let fn_name = b"vkCreateWaylandSurfaceKHR\0".as_ptr() as *const _;
+    let fn_name = c"vkCreateWaylandSurfaceKHR".as_ptr() as *const _;
     let func: unsafe extern "C" fn(
         *mut c_void,         // instance
         *const VkWaylandSurfaceCreateInfoKHR,
