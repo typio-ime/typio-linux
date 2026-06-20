@@ -38,6 +38,7 @@ zbus = { version = "5", default-features = true, features = ["blocking-api"] }
 xkbcommon = "0.9"
 ab_glyph = "0.2"
 flux-sys = { path = "../../flux/crates/flux-sys" }
+wayland-sys = "0.31"
 
 # The framework library — sibling checkout at ../libtypio.
 # Production builds should resolve via PKG_CONFIG_PATH / published crate;

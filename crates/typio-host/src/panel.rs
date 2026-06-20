@@ -1,43 +1,30 @@
-//! Candidate panel — text rendering via flux (Vulkan canvas).
+//! Candidate panel — flux text rendering on a raw Wayland surface.
 //!
-//! Uses flux-sys FFI bindings to create a Vulkan device, a Wayland
-//! surface, and render candidate text. The flux text module handles
-//! font lookup (fontconfig), shaping (harfbuzz), and rasterization
-//! (freetype) — all behind its C API.
+//! Uses wayland-sys (raw FFI to libwayland-client) to create a
+//! wl_surface independently of wayland-client's safe wrappers. This
+//! surface is passed to flux for VkSurfaceKHR creation, bypassing the
+//! pointer-isolation problem between wayland-client's opaque Proxy
+//! type and flux's need for a raw `wl_surface*`.
 //!
 //! ## Architecture
 //!
 //! ```text
-//! wl_surface (Wayland)
-//!   → VkSurfaceKHR (Vulkan Wayland surface)
-//!     → flux_surface (swapchain + present)
-//!       → flux_canvas (2D drawing context)
-//!         → flux_text (text rendering)
+//! libwayland-client.so (raw C API via wayland-sys)
+//!   → wl_display (shared with wayland-client's Connection)
+//!     → wl_compositor → wl_surface
+//!       → VkSurfaceKHR (via flux_device + vkCreateWaylandSurfaceKHR)
+//!         → flux_surface → flux_canvas → flux_text_draw
 //! ```
-//!
-//! ## What this module covers
-//!
-//! - Device + surface + canvas + text context lifecycle via flux-sys.
-//! - `draw_candidates()` — render a list of candidate strings with a
-//!   highlighted selection.
-//! - Surface resize handling.
-//!
-//! ## What is NOT covered yet
-//!
-//! - Popup positioning (needs zwp_input_popup_surface_v2 from
-//!   input-method-v2 protocol — requires Wayland event dispatch).
-//! - HiDPI / fractional-scale.
-//! - Theme colors (hardcoded for now).
-//! - Font selection (flux default for now).
 
 use std::ffi::c_void;
+use std::os::raw::c_char;
 use std::ptr;
 
-// flux-sys re-exports all generated bindings at the crate root.
 use flux_sys::{
     flux_arena, flux_arena_destroy, flux_arena_init, flux_arena_reset,
     flux_canvas, flux_canvas_begin, flux_canvas_destroy, flux_canvas_desc,
-    flux_canvas_end, flux_canvas_fill_rrect, flux_color_rgba,
+    flux_canvas_end, flux_canvas_fill_rrect,
+    flux_color_rgba,
     flux_device, flux_device_create, flux_device_desc, flux_device_release,
     flux_device_vk_instance, flux_frame, flux_frame_begin_desc,
     flux_frame_present, flux_get_last_error, flux_error_info,
@@ -48,11 +35,14 @@ use flux_sys::{
 };
 
 use flux_struct_type as FType;
-#[allow(unused_imports)]
-use flux_result as _FResult;
 use flux_text_family as FontFamily;
 
-/// Wrapper for a flux-backed panel: device + surface + canvas + text.
+/// A candidate panel backed by flux on a raw Wayland surface.
+///
+/// Created from a raw `wl_display*` (obtainable from
+/// `Connection::backend().display_ptr()`). The panel creates its own
+/// wl_surface via the raw C API, uses it for VkSurfaceKHR, and
+/// renders candidates via flux_text_draw.
 pub struct FluxPanel {
     device: *mut flux_device,
     surface: *mut flux_surface,
@@ -61,26 +51,32 @@ pub struct FluxPanel {
     arena: flux_arena,
     width: u32,
     height: u32,
+    // Keep the raw wl_surface alive for the panel's lifetime.
+    _wl_surface: *mut c_void,
 }
 
 impl FluxPanel {
     /// Create a panel backed by a Wayland surface via Vulkan.
     ///
-    /// `wl_display_fd` is the Wayland connection's fd.
-    /// `wl_surface_ptr` is a raw pointer to the `wl_surface` struct.
-    /// `width`/`height` are the initial size in physical pixels.
+    /// `wl_display_ptr` must be a valid `*mut wl_display` obtained
+    /// from the same Wayland connection the input-method frontend
+    /// uses (via `Connection::backend().display_ptr()`).
     ///
     /// # Safety
-    /// The caller must ensure `wl_surface_ptr` is a valid `wl_surface*`
-    /// for the lifetime of the returned `FluxPanel`.
+    /// `wl_display_ptr` must be valid for the panel's lifetime.
     pub unsafe fn new(
         wl_display_ptr: *mut c_void,
-        wl_surface_ptr: *mut c_void,
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
-        // 1. Create Vulkan device with Wayland surface extension.
-        let wayland_ext = c"VK_KHR_wayland_surface".as_ptr() as *const _;
+        // 1. Create a wl_surface via raw libwayland-client.
+        let wl_surface = raw_create_wl_surface(wl_display_ptr)?;
+        if wl_surface.is_null() {
+            return Err("cannot create wl_surface".into());
+        }
+
+        // 2. Create Vulkan device with Wayland surface extension.
+        let wayland_ext = c"VK_KHR_wayland_surface".as_ptr() as *const c_char;
         let mut device_desc: flux_device_desc = std::mem::zeroed();
         device_desc.type_ = FType::FLUX_TYPE_DEVICE_DESC;
         device_desc.required_instance_extensions = &wayland_ext;
@@ -92,14 +88,15 @@ impl FluxPanel {
             return Err(flux_last_error_string("flux_device_create"));
         }
 
-        // 2. Create VkSurfaceKHR from the wl_surface.
+        // 3. Create VkSurfaceKHR from the wl_surface.
         let vk_instance = flux_device_vk_instance(device) as *mut c_void;
-        let vk_surface = create_wayland_vk_surface(vk_instance, wl_display_ptr, wl_surface_ptr)?;
+        let vk_surface = create_wayland_vk_surface(vk_instance, wl_display_ptr, wl_surface)?;
         if vk_surface.is_null() {
+            flux_device_release(device);
             return Err("vkCreateWaylandSurfaceKHR returned NULL".into());
         }
 
-        // 3. Create flux surface.
+        // 4. Create flux surface.
         let mut surface_desc: flux_surface_desc = std::mem::zeroed();
         surface_desc.type_ = FType::FLUX_TYPE_SURFACE_DESC;
         surface_desc.vk_surface_khr = vk_surface;
@@ -113,7 +110,7 @@ impl FluxPanel {
             return Err(flux_last_error_string("flux_surface_create"));
         }
 
-        // 4. Create flux canvas.
+        // 5. Create flux canvas.
         let mut canvas_desc: flux_canvas_desc = std::mem::zeroed();
         canvas_desc.type_ = FType::FLUX_TYPE_CANVAS_DESC;
         canvas_desc.surface = surface;
@@ -127,7 +124,7 @@ impl FluxPanel {
             return Err(flux_last_error_string("flux_canvas_create"));
         }
 
-        // 5. Create flux text context.
+        // 6. Create flux text context.
         let mut text_desc: flux_text_desc = std::mem::zeroed();
         text_desc.device = device;
         text_desc.scale = 1.0;
@@ -141,42 +138,34 @@ impl FluxPanel {
             return Err(flux_last_error_string("flux_text_create"));
         }
 
+        // 7. Create arena for per-frame text shaping allocations.
+        let mut arena: flux_arena = unsafe { std::mem::zeroed() };
+        let r = flux_arena_init(&mut arena, 256 * 1024, ptr::null_mut());
+        if !flux_result_is_ok(r) {
+            flux_text_destroy(text);
+            flux_canvas_destroy(canvas);
+            flux_surface_release(surface);
+            flux_device_release(device);
+            return Err(flux_last_error_string("flux_arena_init"));
+        }
+
         Ok(Self {
             device,
             surface,
             canvas,
             text,
-            arena: unsafe { std::mem::zeroed() },
+            arena,
             width,
             height,
+            _wl_surface: wl_surface,
         })
     }
 
-    /// Initialize the arena after construction. Must be called once
-    /// before the first draw_candidates.
-    pub fn init_arena(&mut self) -> Result<(), String> {
-        let r = unsafe { flux_arena_init(&mut self.arena, 256 * 1024, ptr::null_mut()) };
-        if !flux_result_is_ok(r) {
-            return Err(flux_last_error_string("flux_arena_init"));
-        }
-        Ok(())
-    }
-
-    /// Draw candidate strings. The `selected` index is highlighted.
-    ///
-    /// This performs a complete render frame:
-    ///   1. Reset the arena (free last frame's text shaping data)
-    ///   2. Begin a surface frame
-    ///   3. Begin canvas recording with dark background
-    ///   4. Draw a highlight rectangle on the selected candidate
-    ///   5. Draw each candidate as a row of text via flux_text_draw
-    ///   6. End canvas + present frame
+    /// Draw candidate strings with the selected one highlighted.
     pub fn draw_candidates(&mut self, candidates: &[String], selected: usize) {
         unsafe {
-            // 1. Reset arena.
             flux_arena_reset(&mut self.arena);
 
-            // 2. Begin frame.
             let frame_desc: flux_frame_begin_desc = std::mem::zeroed();
             let mut frame: *mut flux_frame = ptr::null_mut();
             let r = flux_surface_begin_frame(self.surface, &frame_desc, &mut frame);
@@ -184,19 +173,17 @@ impl FluxPanel {
                 return;
             }
 
-            // 3. Begin canvas with dark background.
             let bg = flux_color_rgba(28, 28, 32, 255);
             let r = flux_canvas_begin(self.canvas, frame, &bg);
             if !flux_result_is_ok(r) {
                 return;
             }
 
-            // Layout constants (logical pixels).
             let row_height: f32 = 24.0;
             let padding: f32 = 8.0;
             let font_size: f32 = 16.0;
             let text_color = flux_color_rgba(240, 240, 240, 255);
-            let highlight_color = flux_color_rgba(56, 84, 160, 255);
+            let highlight = flux_color_rgba(56, 84, 160, 255);
 
             let style = flux_text_style {
                 size_px: font_size,
@@ -205,11 +192,9 @@ impl FluxPanel {
                 family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
             };
 
-            // 4-5. Draw each candidate row.
             for (i, candidate) in candidates.iter().enumerate() {
                 let y = padding + i as f32 * row_height;
 
-                // Highlight selected row.
                 if i == selected {
                     flux_canvas_fill_rrect(
                         self.canvas,
@@ -219,12 +204,11 @@ impl FluxPanel {
                             w: self.width as f32 - 4.0,
                             h: row_height,
                         },
-                        4.0, // corner radius
-                        highlight_color,
+                        4.0,
+                        highlight,
                     );
                 }
 
-                // Draw the candidate text. y + font_size = baseline.
                 let bytes = candidate.as_bytes();
                 flux_text_draw(
                     self.text,
@@ -238,7 +222,6 @@ impl FluxPanel {
                 );
             }
 
-            // 6. End canvas + present.
             flux_canvas_end(self.canvas);
             flux_frame_present(frame);
         }
@@ -276,20 +259,134 @@ impl Drop for FluxPanel {
     }
 }
 
-/// Create a VkSurfaceKHR from a Wayland surface.
+// ── Raw Wayland surface creation via wayland-sys ──────────────────────────
+
+/// Callback context for registry global events.
+struct RegistryCtx {
+    compositor_name: u32,
+    compositor_version: u32,
+}
+
+extern "C" fn registry_global(
+    data: *mut c_void,
+    _registry: *mut c_void,
+    name: u32,
+    interface: *const c_char,
+    version: u32,
+) {
+    let ctx = unsafe { &mut *(data as *mut RegistryCtx) };
+    let iface = unsafe { std::ffi::CStr::from_ptr(interface) };
+    if iface.to_str().unwrap_or("") == "wl_compositor" {
+        ctx.compositor_name = name;
+        ctx.compositor_version = version.min(4);
+    }
+}
+
+/// Create a wl_surface via raw libwayland-client C API.
 ///
-/// Calls `vkCreateWaylandSurfaceKHR` directly via FFI. The Vulkan
-/// instance must have been created with `VK_KHR_wayland_surface`
-/// extension enabled.
+/// Uses direct extern "C" FFI to libwayland-client.so (already loaded
+/// by wayland-client). The wl_display pointer must be from the same
+/// connection the input-method frontend uses.
+unsafe fn raw_create_wl_surface(
+    wl_display: *mut c_void,
+) -> Result<*mut c_void, String> {
+    let display = wl_display;
+
+    // Get the registry.
+    let registry = wl_display_get_registry(display);
+    if registry.is_null() {
+        return Err("wl_display_get_registry failed".into());
+    }
+
+    // Set up the registry listener to find wl_compositor.
+    let mut ctx = RegistryCtx {
+        compositor_name: 0,
+        compositor_version: 0,
+    };
+
+    let listener = WlRegistryListener {
+        global: Some(registry_global),
+        global_remove: None,
+    };
+
+    wl_registry_add_listener(
+        registry,
+        &listener,
+        &mut ctx as *mut RegistryCtx as *mut c_void,
+    );
+
+    // Roundtrip to receive the global events.
+    wl_display_roundtrip(display);
+
+    if ctx.compositor_name == 0 {
+        return Err("compositor not found in registry".into());
+    }
+
+    // Find the wl_compositor_interface symbol (C global).
+    let iface_ptr = libc::dlsym(
+        libc::RTLD_DEFAULT,
+        c"wl_compositor_interface".as_ptr(),
+    );
+    if iface_ptr.is_null() {
+        return Err("cannot find wl_compositor_interface symbol".into());
+    }
+
+    // Bind the compositor.
+    let compositor = wl_registry_bind(
+        registry,
+        ctx.compositor_name,
+        iface_ptr,
+        ctx.compositor_version,
+    );
+
+    if compositor.is_null() {
+        return Err("wl_registry_bind for compositor failed".into());
+    }
+
+    // Create the surface.
+    let surface = wl_compositor_create_surface(compositor);
+    if surface.is_null() {
+        return Err("wl_compositor_create_surface failed".into());
+    }
+
+    Ok(surface)
+}
+
+// Direct FFI to libwayland-client.so. These are stable C API functions
+// that don't change between versions.
+#[repr(C)]
+struct WlRegistryListener {
+    global: Option<extern "C" fn(*mut c_void, *mut c_void, u32, *const c_char, u32)>,
+    global_remove: Option<extern "C" fn(*mut c_void, *mut c_void, u32)>,
+}
+
+extern "C" {
+    fn wl_display_get_registry(display: *mut c_void) -> *mut c_void;
+    fn wl_display_roundtrip(display: *mut c_void) -> i32;
+    fn wl_registry_add_listener(
+        registry: *mut c_void,
+        listener: *const WlRegistryListener,
+        data: *mut c_void,
+    ) -> i32;
+    fn wl_registry_bind(
+        registry: *mut c_void,
+        name: u32,
+        interface: *const c_void,
+        version: u32,
+    ) -> *mut c_void;
+    fn wl_compositor_create_surface(compositor: *mut c_void) -> *mut c_void;
+}
+
+// ── Vulkan Wayland surface creation ───────────────────────────────────────
+
 unsafe fn create_wayland_vk_surface(
     instance: *mut c_void,
     wl_display: *mut c_void,
     wl_surface: *mut c_void,
 ) -> Result<*mut c_void, String> {
-    // VkWaylandSurfaceCreateInfoKHR
     #[repr(C)]
     struct VkWaylandSurfaceCreateInfoKHR {
-        s_type: u32, // VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR = 1000006000
+        s_type: u32,
         p_next: *mut c_void,
         flags: u32,
         display: *mut c_void,
@@ -304,20 +401,18 @@ unsafe fn create_wayland_vk_surface(
         surface: wl_surface,
     };
 
-    // Load vkCreateWaylandSurfaceKHR from libvulkan.
-    let lib = unsafe { libc::dlopen(c"libvulkan.so.1".as_ptr() as *const _, libc::RTLD_NOW) };
+    let lib = unsafe { libc::dlopen(c"libvulkan.so.1".as_ptr(), libc::RTLD_NOW) };
     if lib.is_null() {
         return Err("cannot load libvulkan.so.1".into());
     }
 
-    let fn_name = c"vkCreateWaylandSurfaceKHR".as_ptr() as *const _;
     let func: unsafe extern "C" fn(
-        *mut c_void,         // instance
+        *mut c_void,
         *const VkWaylandSurfaceCreateInfoKHR,
-        *const c_void,       // allocator
-        *mut *mut c_void,    // out surface
+        *const c_void,
+        *mut *mut c_void,
     ) -> i32 = unsafe {
-        let sym = libc::dlsym(lib, fn_name);
+        let sym = libc::dlsym(lib, c"vkCreateWaylandSurfaceKHR".as_ptr());
         if sym.is_null() {
             libc::dlclose(lib);
             return Err("cannot find vkCreateWaylandSurfaceKHR".into());
@@ -326,12 +421,7 @@ unsafe fn create_wayland_vk_surface(
     };
 
     let mut vk_surface: *mut c_void = ptr::null_mut();
-    let result = func(
-        instance,
-        &create_info,
-        ptr::null(),
-        &mut vk_surface,
-    );
+    let result = func(instance, &create_info, ptr::null(), &mut vk_surface);
     libc::dlclose(lib);
 
     if result != 0 {
@@ -340,15 +430,13 @@ unsafe fn create_wayland_vk_surface(
     Ok(vk_surface)
 }
 
-/// Check if a flux_result is OK.
+// ── Helpers ───────────────────────────────────────────────────────────────
+
 fn flux_result_is_ok(_r: flux_result) -> bool {
-    // flux_result is a bindgen C enum without PartialEq. We compare
-    // via the discriminant: the OK variant is always 0.
     let v: i32 = unsafe { std::mem::transmute(_r) };
     v == 0
 }
 
-/// Get flux's last error as a human-readable string.
 fn flux_last_error_string(function: &str) -> String {
     let mut info: flux_error_info = unsafe { std::mem::zeroed() };
     unsafe { flux_get_last_error(&mut info) };

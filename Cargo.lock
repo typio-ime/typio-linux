@@ -1094,6 +1094,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-scanner",
+ "wayland-sys",
  "xkbcommon",
  "zbus",
 ]
