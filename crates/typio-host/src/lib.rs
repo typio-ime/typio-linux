@@ -25,3 +25,4 @@ pub mod ipc;
 pub mod protocols;
 pub mod repeat_timer;
 pub mod resume_signal;
+pub mod uds_server;

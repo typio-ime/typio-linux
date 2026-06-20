@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rust UDS server (`typio_host::uds_server`).** Phase 4 port of
+  `src/ipc/uds_server.{h,c}` (555 lines of C). Owns a Unix-domain
+  listening socket + an internal epoll instance multiplexing all
+  accepted client connections. Per-client framing state (length-
+  prefixed JSON-RPC), per-client subscription state (for
+  `events.subscribe` + server-emitted notifications), and a 1 MiB
+  frame-size cap matching the C version.
+
+  The epoll fd is exposed via [`UdsServer::epoll_fd`] for integration
+  with any external event loop. The caller installs a request handler
+  via `set_handler`; the handler returns a `RequestOutcome` containing
+  an optional response and an optional subscription update — this split
+  avoids the closure having to call back into `&mut self`.
+
+  7 unit tests including live UDS round-trips: bind, accept, length-
+  prefixed framing, handler dispatch, subscription registration via
+  `RequestOutcome`, and selective broadcast via `emit`. The C version
+  is unchanged and still ships; this is the parallel Rust implementation.
+
+  **Not ported**: `src/ipc/ipc_bus.c` (301 lines of C). That is the
+  routing/handler layer that wires UDS requests to TypioInstance +
+  TypioStateController. It is heavily coupled to libtypio's C ABI and
+  the state-controller machinery — neither of which the Rust host has
+  integrated yet. Deferred until enough of the daemon is ported to
+  actually serve real method requests.
+
 - **Rust logind resume detector (`typio_host::resume_signal`).** Phase
   3a port of `src/engine/logind/resume.{h,c}` (252 lines of C) and the
   pure decision rules in `src/engine/resume_model.h`. Subscribes to
