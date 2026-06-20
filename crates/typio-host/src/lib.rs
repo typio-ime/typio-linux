@@ -22,6 +22,7 @@ pub mod backoff;
 pub mod candidate_guard;
 pub mod config_watcher;
 pub mod engine_loader;
+pub mod input_method;
 pub mod ipc;
 pub mod keyboard_policy;
 pub mod notifier;
