@@ -12,3 +12,4 @@ wayland-client.workspace = true
 wayland-scanner.workspace = true
 wayland-backend.workspace = true
 bitflags.workspace = true
+libtypio.workspace = true

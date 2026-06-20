@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enums. The C daemon is unchanged; meson and cargo coexist during the
   migration.
 
+- **Phase 0.5 libtypio integration spike (`check-libtypio` bin).**
+  Added a second bin target that exercises libtypio's native Rust API
+  (`core::registry::EngineRegistry`, `core::engine::{EngineType,
+  EngineAvailability, EngineError}`) directly — bypassing the C-shaped
+  `TypioInstance` / `c_api` layer entirely. This validates the central
+  architectural assumption of the migration: the C ABI is purely an
+  engine-plugin contract, and the Rust host pays nothing for it. A
+  known leak is noted in the spike output — `EngineRegistry::set_instance`
+  still takes a `*mut TypioInstance` back-pointer for callbacks, which
+  needs replacing with a Rust closure/trait object before the Rust host
+  can fully avoid constructing `TypioInstance`.
+
 ## [0.3.4] - 2026-06-20
 
 ### Fixed
