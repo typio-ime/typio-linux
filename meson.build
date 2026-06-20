@@ -2,7 +2,7 @@
 # (e.g. Ubuntu 24.04 LTS) does not know the 'c23' value. Switch to 'c23'
 # when the supported meson floor reaches 1.4.
 project('typio-linux', 'c',
-    version: '0.3.3',
+    version: '0.3.4',
   default_options: ['warning_level=2', 'c_std=c2x'],
   meson_version: '>=1.0.0',
 )
