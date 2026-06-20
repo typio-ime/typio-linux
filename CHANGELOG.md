@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rust candidate_guard port (`typio_host::candidate_guard`).** Phase 7
+  port of the pure parts of `src/wayland/candidate_guard.c` (170 lines
+  of C). When an engine publishes a composition with host-managed-
+  selection flags set, the host intercepts navigation/selection keys
+  before they reach the engine's `process_key`.
+
+  All pure decision logic ported: keysym → [`HostSelKey`] mapping,
+  SelKey → [`HostSelCategory`] grouping, [`host_selection_resolve`]
+  (target index from current selection + count + key),
+  [`host_selection_is_commit`], [`should_consume_key`] (taking the
+  two session fields the C version consulted as explicit parameters
+  so it works without the session struct).
+
+  12 unit tests covering keysym classification, category grouping,
+  commit classification, navigation clamping at list edges, index
+  pick out-of-range filtering, the "default intercept arrows when
+  candidates exist but no flags are declared" rule, and the flag-gated
+  consume decision.
+
+  **Not ported**: `typio_wl_host_selection_try_commit` in C — it needs
+  the input context (`session->ctx`) to call `commit_candidate`. The
+  pure resolution is in [`host_selection_resolve`]; the actual commit
+  is one line at the call site once input-context integration lands.
+
 - **First runnable Rust daemon binary: `typio-daemon-stub`.** Phase 6
   milestone. Wires together the engine_loader + uds_server + TIP
   framing into a minimal but real daemon process. typioctl (or any

@@ -19,6 +19,7 @@
 //!   callback when a confirmed reload should fire.
 
 pub mod backoff;
+pub mod candidate_guard;
 pub mod config_watcher;
 pub mod engine_loader;
 pub mod ipc;
