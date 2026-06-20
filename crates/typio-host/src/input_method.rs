@@ -113,6 +113,11 @@ pub struct InputMethodState {
     mods_depressed: u32,
     mods_latched: u32,
     mods_locked: u32,
+    /// Pending text to commit to the compositor on the next `done`.
+    /// Set by the key handler when a key produces unicode text.
+    /// The caller drains this after each dispatch round via
+    /// [`Self::take_pending_commit`].
+    pending_commit: Option<String>,
 }
 
 impl InputMethodState {
@@ -139,6 +144,25 @@ impl InputMethodState {
         if let Some(cb) = self.callback.as_mut() {
             cb(event);
         }
+    }
+
+    /// Drain any pending commit text. Called by the event loop driver
+    /// after each dispatch round. If non-empty, the caller should
+    /// call `commit_string(text)` + `commit(serial)` on the
+    /// input-method proxy.
+    pub fn take_pending_commit(&mut self) -> Option<String> {
+        self.pending_commit.take()
+    }
+
+    /// Flush a commit directly to the compositor. Convenience method
+    /// for the common case: commit the text, then flush via
+    /// `commit(serial)`.
+    pub fn commit_string_and_flush(&mut self, text: &str) {
+        if !self.initialized || !self.active {
+            return;
+        }
+        self.input_method.commit_string(text.to_string());
+        self.input_method.commit(self.serial);
     }
 
     /// Load an XKB keymap from a compositor-provided file descriptor.
@@ -234,6 +258,7 @@ impl InputMethodFrontend {
             mods_depressed: 0,
             mods_latched: 0,
             mods_locked: 0,
+            pending_commit: None,
         };
 
         Ok(Self {
@@ -268,18 +293,22 @@ impl InputMethodFrontend {
     }
 
     /// Blocking event loop. Runs until the connection drops.
+    /// Automatically flushes pending commit text after each dispatch.
     pub fn run(&mut self) -> io::Result<()> {
         loop {
             self.conn
                 .flush()
                 .map_err(|e| io::Error::other(format!("flush: {e}")))?;
 
-            // Dispatch any already-read events.
             self.queue
                 .dispatch_pending(&mut self.state)
                 .map_err(|e| io::Error::other(format!("dispatch: {e}")))?;
 
-            // Prepare to read, poll for readability, then read.
+            // Flush any pending commit text to the compositor.
+            if let Some(text) = self.state.take_pending_commit() {
+                self.state.commit_string_and_flush(&text);
+            }
+
             if let Some(read_guard) = self.queue.prepare_read() {
                 let fd = self.fd();
                 let mut pollfd =
@@ -295,18 +324,12 @@ impl InputMethodFrontend {
                 if pollfd.revents & libc::POLLIN != 0 {
                     read_guard
                         .read()
-                        .map_err(|e| {
-                            io::Error::other(format!("read: {e}"))
-                        })?;
+                        .map_err(|e| io::Error::other(format!("read: {e}")))?;
                 }
                 if pollfd.revents & (libc::POLLERR | libc::POLLHUP) != 0 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::ConnectionReset,
-                        "display fd closed",
-                    ));
+                    return Err(io::Error::other("display fd closed"));
                 }
             } else {
-                // Another reader already has the lock; just dispatch.
                 continue;
             }
         }
@@ -499,10 +522,22 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
                     keycode: key,
                     xkb_keycode,
                     keysym,
-                    unicode,
+                    unicode: unicode.clone(),
                     state: raw_state,
                     time,
                 }));
+
+                // On key press with printable text + no blocking
+                // modifiers, queue the text for commit. The event-loop
+                // driver drains this after dispatch.
+                if raw_state == 1 && !unicode.is_empty() && state.active {
+                    let blocking = state.mods_depressed & 0x4 != 0 // Ctrl
+                        || state.mods_depressed & 0x8 != 0          // Alt
+                        || state.mods_depressed & 0x10 != 0;        // Super
+                    if !blocking {
+                        state.pending_commit = Some(unicode);
+                    }
+                }
             }
             Event::Modifiers {
                 mods_depressed,
