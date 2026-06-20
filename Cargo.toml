@@ -25,7 +25,7 @@ rust-version = "1.85"
 # wayland-protocols crate itself lists them as direct deps).
 wayland-client = "0.31"
 wayland-scanner = "0.31"
-wayland-backend = "0.3"
+wayland-backend = { version = "0.3", features = ["client_system"] }
 bitflags = "2"
 inotify = "0.11"
 nix = { version = "0.31", features = ["time", "event", "socket", "fs", "user"] }

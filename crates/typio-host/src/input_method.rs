@@ -372,16 +372,18 @@ impl InputMethodFrontend {
     /// # Safety
     /// The caller must not close the display or use it after the
     /// frontend is dropped.
-    /// Connect a SEPARATE raw Wayland display for the panel. We can't
-    /// easily extract the raw wl_display* from wayland-client's
-    /// Connection (it's deliberately opaque), so the panel gets its
-    /// own display connection. Both connect to the same compositor.
-    pub fn panel_display_ptr() -> *mut std::ffi::c_void {
+    /// Get the raw wl_display* from this connection. Needed for flux
+    /// panel surface creation on the SAME Wayland connection.
+    pub fn raw_display_ptr(&self) -> *mut std::ffi::c_void {
+        let display_id = self.conn.backend().display_id();
+        let proxy_ptr = display_id.as_ptr();
+
         #[link(name = "wayland-client")]
         extern "C" {
-            fn wl_display_connect(name: *const std::ffi::c_char) -> *mut std::ffi::c_void;
+            fn wl_proxy_get_display(proxy: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
         }
-        unsafe { wl_display_connect(std::ptr::null()) }
+
+        unsafe { wl_proxy_get_display(proxy_ptr as *mut std::ffi::c_void) }
     }
 
     /// Non-blocking dispatch of pending Wayland events.

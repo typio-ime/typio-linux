@@ -338,6 +338,22 @@ unsafe fn raw_create_wl_surface(
         return Err("wl_compositor_create_surface failed".into());
     }
 
+    // Commit the surface + roundtrip so the compositor processes it
+    // before Vulkan queries presentation support.
+    #[link(name = "wayland-client")]
+    extern "C" {
+        fn wl_surface_damage(
+            surface: *mut c_void,
+            x: c_int,
+            y: c_int,
+            width: c_int,
+            height: c_int,
+        );
+    }
+    // We can't commit without a buffer attached, but we can dispatch
+    // pending events so the compositor knows about the surface.
+    wl_display_roundtrip(wl_display);
+
     Ok(surface)
 }
 
@@ -359,6 +375,13 @@ extern "C" {
         proxy: *mut c_void,
         opcode: u32,
         interface: *const c_void,
+        ...
+    ) -> *mut c_void;
+    fn wl_proxy_marshal_constructor_versioned(
+        proxy: *mut c_void,
+        opcode: u32,
+        interface: *const c_void,
+        version: u32,
         ...
     ) -> *mut c_void;
     fn wl_proxy_add_listener(
@@ -400,13 +423,19 @@ unsafe fn raw_registry_bind(
     interface: *const c_void,
     version: u32,
 ) -> *mut c_void {
-    // bind opcode is 0 on wl_registry. The variadic args are:
-    // name (uint32_t), then NULL (the new_id is created by the constructor).
-    wl_proxy_marshal_constructor(
+    // The bind request signature is "usun": name(uint), interface(string),
+    // version(uint), new_id(created by constructor).
+    // We must pass the interface NAME string (first field of wl_interface).
+    let iface_name = *(interface as *const *const c_char);
+
+    wl_proxy_marshal_constructor_versioned(
         registry,
         0, // WL_REGISTRY_BIND opcode
         interface,
+        version,
         name,
+        iface_name,
+        version,
         ptr::null::<c_void>(),
     )
 }

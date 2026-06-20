@@ -210,9 +210,9 @@ fn main() -> ExitCode {
     eprintln!("OK: Wayland connected, keyboard grabbed");
 
     // ── 4. Flux panel ─────────────────────────────────────────────────────
-    // Panel uses a separate wl_display connection since we can't extract
-    // the raw pointer from wayland-client's Connection.
-    let panel_display = InputMethodFrontend::panel_display_ptr();
+    // Use the SAME wl_display as the input-method frontend — extract
+    // the raw pointer from the wayland-client Connection.
+    let panel_display = frontend.raw_display_ptr();
     let mut panel = if !panel_display.is_null() {
         unsafe {
             match FluxPanel::new(panel_display, panel_width, panel_height) {
