@@ -110,14 +110,15 @@ pub struct InputMethodState {
     /// Current keymap keymap — kept alive alongside the state.
     xkb_keymap: Option<xkbcommon::xkb::Keymap>,
     /// Physical modifier state from the latest modifiers event.
-    mods_depressed: u32,
-    mods_latched: u32,
-    mods_locked: u32,
-    /// Pending text to commit to the compositor on the next `done`.
-    /// Set by the key handler when a key produces unicode text.
-    /// The caller drains this after each dispatch round via
-    /// [`Self::take_pending_commit`].
-    pending_commit: Option<String>,
+    pub mods_depressed: u32,
+    pub mods_latched: u32,
+    pub mods_locked: u32,
+    /// Pending key event to be processed by the engine after dispatch.
+    /// Set by the Dispatch impl when a key press arrives; the event-loop
+    /// driver drains it after dispatch_pending returns.
+    pub pending_key: Option<DecodedKeyEvent>,
+    /// Pending text to commit to the compositor on the next flush.
+    pub pending_commit: Option<String>,
 }
 
 impl InputMethodState {
@@ -258,6 +259,7 @@ impl InputMethodFrontend {
             mods_depressed: 0,
             mods_latched: 0,
             mods_locked: 0,
+            pending_key: None,
             pending_commit: None,
         };
 
@@ -527,16 +529,17 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
                     time,
                 }));
 
-                // On key press with printable text + no blocking
-                // modifiers, queue the text for commit. The event-loop
-                // driver drains this after dispatch.
-                if raw_state == 1 && !unicode.is_empty() && state.active {
-                    let blocking = state.mods_depressed & 0x4 != 0 // Ctrl
-                        || state.mods_depressed & 0x8 != 0          // Alt
-                        || state.mods_depressed & 0x10 != 0;        // Super
-                    if !blocking {
-                        state.pending_commit = Some(unicode);
-                    }
+                // On key press, queue for the engine. The event-loop
+                // driver processes pending_key after dispatch.
+                if raw_state == 1 && state.active {
+                    state.pending_key = Some(DecodedKeyEvent {
+                        keycode: key,
+                        xkb_keycode,
+                        keysym,
+                        unicode,
+                        state: raw_state,
+                        time,
+                    });
                 }
             }
             Event::Modifiers {
