@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **First runnable Rust daemon binary: `typio-daemon-stub`.** Phase 6
+  milestone. Wires together the engine_loader + uds_server + TIP
+  framing into a minimal but real daemon process. typioctl (or any
+  TIP v3 client) can connect to its UDS socket and exchange real
+  JSON-RPC frames.
+
+  Methods implemented by the stub:
+  - `hello` → real handshake: protocolVersion + daemonVersion + loaded
+    engine list
+  - `daemon.version` → crate version string
+  - `daemon.status` → running flag + socket path + loaded engines
+  - Unknown methods → JSON-RPC `-32601 Method not found` (spec-
+    compliant)
+  - Known-but-unimplemented methods → `-32603` error with a message
+    naming the method, so typioctl shows a useful diagnostic instead
+    of a generic "not found"
+  - Malformed JSON → `-32600 Invalid Request`
+
+  6 integration tests spin up the stub as a child process and verify
+  the wire contract via a real `UnixStream` client. The daemon does
+  NOT touch Wayland, does NOT route keys, does NOT manage a config
+  tree — it's a smoke test for the daemon skeleton, proving that the
+  pieces we have ported compose into a runnable binary that speaks
+  the real protocol.
+
+  Live-verified: spawns, binds `$XDG_RUNTIME_DIR/typio/daemon.sock`,
+  accepts a connection, dispatches `hello` / `daemon.version` /
+  `daemon.status` correctly, returns proper JSON-RPC errors for
+  unimplemented methods.
+
 - **Rust keyboard policy + notifier ports (`typio_host::keyboard_policy`
   + `typio_host::notifier`).** Phase 5 port of the four
   `src/wayland/keyboard/policy/*.c` files (modifiers.c, chords.c,
@@ -34,6 +64,145 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   KeyTrackState name coverage, tracker slice operations, rate-limiter
   ring-buffer eviction + long-key truncation, notification builder
   defaults.
+
+- **Rust UDS server (`typio_host::uds_server`).** Phase 4 port of
+  `src/ipc/uds_server.{h,c}` (555 lines of C). Owns a Unix-domain
+  listening socket + an internal epoll instance multiplexing all
+  accepted client connections. Per-client framing state (length-
+  prefixed JSON-RPC), per-client subscription state (for
+  `events.subscribe` + server-emitted notifications), and a 1 MiB
+  frame-size cap matching the C version.
+
+  The epoll fd is exposed via [`UdsServer::epoll_fd`] for integration
+  with any external event loop. The caller installs a request handler
+  via `set_handler`; the handler returns a `RequestOutcome` containing
+  an optional response and an optional subscription update — this split
+  avoids the closure having to call back into `&mut self`.
+
+  7 unit tests including live UDS round-trips: bind, accept, length-
+  prefixed framing, handler dispatch, subscription registration via
+  `RequestOutcome`, and selective broadcast via `emit`. The C version
+  is unchanged and still ships; this is the parallel Rust implementation.
+
+  **Not ported**: `src/ipc/ipc_bus.c` (301 lines of C). That is the
+  routing/handler layer that wires UDS requests to TypioInstance +
+  TypioStateController. It is heavily coupled to libtypio's C ABI and
+  the state-controller machinery — neither of which the Rust host has
+  integrated yet. Deferred until enough of the daemon is ported to
+  actually serve real method requests.
+
+- **Rust logind resume detector (`typio_host::resume_signal`).** Phase
+  3a port of `src/engine/logind/resume.{h,c}` (252 lines of C) and the
+  pure decision rules in `src/engine/resume_model.h`. Subscribes to
+  logind's `PrepareForSleep` D-Bus signal via `zbus` (no libsystemd
+  dependency) on a dedicated worker thread; events are channelled back
+  to the caller's thread via `mpsc`. The boottime/monotonic gap
+  detector runs per-tick on the caller's side via
+  [`ResumeSignal::tick`]. Both detectors deduplicate on a 5-second
+  cooldown. 7 unit tests covering the pure gap/cooldown predicates,
+  the cooldown dedup behaviour, and the reason-string literals
+  (matched against the C version's stable identifiers).
+
+  Introduces `zbus` as the D-Bus library — replacing the C version's
+  `sd-bus`/`libsystemd` dependency for this codepath. The same zbus
+  pattern will drive the SNI tray port in a later phase.
+
+- **Rust TIP v3 protocol layer (`typio_host::ipc`).** Phase 3b port
+  of `src/ipc/tip_protocol.{h,c}` (90 + 38 lines of C) and the JSON
+  envelope helpers in `src/ipc/tip_json.{h,c}` (520 lines of
+  hand-rolled JSON in C). Replaces the hand-rolled parser/builder with
+  `serde_json` and `serde` derives: JSON-RPC 2.0 envelope (Request,
+  Response, Notification, Error, Id) round-trips via
+  `serde_json::to_string` / `from_str`. Per-method typed `params` /
+  `result` structs are intentionally not ported — they will land
+  alongside the corresponding handler port (config access, engine
+  registry, etc.); the envelope handles untyped `serde_json::Value`s
+  meanwhile, exactly what the C version uses.
+
+  19 unit tests: protocol constants match typioctl's wire
+  expectations; socket-path resolution under all three env-var
+  regimes; round-trip of all three message kinds; standard
+  JSON-RPC error codes; a real-world `hello` request/response
+  sample verified against typioctl.
+
+- **Rust backoff + keyboard repeat pure-mechanism ports
+  (`typio_host::backoff` + `typio_host::repeat_timer`).** Phase 3c
+  port of the pure parts of `src/engine/backoff.{h,c}` (43+25 lines)
+  and `src/wayland/keyboard/repeat.c`'s timer-arming + modifier-gate
+  logic. The keyboard-repeat dispatch (the 130 lines of deep
+  xkb_state / focus / candidate-guard coupling in
+  `typio_wl_keyboard_dispatch_repeat`) is deliberately NOT ported —
+  it needs the keyboard router state machine which hasn't been ported
+  yet, and forcing a standalone extraction would produce an awkward
+  stub.
+
+  13 unit tests: backoff schedule doubles+clamps correctly,
+  should_retry respects the attempt cap, shift-overflow is guarded;
+  RepeatTimer starts/stops toggling the armed flag,
+  should_repeat_for_modifiers respects Ctrl/Alt/Super suppression,
+  interval_from_rate clamps pathological inputs.
+
+- **Rust config_watcher port + calloop spike (`typio_host::config_watcher`
+  + `spike-config-watcher` bin).** Phase 2 port of the watch mechanism
+  in `src/wayland/runtime_config.c`. Watches the config directory (and
+  optionally the engines subdir) via inotify, filters events to
+  `core.toml` / `platform.toml`, and debounces reload triggers with a
+  one-shot Linux timerfd. Pure mechanism — the frontend side effects
+  that the C version mixes in (purge font caches, invalidate panel,
+  reload shortcuts, switch voice engine) are intentionally NOT ported;
+  the caller receives a typed reload trigger and decides what to do.
+
+  The watcher owns an inotify instance + a timerfd and exposes both raw
+  fds for integration with any event loop. The accompanying
+  `spike-config-watcher` bin verifies end-to-end: it plugs both fds
+  into a real `calloop::EventLoop`, drives the state machine, and
+  demonstrates that three burst writes to `core.toml` collapse into a
+  single debounced reload (verified live against `/tmp/typio-spike-cfg`).
+  Introduces `calloop` as the event-loop foundation for subsequent
+  fd-handling subsystem ports (IPC UDS server, PipeWire, sd-bus tray).
+
+  7 unit tests + the live spike. The C version is unchanged and still
+  ships; this is the parallel Rust implementation.
+
+- **Rust engine_loader port (`typio_host::engine_loader`).** Phase 1
+  port of `src/engine_loader.c` (678 lines of C). Discovers
+  `typio-engine-*.toml` manifests on disk, parses them with the `toml`
+  crate (the C version rolled its own line-based parser because there is
+  no good C TOML library), negotiates host-vs-engine capabilities, and
+  registers out-of-process engine backends with libtypio's native Rust
+  `EngineRegistry` — bypassing the C ABI entirely. 30 unit tests +
+  4 integration tests, the integration tests verifying that every real
+  engine manifest shipped by the sibling repos (mozc, rime, sherpa,
+  whisper) parses and registers successfully against live libtypio.
+  The C version is unchanged and still ships; this is the parallel Rust
+  implementation.
+
+- **Rust host crate skeleton (`typio-host`) + Phase 0 wayland spike.**
+  Added a cargo workspace at the repo root and `crates/typio-host/` as
+  its first member. The spike connects to the live compositor, snapshots
+  the global list, and binds `zwp_input_method_manager_v2` and
+  `zwp_virtual_keyboard_manager_v1` — proving the cargo + wayland-client
+  + wayland-scanner chain works without a hard dependency on the
+  `wayland-protocols` crate. Protocol bindings are generated from the
+  local XMLs in `protocols/` (same source of truth as the C code's
+  wayland-scanner output), with `text-input-unstable-v3.xml` newly
+  vendored because input-method-v2's event arg types reference its
+  enums. The C daemon is unchanged; meson and cargo coexist during the
+  migration.
+
+- **Phase 0.5 libtypio integration spike (`check-libtypio` bin).**
+  Added a second bin target that exercises libtypio's native Rust API
+  (`core::registry::EngineRegistry`, `core::engine::{EngineType,
+  EngineAvailability, EngineError}`) directly — bypassing the C-shaped
+  `TypioInstance` / `c_api` layer entirely. This validates the central
+  architectural assumption of the migration: the C ABI is purely an
+  engine-plugin contract, and the Rust host pays nothing for it. A
+  known leak is noted in the spike output — `EngineRegistry::set_instance`
+  still takes a `*mut TypioInstance` back-pointer for callbacks, which
+  needs replacing with a Rust closure/trait object before the Rust host
+  can fully avoid constructing `TypioInstance`.
+
+
 
 - **Rust UDS server (`typio_host::uds_server`).** Phase 4 port of
   `src/ipc/uds_server.{h,c}` (555 lines of C). Owns a Unix-domain
