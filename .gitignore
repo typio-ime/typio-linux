@@ -6,6 +6,11 @@ out/
 cmake-build-*/
 core/target/
 cli/target/
+target/
+
+# Cargo workspace lockfile is committed for binaries, not libraries.
+# typio-linux is now a binary workspace root → keep Cargo.lock.
+# (Member crates inherit; nothing else to do.)
 
 # Meson subproject artifacts
 subprojects/.wraplock

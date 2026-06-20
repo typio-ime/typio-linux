@@ -1,0 +1,14 @@
+[package]
+name = "typio-host"
+version = "0.4.0-dev"
+description = "Typio Wayland input-method host (Rust port in progress)"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+wayland-client.workspace = true
+wayland-scanner.workspace = true
+wayland-backend.workspace = true
+bitflags.workspace = true

@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = ["crates/typio-host"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ming2k/typio-linux"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Wayland client (Smithay project) + scanner for codegen from local XMLs.
+#
+# We deliberately do NOT depend on the `wayland-protocols` crate. Reasons:
+#   - typio's two critical protocols (input-method-v2 and
+#     virtual-keyboard-v1) are not shipped there anyway (as of 0.32.13
+#     only input-method-v1 is)
+#   - the C side already ships all needed XMLs in protocols/ and generates
+#     C bindings from them with the wayland-scanner C tool; doing the
+#     same in Rust keeps a single source of truth for protocol XMLs
+#   - avoids splitting protocols across "from crate" vs "from local XML"
+#
+# bitflags + wayland-backend are direct deps because the code emitted by
+# wayland_scanner references them by crate name (same reason the
+# wayland-protocols crate itself lists them as direct deps).
+wayland-client = "0.31"
+wayland-scanner = "0.31"
+wayland-backend = "0.3"
+bitflags = "2"
+
+# The framework library — sibling checkout at ../libtypio.
+# Production builds should resolve via PKG_CONFIG_PATH / published crate;
+# the path dep here is the dev-workflow default.
+libtypio = { path = "../libtypio" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"

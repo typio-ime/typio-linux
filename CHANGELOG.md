@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Rust host crate skeleton (`typio-host`) + Phase 0 wayland spike.**
+  Added a cargo workspace at the repo root and `crates/typio-host/` as
+  its first member. The spike connects to the live compositor, snapshots
+  the global list, and binds `zwp_input_method_manager_v2` and
+  `zwp_virtual_keyboard_manager_v1` — proving the cargo + wayland-client
+  + wayland-scanner chain works without a hard dependency on the
+  `wayland-protocols` crate. Protocol bindings are generated from the
+  local XMLs in `protocols/` (same source of truth as the C code's
+  wayland-scanner output), with `text-input-unstable-v3.xml` newly
+  vendored because input-method-v2's event arg types reference its
+  enums. The C daemon is unchanged; meson and cargo coexist during the
+  migration.
+
 ## [0.3.4] - 2026-06-20
 
 ### Fixed
