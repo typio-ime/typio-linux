@@ -35,19 +35,22 @@ use std::ptr;
 
 // flux-sys re-exports all generated bindings at the crate root.
 use flux_sys::{
-    flux_canvas, flux_canvas_destroy, flux_canvas_desc, flux_device,
-    flux_device_create, flux_device_desc, flux_device_release,
-    flux_device_vk_instance, flux_get_last_error, flux_error_info,
-    flux_result, flux_struct_type,
-    flux_surface, flux_surface_create, flux_surface_desc,
-    flux_surface_release, flux_text, flux_text_create, flux_text_desc,
-    flux_text_destroy,
+    flux_arena, flux_arena_destroy, flux_arena_init, flux_arena_reset,
+    flux_canvas, flux_canvas_begin, flux_canvas_destroy, flux_canvas_desc,
+    flux_canvas_end, flux_canvas_fill_rrect, flux_color_rgba,
+    flux_device, flux_device_create, flux_device_desc, flux_device_release,
+    flux_device_vk_instance, flux_frame, flux_frame_begin_desc,
+    flux_frame_present, flux_get_last_error, flux_error_info,
+    flux_result, flux_struct_type, flux_surface, flux_surface_begin_frame,
+    flux_surface_create, flux_surface_desc, flux_surface_release,
+    flux_text, flux_text_create, flux_text_desc, flux_text_destroy,
+    flux_text_draw, flux_text_family, flux_text_style,
 };
 
-// Type-constant aliases for readability.
 use flux_struct_type as FType;
 #[allow(unused_imports)]
 use flux_result as _FResult;
+use flux_text_family as FontFamily;
 
 /// Wrapper for a flux-backed panel: device + surface + canvas + text.
 pub struct FluxPanel {
@@ -55,6 +58,7 @@ pub struct FluxPanel {
     surface: *mut flux_surface,
     canvas: *mut flux_canvas,
     text: *mut flux_text,
+    arena: flux_arena,
     width: u32,
     height: u32,
 }
@@ -142,20 +146,102 @@ impl FluxPanel {
             surface,
             canvas,
             text,
+            arena: unsafe { std::mem::zeroed() },
             width,
             height,
         })
     }
 
+    /// Initialize the arena after construction. Must be called once
+    /// before the first draw_candidates.
+    pub fn init_arena(&mut self) -> Result<(), String> {
+        let r = unsafe { flux_arena_init(&mut self.arena, 256 * 1024, ptr::null_mut()) };
+        if !flux_result_is_ok(r) {
+            return Err(flux_last_error_string("flux_arena_init"));
+        }
+        Ok(())
+    }
+
     /// Draw candidate strings. The `selected` index is highlighted.
+    ///
+    /// This performs a complete render frame:
+    ///   1. Reset the arena (free last frame's text shaping data)
+    ///   2. Begin a surface frame
+    ///   3. Begin canvas recording with dark background
+    ///   4. Draw a highlight rectangle on the selected candidate
+    ///   5. Draw each candidate as a row of text via flux_text_draw
+    ///   6. End canvas + present frame
     pub fn draw_candidates(&mut self, candidates: &[String], selected: usize) {
-        // Implementation requires flux_text_draw which has a complex
-        // API. For the initial port, this is a placeholder that proves
-        // the flux integration compiles and links. The actual text
-        // rendering calls will be added once we verify the device +
-        // surface creation works end-to-end against a live compositor.
-        let _ = candidates;
-        let _ = selected;
+        unsafe {
+            // 1. Reset arena.
+            flux_arena_reset(&mut self.arena);
+
+            // 2. Begin frame.
+            let frame_desc: flux_frame_begin_desc = std::mem::zeroed();
+            let mut frame: *mut flux_frame = ptr::null_mut();
+            let r = flux_surface_begin_frame(self.surface, &frame_desc, &mut frame);
+            if !flux_result_is_ok(r) {
+                return;
+            }
+
+            // 3. Begin canvas with dark background.
+            let bg = flux_color_rgba(28, 28, 32, 255);
+            let r = flux_canvas_begin(self.canvas, frame, &bg);
+            if !flux_result_is_ok(r) {
+                return;
+            }
+
+            // Layout constants (logical pixels).
+            let row_height: f32 = 24.0;
+            let padding: f32 = 8.0;
+            let font_size: f32 = 16.0;
+            let text_color = flux_color_rgba(240, 240, 240, 255);
+            let highlight_color = flux_color_rgba(56, 84, 160, 255);
+
+            let style = flux_text_style {
+                size_px: font_size,
+                weight: 400.0,
+                color: text_color,
+                family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+            };
+
+            // 4-5. Draw each candidate row.
+            for (i, candidate) in candidates.iter().enumerate() {
+                let y = padding + i as f32 * row_height;
+
+                // Highlight selected row.
+                if i == selected {
+                    flux_canvas_fill_rrect(
+                        self.canvas,
+                        flux_sys::flux_rect {
+                            x: 2.0,
+                            y,
+                            w: self.width as f32 - 4.0,
+                            h: row_height,
+                        },
+                        4.0, // corner radius
+                        highlight_color,
+                    );
+                }
+
+                // Draw the candidate text. y + font_size = baseline.
+                let bytes = candidate.as_bytes();
+                flux_text_draw(
+                    self.text,
+                    self.canvas,
+                    &mut self.arena,
+                    padding,
+                    y + font_size,
+                    bytes.as_ptr() as *const _,
+                    bytes.len(),
+                    &style,
+                );
+            }
+
+            // 6. End canvas + present.
+            flux_canvas_end(self.canvas);
+            flux_frame_present(frame);
+        }
     }
 
     /// Resize the panel surface.
@@ -173,6 +259,7 @@ impl FluxPanel {
 impl Drop for FluxPanel {
     fn drop(&mut self) {
         unsafe {
+            flux_arena_destroy(&mut self.arena);
             if !self.text.is_null() {
                 flux_text_destroy(self.text);
             }
