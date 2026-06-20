@@ -31,6 +31,10 @@ inotify = "0.11"
 nix = { version = "0.31", features = ["time"] }
 calloop = "0.14"
 libc = "0.2"
+# zbus's blocking-api wraps an async runtime (async-io by default). The
+# blocking-api feature gives us Connection::system() and receive_signal()
+# — the sync API surface we use from the logind worker thread.
+zbus = { version = "5", default-features = true, features = ["blocking-api"] }
 
 # The framework library — sibling checkout at ../libtypio.
 # Production builds should resolve via PKG_CONFIG_PATH / published crate;

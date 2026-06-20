@@ -18,6 +18,10 @@
 //!   mechanism — no frontend side effects; the caller receives a
 //!   callback when a confirmed reload should fire.
 
+pub mod backoff;
 pub mod config_watcher;
 pub mod engine_loader;
+pub mod ipc;
 pub mod protocols;
+pub mod repeat_timer;
+pub mod resume_signal;

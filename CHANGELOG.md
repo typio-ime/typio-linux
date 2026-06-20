@@ -9,6 +9,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rust logind resume detector (`typio_host::resume_signal`).** Phase
+  3a port of `src/engine/logind/resume.{h,c}` (252 lines of C) and the
+  pure decision rules in `src/engine/resume_model.h`. Subscribes to
+  logind's `PrepareForSleep` D-Bus signal via `zbus` (no libsystemd
+  dependency) on a dedicated worker thread; events are channelled back
+  to the caller's thread via `mpsc`. The boottime/monotonic gap
+  detector runs per-tick on the caller's side via
+  [`ResumeSignal::tick`]. Both detectors deduplicate on a 5-second
+  cooldown. 7 unit tests covering the pure gap/cooldown predicates,
+  the cooldown dedup behaviour, and the reason-string literals
+  (matched against the C version's stable identifiers).
+
+  Introduces `zbus` as the D-Bus library — replacing the C version's
+  `sd-bus`/`libsystemd` dependency for this codepath. The same zbus
+  pattern will drive the SNI tray port in a later phase.
+
+- **Rust TIP v3 protocol layer (`typio_host::ipc`).** Phase 3b port
+  of `src/ipc/tip_protocol.{h,c}` (90 + 38 lines of C) and the JSON
+  envelope helpers in `src/ipc/tip_json.{h,c}` (520 lines of
+  hand-rolled JSON in C). Replaces the hand-rolled parser/builder with
+  `serde_json` and `serde` derives: JSON-RPC 2.0 envelope (Request,
+  Response, Notification, Error, Id) round-trips via
+  `serde_json::to_string` / `from_str`. Per-method typed `params` /
+  `result` structs are intentionally not ported — they will land
+  alongside the corresponding handler port (config access, engine
+  registry, etc.); the envelope handles untyped `serde_json::Value`s
+  meanwhile, exactly what the C version uses.
+
+  19 unit tests: protocol constants match typioctl's wire
+  expectations; socket-path resolution under all three env-var
+  regimes; round-trip of all three message kinds; standard
+  JSON-RPC error codes; a real-world `hello` request/response
+  sample verified against typioctl.
+
+- **Rust backoff + keyboard repeat pure-mechanism ports
+  (`typio_host::backoff` + `typio_host::repeat_timer`).** Phase 3c
+  port of the pure parts of `src/engine/backoff.{h,c}` (43+25 lines)
+  and `src/wayland/keyboard/repeat.c`'s timer-arming + modifier-gate
+  logic. The keyboard-repeat dispatch (the 130 lines of deep
+  xkb_state / focus / candidate-guard coupling in
+  `typio_wl_keyboard_dispatch_repeat`) is deliberately NOT ported —
+  it needs the keyboard router state machine which hasn't been ported
+  yet, and forcing a standalone extraction would produce an awkward
+  stub.
+
+  13 unit tests: backoff schedule doubles+clamps correctly,
+  should_retry respects the attempt cap, shift-overflow is guarded;
+  RepeatTimer starts/stops toggling the armed flag,
+  should_repeat_for_modifiers respects Ctrl/Alt/Super suppression,
+  interval_from_rate clamps pathological inputs.
+
 - **Rust config_watcher port + calloop spike (`typio_host::config_watcher`
   + `spike-config-watcher` bin).** Phase 2 port of the watch mechanism
   in `src/wayland/runtime_config.c`. Watches the config directory (and
