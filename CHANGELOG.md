@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rust keyboard policy + notifier ports (`typio_host::keyboard_policy`
+  + `typio_host::notifier`).** Phase 5 port of the four
+  `src/wayland/keyboard/policy/*.c` files (modifiers.c, chords.c,
+  repeat_guard.c, tracker.c — 227 lines of C) and
+  `src/notify/notifications.{h,c}` (251 lines of C).
+
+  `keyboard_policy` consolidates the four pure-decision files into one
+  module: effective-modifier computation, shortcut chord logic,
+  repeat gating predicates, per-key tracking state, and keysym
+  constants. Introduces the `KeyTrackState` enum (9 variants) and the
+  `ShortcutBinding` struct — both used by the eventual keyboard router
+  port.
+
+  `notifier` calls the FreeDesktop Notifications D-Bus API via zbus
+  (replacing the C version's `sd-bus`/`libsystemd` dependency for
+  this codepath). Two-layer API: `send` for immediate delivery,
+  `send_coalesced` for per-key rate-limiting via a 16-entry ring
+  buffer matching `TYPIO_NOTIFY_RECENT_CAP`.
+
+  21 unit tests: modifier-bit mapping, effective-modifier OR/AND
+  logic with owned/unowned generations, repeat cancel transitions,
+  chord gating with all/already-triggered/saw-non-modifier cases,
+  KeyTrackState name coverage, tracker slice operations, rate-limiter
+  ring-buffer eviction + long-key truncation, notification builder
+  defaults.
+
 - **Rust UDS server (`typio_host::uds_server`).** Phase 4 port of
   `src/ipc/uds_server.{h,c}` (555 lines of C). Owns a Unix-domain
   listening socket + an internal epoll instance multiplexing all

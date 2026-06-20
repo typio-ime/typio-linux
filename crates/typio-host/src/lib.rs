@@ -22,6 +22,8 @@ pub mod backoff;
 pub mod config_watcher;
 pub mod engine_loader;
 pub mod ipc;
+pub mod keyboard_policy;
+pub mod notifier;
 pub mod protocols;
 pub mod repeat_timer;
 pub mod resume_signal;
