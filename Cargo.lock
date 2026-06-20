@@ -902,6 +902,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml",
+ "typio-abi",
  "wayland-backend",
  "wayland-client",
  "wayland-scanner",

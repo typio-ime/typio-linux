@@ -41,6 +41,7 @@ xkbcommon = "0.9"
 # Production builds should resolve via PKG_CONFIG_PATH / published crate;
 # the path dep here is the dev-workflow default.
 libtypio = { path = "../libtypio" }
+typio-abi = { path = "../libtypio/crates/abi" }
 
 [profile.release]
 opt-level = 3
