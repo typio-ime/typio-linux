@@ -104,9 +104,9 @@ if enable_wayland
             'ui/panel/theme.c',
         )
     else
-        host_sources += files(
-            'ui/panel/stub.c',
-        )
+        # flux is required when Wayland is enabled (see meson.build); this
+        # branch is unreachable in any valid configuration.
+        error('flux_dep not found inside the enable_wayland=true block; meson.build contract is wrong')
     endif
 endif
 

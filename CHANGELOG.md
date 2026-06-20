@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **flux dependency pinned to v0.1.0** (first standalone release). Bumped
+  `subprojects/flux.wrap` from the dangling `v0.0.8` pin — that tag never
+  existed in the flux repo, so the wrap was silently failing and the build
+  was resolving to whatever `flux.pc` pkg-config found first. Added an
+  explicit `version: '>= 0.1.0'` floor on the `dependency('flux')` lookup
+  so a stale system install can no longer mask a broken wrap.
+
+### Fixed
+
+- **Sibling-flux symlink resolved to the wrong path.** The meson helper
+  that auto-links `../flux` into `subprojects/flux` for dev checkouts
+  computed both the sibling-existence probe and the link target with one
+  `..` too few — it looked for `<typio-meta-repo>/flux` instead of
+  `<projects>/flux`. The bug was masked because the broken subproject
+  lookup fell through to pkg-config and accepted any installed `flux`.
+  The new `>= 0.1.0` version floor made the fallthrough reject the stale
+  system 0.0.8 and surfaced the symlink bug; both the probe and the link
+  target are now computed with the correct nesting depth.
+
+### Removed
+
+- **Dead `src/ui/panel/stub.c` no-op fallback.** The CHANGELOG entry in
+  v0.3.x made flux a hard requirement of the Wayland build, but the
+  meson `else` branch wiring `stub.c` was left in place. With the new
+  version floor the unreachable branch is now an explicit `error()`
+  instead of silently compiling a panel that returns `NULL` from every
+  entry point. `docs/explanation/frontend-graphics.md` updated to drop
+  the stale claim that the stub "proves the upper pipeline compiles
+  against an empty backend"; the CPU-only tests under `tests/ui/` are
+  the actual proof.
+
 ## [0.3.3] - 2026-06-20
 
 ### Fixed

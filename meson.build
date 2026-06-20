@@ -73,11 +73,16 @@ endif
 
 # ── flux (GPU canvas for the candidate Panel) ──────────────────────────────
 # Prefer a sibling checkout (~/projects/flux), else the subprojects wrap.
-flux_sibling = meson.current_source_dir() / '..' / 'flux' / 'meson.build'
+# Both the sibling probe and the symlink target are relative to this file's
+# location (<typio-meta-repo>/typio-linux/), so two levels up escape the
+# meta-repo and reach the parent that holds the sibling flux checkout.
+# The symlink target is relative to the symlink itself
+# (<root>/subprojects/flux), which adds one more `..` to escape subprojects/.
+flux_sibling = meson.current_source_dir() / '..' / '..' / 'flux' / 'meson.build'
 flux_subproject_link = meson.current_source_dir() / 'subprojects' / 'flux'
 if run_command('test', '-f', flux_sibling, check: false).returncode() == 0
     if run_command('test', '-L', flux_subproject_link, check: false).returncode() != 0
-        run_command('ln', '-sf', '../../flux', flux_subproject_link, check: false)
+        run_command('ln', '-sf', '../../../flux', flux_subproject_link, check: false)
     endif
 endif
 
@@ -92,7 +97,11 @@ flux_proj = subproject('flux',
 if flux_proj.found()
     flux_dep = flux_proj.get_variable('flux_dep')
 else
-    flux_dep = dependency('flux', required: enable_wayland)
+    # Version floor: 0.1.0 is the first standalone flux release (canvas +
+    # text + effect + compute modules, stable surface, MIT). Earlier 0.0.x
+    # was the in-tree flux of the old monorepo and does not carry the
+    # headers typio-linux includes (<flux/vulkan.h>, <flux/canvas.h>).
+    flux_dep = dependency('flux', version: '>= 0.1.0', required: enable_wayland)
 endif
 
 # ── Version & source label ────────────────────────────────────────────────

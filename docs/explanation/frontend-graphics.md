@@ -163,10 +163,10 @@ The architecture then enforces that the dependency stays confined:
 3. **Colour is decoupled from shaping** (ADR-0011), so shapes carry no
    backend paint state.
 4. **Concrete flux calls live at the backend boundary** (`paint.c`,
-   `text_shaper.c`, `device.c`, `surface.c`). A no-op `stub.c` already
-   implements the entire Panel interface for builds without flux (`HAVE_FLUX`
-   off) — proof that the upper pipeline compiles and runs against an empty
-   backend.
+   `text_shaper.c`, `device.c`, `surface.c`). flux has been a hard
+   requirement of the Wayland build since v0.3.x, so there is no
+   fallback path: the upper pipeline is exercised against the empty
+   backend by the CPU-only tests under `tests/ui/` instead.
 
 Porting to another canvas library therefore means rewriting the paint target,
 `text_shaper.c` / `device.c`, the present/surface plumbing in `surface.c`, and
