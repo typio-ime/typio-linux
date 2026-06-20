@@ -34,16 +34,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is one line at the call site once input-context integration lands.
 
 - **First runnable Rust daemon binary: `typio-daemon-stub`.** Phase 6
-  milestone. Wires together the engine_loader + uds_server + TIP
-  framing into a minimal but real daemon process. typioctl (or any
-  TIP v3 client) can connect to its UDS socket and exchange real
-  JSON-RPC frames.
+  milestone, extended in Phase 7. Wires together the engine_loader +
+  uds_server + TIP framing into a minimal but real daemon process.
+  typioctl (or any TIP v3 client) can connect to its UDS socket and
+  exchange real JSON-RPC frames.
 
   Methods implemented by the stub:
   - `hello` → real handshake: protocolVersion + daemonVersion + loaded
     engine list
   - `daemon.version` → crate version string
   - `daemon.status` → running flag + socket path + loaded engines
+  - `engine.list` → per-engine details (name, display name,
+    description, languages, capabilities)
+  - `engine.describe` (params: `{"name": "..."}`) → full EngineInfo;
+    returns application error code 1 if not loaded, `-32602` if
+    `name` param missing
+  - `events.subscribe` → wildcard subscription
   - Unknown methods → JSON-RPC `-32601 Method not found` (spec-
     compliant)
   - Known-but-unimplemented methods → `-32603` error with a message
@@ -51,17 +57,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     of a generic "not found"
   - Malformed JSON → `-32600 Invalid Request`
 
-  6 integration tests spin up the stub as a child process and verify
-  the wire contract via a real `UnixStream` client. The daemon does
-  NOT touch Wayland, does NOT route keys, does NOT manage a config
-  tree — it's a smoke test for the daemon skeleton, proving that the
-  pieces we have ported compose into a runnable binary that speaks
-  the real protocol.
+  `--socket PATH` and `--engine-dir PATH` CLI flags override the
+  defaults (useful for testing and dev workflows).
 
-  Live-verified: spawns, binds `$XDG_RUNTIME_DIR/typio/daemon.sock`,
-  accepts a connection, dispatches `hello` / `daemon.version` /
-  `daemon.status` correctly, returns proper JSON-RPC errors for
-  unimplemented methods.
+  9 integration tests spin up the stub as a child process and verify
+  the wire contract via a real `UnixStream` client. Live-verified
+  against the real `typio-engine-rime` manifest: returns the full
+  EngineInfo (display name "Rime", description, icon name "typio-rime-
+  symbolic", languages `["zh"]`, required caps `["preedit",
+  "candidates"]`, etc.).
+
+  The daemon does NOT touch Wayland, does NOT route keys, does NOT
+  manage a config tree — it's a smoke test for the daemon skeleton,
+  proving that the pieces we have ported compose into a runnable
+  binary that speaks the real protocol and serves real engine
+  metadata.
 
 - **Rust keyboard policy + notifier ports (`typio_host::keyboard_policy`
   + `typio_host::notifier`).** Phase 5 port of the four

@@ -199,3 +199,49 @@ fn malformed_json_returns_invalid_request() {
     let resp = recv_response(&mut stream);
     assert_eq!(resp["error"]["code"], -32600);
 }
+
+#[test]
+fn engine_list_returns_well_formed_object() {
+    let (_guard, socket) = spawn_stub();
+    let mut stream = UnixStream::connect(&socket).unwrap();
+    send_request(&mut stream, 11, "engine.list", json!({}));
+    let resp = recv_response(&mut stream);
+    let result = &resp["result"];
+    // The result has keyboard + voice arrays.
+    assert!(result["keyboard"].is_array());
+    assert!(result["voice"].is_array());
+    // No engines installed in the test environment — both arrays are
+    // empty. Verify the shape is correct anyway.
+    assert_eq!(result["keyboard"].as_array().unwrap().len(), 0);
+    assert_eq!(result["voice"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn engine_describe_returns_not_found_for_unknown_engine() {
+    let (_guard, socket) = spawn_stub();
+    let mut stream = UnixStream::connect(&socket).unwrap();
+    send_request(
+        &mut stream,
+        12,
+        "engine.describe",
+        json!({"name": "nonexistent"}),
+    );
+    let resp = recv_response(&mut stream);
+    // Application-defined error code 1 for "engine not loaded".
+    assert_eq!(resp["error"]["code"], 1);
+    let msg = resp["error"]["message"].as_str().unwrap();
+    assert!(
+        msg.contains("nonexistent"),
+        "error message should name the missing engine: {msg}"
+    );
+}
+
+#[test]
+fn engine_describe_returns_invalid_params_when_name_missing() {
+    let (_guard, socket) = spawn_stub();
+    let mut stream = UnixStream::connect(&socket).unwrap();
+    send_request(&mut stream, 13, "engine.describe", json!({}));
+    let resp = recv_response(&mut stream);
+    // -32602 Invalid params per JSON-RPC spec.
+    assert_eq!(resp["error"]["code"], -32602);
+}

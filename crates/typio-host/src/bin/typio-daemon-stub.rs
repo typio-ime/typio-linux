@@ -2,8 +2,8 @@
 //!
 //! Wires together the pieces we have ported so far (engine_loader +
 //! uds_server + the TIP framing) into a minimal daemon that can answer
-//! `hello` over the UDS control socket. typioctl can connect to it and
-//! get a real handshake response back.
+//! a useful subset of TIP v3 methods over the UDS control socket.
+//! typioctl can connect to it and get real handshake responses back.
 //!
 //! ## What it does
 //!
@@ -12,24 +12,28 @@
 //! 2. Constructs an `EngineRegistry` and an `EngineLoader`, scans every
 //!    engine dir, registers whatever engines are installed (typically
 //!    rime/mozc/sherpa when the sibling repos are built).
-//! 3. Binds a [`UdsServer`] at `protocol::socket_path()` (default
-//!    `$XDG_RUNTIME_DIR/typio/daemon.sock`).
+//! 3. Binds a [`UdsServer`] at `protocol::socket_path()` (or
+//!    `--socket PATH` if given).
 //! 4. Installs a request handler that responds to:
 //!    - `hello` → real handshake: protocol version + daemon version +
 //!      list of loaded engines
 //!    - `daemon.version` → crate version string
 //!    - `daemon.status` → basic runtime info (engines loaded, listening
 //!      socket path)
-//!    - all other methods → JSON-RPC `-32601 Method not found` error
+//!    - `engine.list` → per-engine details (name, display name,
+//!      description, languages, capabilities)
+//!    - `engine.describe` (params: `{"name": "..."}`) → full EngineInfo
+//!    - `events.subscribe` → wildcard subscription
+//!    - all other methods → JSON-RPC `-32601 Method not found` error,
+//!      or `-32603` for known-but-unimplemented
 //! 5. Runs a single-threaded poll(2) loop driving the server's epoll_fd.
 //!
 //! ## What it does NOT do
 //!
-//! Everything else. No Wayland connection, no input-method binding, no
-//! keyboard routing, no config tree, no tray. This is a smoke test for
-//! the daemon skeleton — the goal is to prove that a typioctl client
-//! gets a real handshake response back from a Rust-built `typio`
-//! binary.
+//! No Wayland connection, no input-method binding, no keyboard routing,
+//! no config tree, no tray. This is a smoke test for the daemon skeleton
+//! — the goal is to prove that a typioctl client gets real handshake +
+//! engine list responses back from a Rust-built `typio` binary.
 //!
 //! ## Try it
 //!
@@ -38,9 +42,17 @@
 //! ./target/debug/typio-daemon-stub
 //! # in another shell:
 //! typioctl hello
-//! typioctl daemon.status
+//! typioctl engine list
+//! typioctl engine describe rime
+//! ```
+//!
+//! Override the socket path (useful for testing):
+//!
+//! ```sh
+//! ./target/debug/typio-daemon-stub --socket /tmp/typio-test.sock
 //! ```
 
+use std::collections::HashMap;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -55,10 +67,17 @@ use typio_host::uds_server::{RequestOutcome, SubscriptionUpdate, UdsServer};
 fn main() -> ExitCode {
     eprintln!("typio-daemon-stub: starting (v{})", env!("CARGO_PKG_VERSION"));
 
+    let socket_override = parse_socket_override();
+    let engine_dirs_override = parse_engine_dirs_override();
+
     // 1. Engine discovery + registration.
     let mut registry = EngineRegistry::new();
     let mut loader = EngineLoader::with_voice();
-    let engine_dirs = dirs::resolve_engine_dirs(Vec::<String>::new());
+    let engine_dirs: Vec<std::path::PathBuf> = if let Some(d) = engine_dirs_override {
+        vec![std::path::PathBuf::from(d)]
+    } else {
+        dirs::resolve_engine_dirs(Vec::<String>::new())
+    };
     eprintln!("typio-daemon-stub: scanning engine dirs: {engine_dirs:?}");
     let mut total_engines = 0usize;
     for dir in &engine_dirs {
@@ -81,18 +100,10 @@ fn main() -> ExitCode {
         registry.list_voices()
     );
 
-    // 2. UDS server bind.
-    let socket_path = protocol::socket_path();
-    eprintln!("typio-daemon-stub: binding UDS at {}", socket_path.display());
-    let mut server = match UdsServer::bind(&socket_path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("FAIL: bind UDS: {e}");
-            return ExitCode::from(1);
-        }
-    };
-
-    // 3. Handler.
+    // Precompute engine info snapshot for the handler. Updates after
+    // this point (e.g. dynamic language changes per ADR-0034) won't be
+    // reflected — the stub loads once at startup.
+    let engine_infos = build_engine_info_snapshot(&registry);
     let keyboards: Vec<String> = registry
         .list_keyboards()
         .into_iter()
@@ -103,42 +114,43 @@ fn main() -> ExitCode {
         .into_iter()
         .map(String::from)
         .collect();
-    // Drop the registry — the stub handler returns the engine list as
-    // data snapshots, it does not consult the live registry per-call.
+    // Drop the registry — the stub serves snapshots, not live queries.
     drop(registry);
     drop(loader);
+
+    // 2. UDS server bind.
+    let socket_path = socket_override.unwrap_or_else(protocol::socket_path);
+    eprintln!("typio-daemon-stub: binding UDS at {}", socket_path.display());
+    let mut server = match UdsServer::bind(&socket_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("FAIL: bind UDS: {e}");
+            return ExitCode::from(1);
+        }
+    };
+
+    // 3. Handler.
     let socket_path_for_handler = socket_path.clone();
     server.set_handler(move |json: &str, _client| -> RequestOutcome {
         let req: Request = match Request::parse(json) {
             Ok(r) => r,
             Err(_) => {
                 return RequestOutcome::respond(
-                    Response::error(req_id_or_zero(json), -32600, "Invalid Response")
+                    Response::error(req_id_or_zero(json), -32600, "Invalid Request")
                         .to_json()
                         .unwrap(),
                 );
             }
         };
-        let keyboards_refs: Vec<&str> = keyboards.iter().map(|s| s.as_str()).collect();
-        let voices_refs: Vec<&str> = voices.iter().map(|s| s.as_str()).collect();
-        let response = dispatch(&req, &keyboards_refs, &voices_refs, &socket_path_for_handler);
-        // `events.subscribe` carries an implicit subscription update.
+        let response = dispatch(&req, &keyboards, &voices, &engine_infos, &socket_path_for_handler);
         let subscription = if req.method == methods::EVENTS_SUBSCRIBE {
-            // Wildcard subscription for the stub — every connected client
-            // gets every event. A real daemon would parse params.
             Some(SubscriptionUpdate::Wildcard)
         } else {
             None
         };
-        match response {
-            Some(resp_json) => RequestOutcome {
-                response: Some(resp_json),
-                subscription,
-            },
-            None => RequestOutcome {
-                response: None,
-                subscription,
-            },
+        RequestOutcome {
+            response,
+            subscription,
         }
     });
 
@@ -170,6 +182,100 @@ fn main() -> ExitCode {
     }
 }
 
+/// Scan `argv` for `--socket PATH`. Returns `Some(path)` if present.
+fn parse_socket_override() -> Option<std::path::PathBuf> {
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        if a == "--socket" {
+            return args.next().map(std::path::PathBuf::from);
+        }
+        if let Some(rest) = a.strip_prefix("--socket=") {
+            return Some(std::path::PathBuf::from(rest));
+        }
+    }
+    None
+}
+
+/// Scan `argv` for `--engine-dir PATH`. Returns `Some(path)` if present.
+fn parse_engine_dirs_override() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        if a == "--engine-dir" {
+            return args.next();
+        }
+        if let Some(rest) = a.strip_prefix("--engine-dir=") {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
+/// Build a snapshot of engine infos keyed by engine name.
+///
+/// The stub serves this snapshot; it does not consult the live registry
+/// per-call. A real daemon queries live state to pick up dynamic
+/// language changes (ADR-0034).
+fn build_engine_info_snapshot(
+    registry: &EngineRegistry,
+) -> HashMap<String, EngineInfoSnapshot> {
+    let mut out = HashMap::new();
+    for name in registry.list_keyboards().into_iter().chain(registry.list_voices()) {
+        if let Some(info) = registry.engine_info(name) {
+            out.insert(
+                name.to_string(),
+                EngineInfoSnapshot {
+                    name: info.name.clone(),
+                    display_name: info.display_name.clone(),
+                    description: info.description.clone(),
+                    author: info.author.clone(),
+                    icon: info.icon.clone(),
+                    language: info.language.clone(),
+                    languages: info.languages.clone(),
+                    engine_type: match info.engine_type {
+                        typio::core::engine::EngineType::Keyboard => "keyboard",
+                        typio::core::engine::EngineType::Voice => "voice",
+                    }
+                    .to_string(),
+                    required_capabilities: info.capabilities.required.clone(),
+                    optional_capabilities: info.capabilities.optional.clone(),
+                },
+            );
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone)]
+struct EngineInfoSnapshot {
+    name: String,
+    display_name: String,
+    description: String,
+    author: String,
+    icon: Option<String>,
+    language: String,
+    languages: Vec<String>,
+    engine_type: String,
+    required_capabilities: Vec<String>,
+    optional_capabilities: Vec<String>,
+}
+
+impl EngineInfoSnapshot {
+    fn to_json(&self) -> Value {
+        json!({
+            "name": self.name,
+            "displayName": self.display_name,
+            "description": self.description,
+            "author": self.author,
+            "icon": self.icon,
+            "language": self.language,
+            "languages": self.languages,
+            "type": self.engine_type,
+            "requiredCapabilities": self.required_capabilities,
+            "optionalCapabilities": self.optional_capabilities,
+        })
+    }
+}
+
 /// Parse just the `id` field from raw JSON for use in error responses
 /// where we cannot parse the full Request. Returns 0 if absent or
 /// unparseable.
@@ -183,11 +289,12 @@ fn req_id_or_zero(json: &str) -> i64 {
 
 /// Dispatch a parsed request to a stub handler. Returns:
 /// - `Some(json_string)` to send this response back
-/// - `None` for "no reply" (notification-style requests, none in this stub)
+/// - `None` for "no reply"
 fn dispatch(
     req: &Request,
-    keyboards: &[&str],
-    voices: &[&str],
+    keyboards: &[String],
+    voices: &[String],
+    engine_infos: &HashMap<String, EngineInfoSnapshot>,
     socket_path: &std::path::Path,
 ) -> Option<String> {
     let id = req.id.clone();
@@ -222,14 +329,58 @@ fn dispatch(
             });
             Some(Response::success(id, result).to_json().unwrap())
         }
+        methods::ENGINE_LIST => {
+            // Return an array of full engine infos, split by type.
+            let keyboards_detail: Vec<Value> = keyboards
+                .iter()
+                .filter_map(|n| engine_infos.get(n).map(EngineInfoSnapshot::to_json))
+                .collect();
+            let voices_detail: Vec<Value> = voices
+                .iter()
+                .filter_map(|n| engine_infos.get(n).map(EngineInfoSnapshot::to_json))
+                .collect();
+            let result = json!({
+                "keyboard": keyboards_detail,
+                "voice": voices_detail,
+            });
+            Some(Response::success(id, result).to_json().unwrap())
+        }
+        methods::ENGINE_DESCRIBE => {
+            let name = req
+                .params
+                .as_ref()
+                .and_then(|p| p.get("name"))
+                .and_then(Value::as_str);
+            match name {
+                Some(n) => match engine_infos.get(n) {
+                    Some(info) => {
+                        Some(Response::success(id, info.to_json()).to_json().unwrap())
+                    }
+                    None => Some(
+                        Response::error(
+                            id,
+                            1, // application-defined: engine not found
+                            format!("engine `{n}` is not loaded"),
+                        )
+                        .to_json()
+                        .unwrap(),
+                    ),
+                },
+                None => Some(
+                    Response::error(id, -32602, "missing required param `name`")
+                        .to_json()
+                        .unwrap(),
+                ),
+            }
+        }
         // Methods that exist in the protocol but the stub does not
         // implement yet. Return a structured "not implemented" error so
         // typioctl can present a useful message instead of generic
         // "method not found".
         "config.get" | "config.set" | "config.unset" | "config.list"
         | "config.show" | "config.reload"
-        | "engine.list" | "engine.describe" | "engine.invoke"
-        | "engine.load" | "engine.unload" | "engine.reload"
+        | "engine.invoke" | "engine.load" | "engine.unload"
+        | "engine.reload"
         | "keyboard.use" | "keyboard.next" | "keyboard.prev"
         | "voice.use" | "voice.next" | "voice.prev"
         | "language.list" | "language.use" | "language.next"
@@ -238,8 +389,7 @@ fn dispatch(
             Response::error(
                 id,
                 // -32603 Internal Error; reused here as "known method
-                // but not yet implemented by the Rust host". A real
-                // daemon returns success.
+                // but not yet implemented by the Rust host".
                 -32603,
                 format!(
                     "method `{}` is part of TIP v{PROTOCOL_VERSION} but not yet implemented by typio-daemon-stub",
@@ -266,8 +416,6 @@ fn dispatch(
 // resolves.
 #[allow(unused_imports)]
 use protocol as _protocol_doc_anchor;
-
-// Suppress unused message-import warning for `methods` re-export alias.
 #[allow(unused_imports)]
 use Message as _MessageDocAnchor;
 
