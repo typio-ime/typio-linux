@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `language.list` results will be stale until a future `languages.changed`
   topic is added (separate, protocol-bumping work).
 
+- **`-Werror=sign-conversion` failures in `test_menu_model.c`.** Three
+  call sites passed `typio_tray_menu_item_get_child_count()` (returns
+  `size_t`) straight into `check_int` (takes `long`). Added a
+  `check_size` helper mirroring the existing `check_int` / `check_bool`
+  pair rather than scattering casts.
+
 ### Changed
 
 - **flux dependency pinned to v0.1.0** (first standalone release). Bumped

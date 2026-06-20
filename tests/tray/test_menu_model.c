@@ -97,6 +97,16 @@ static void check_int(const char *case_name, long expected, long actual) {
     }
 }
 
+static void check_size(const char *case_name, size_t expected, size_t actual) {
+    bool ok = expected == actual;
+    printf("  %-54s %s\n", case_name, ok ? "OK" : "FAIL");
+    fflush(stdout);
+    if (!ok) {
+        fprintf(stderr, "    expected=%zu actual=%zu\n", expected, actual);
+        abort();
+    }
+}
+
 static void check_bool(const char *case_name, bool expected, bool actual) {
     printf("  %-54s %s\n", case_name, expected == actual ? "OK" : "FAIL");
     if (expected != actual) {
@@ -144,8 +154,8 @@ static void test_root_is_submenu(void) {
     check_bool("root is submenu parent", true,
                typio_tray_menu_item_is_submenu_parent(root));
     /* Empty registry: root has only Restart + Quit. */
-    check_int("root child count (empty registry)", 2,
-              typio_tray_menu_item_get_child_count(root));
+    check_size("root child count (empty registry)", 2,
+               typio_tray_menu_item_get_child_count(root));
     typio_tray_menu_item_free(root);
     typio_instance_free(inst);
 }
@@ -188,8 +198,8 @@ static void test_two_languages_with_engines(void) {
     assert(root);
 
     /* Two language entries + separator + Restart + Quit = 5 top-level. */
-    check_int("root child count (2 langs)", 5,
-              typio_tray_menu_item_get_child_count(root));
+    check_size("root child count (2 langs)", 5,
+               typio_tray_menu_item_get_child_count(root));
 
     const TypioTrayMenuItem *en = find_child(root, "English");
     const TypioTrayMenuItem *zh = find_child(root, "中文");
@@ -410,8 +420,8 @@ static void test_node_constructors_and_tree_ops(void) {
     check_bool("add_child b", true, typio_tray_menu_item_add_child(root, b));
     check_bool("add_child sep", true, typio_tray_menu_item_add_child(root, sep));
     check_bool("add_child act", true, typio_tray_menu_item_add_child(root, act));
-    check_int("root child count", 4,
-              typio_tray_menu_item_get_child_count(root));
+    check_size("root child count", 4,
+               typio_tray_menu_item_get_child_count(root));
 
     /* Accessor roundtrip. */
     check_int("A id", 100, typio_tray_menu_item_get_id(a));
