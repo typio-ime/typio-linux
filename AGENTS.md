@@ -136,8 +136,16 @@ ninja -C build && meson test -C build
 
 # Sanitizers — CI runs these and they WILL fail the PR
 meson setup -Denable_asan=true -Denable_ubsan=true build-asan  # one-time
-ninja -C build-asan && meson test -C build-asan
+ninja -C build-asan
+LSAN_OPTIONS="suppressions=$(pwd)/tests/asan_suppressions.txt" \
+    meson test -C build-asan
 ```
+
+`LSAN_OPTIONS` is required locally (CI sets it in
+`.github/workflows/ci.yml`): without it, LeakSanitizer reports
+internal libfontconfig leaks that are already pattern-matched in
+`tests/asan_suppressions.txt` but the local `meson test` invocation
+doesn't load the file on its own.
 
 ASan leak detection has Fontconfig-internal leaks suppressed in
 `tests/asan_suppressions.txt`. If a NEW leak appears, verify it is in

@@ -27,8 +27,16 @@ Run sanitizer coverage:
 ```bash
 meson setup build-asan --buildtype=debug -Denable_asan=true -Denable_ubsan=true
 ninja -C build-asan
-meson test -C build-asan --print-errorlogs
+LSAN_OPTIONS="suppressions=$(pwd)/tests/asan_suppressions.txt" \
+    meson test -C build-asan --print-errorlogs
 ```
+
+The `LSAN_OPTIONS` export is required locally: LeakSanitizer reports
+internal libfontconfig leaks (pattern-matched in
+`tests/asan_suppressions.txt`) that are not typio's. CI sets the same
+variable in `.github/workflows/ci.yml`; without it `test_icon_badge`
+and `test_font_resolve_purge` fail with 320-byte leaks in
+`FcPatternObjectInsertElt` / `FcPatternObjectAddWithBinding`.
 
 Use `dbus-run-session` for sanitizer and CI-like runs so status-bus and tray tests get an isolated session bus instead of depending on the developer's desktop session.
 
