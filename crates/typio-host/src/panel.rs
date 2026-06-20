@@ -98,7 +98,7 @@ impl FluxPanel {
         // 3. Create flux surface.
         let mut surface_desc: flux_surface_desc = std::mem::zeroed();
         surface_desc.type_ = FType::FLUX_TYPE_SURFACE_DESC;
-        surface_desc.vk_surface_khr = vk_surface as *mut c_void;
+        surface_desc.vk_surface_khr = vk_surface;
         surface_desc.width = width;
         surface_desc.height = height;
 

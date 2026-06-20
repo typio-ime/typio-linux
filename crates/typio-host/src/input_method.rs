@@ -32,7 +32,8 @@ use std::io;
 use std::os::fd::{AsFd, AsRawFd};
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
-use wayland_client::protocol::{wl_keyboard, wl_registry, wl_seat};
+use wayland_client::protocol::{wl_keyboard, wl_registry, wl_seat, wl_surface};
+use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 
 use crate::protocols::input_method_v2::zwp_input_method_keyboard_grab_v2::{
@@ -40,9 +41,9 @@ use crate::protocols::input_method_v2::zwp_input_method_keyboard_grab_v2::{
 };
 use crate::protocols::input_method_v2::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
 use crate::protocols::input_method_v2::zwp_input_method_v2::{self, ZwpInputMethodV2};
+use crate::protocols::input_method_v2::zwp_input_popup_surface_v2::{self, ZwpInputPopupSurfaceV2};
 use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1};
-use wayland_client::protocol::wl_compositor::WlCompositor;
 
 /// Callback type for input-method lifecycle events.
 pub type LifecycleCallback = Box<dyn FnMut(LifecycleEvent) + Send>;
@@ -105,6 +106,14 @@ pub struct InputMethodState {
     /// Compositor proxy (for creating panel surfaces later).
     #[allow(dead_code)]
     compositor: WlCompositor,
+    /// The wl_surface backing the candidate panel popup.
+    #[allow(dead_code)]
+    popup_surface_obj: wl_surface::WlSurface,
+    /// The input-method popup surface (positioning protocol).
+    #[allow(dead_code)]
+    popup_surface: ZwpInputPopupSurfaceV2,
+    /// Text input rectangle from the compositor (cursor position).
+    pub text_input_rect: Option<(i32, i32, i32, i32)>,
     serial: u32,
     active: bool,
     initialized: bool,
@@ -285,6 +294,9 @@ impl InputMethodFrontend {
             .bind(&qh, 1..=4, ())
             .map_err(|e| ConnectError::BindFailed("wl_compositor", format!("{e:?}")))?;
 
+        // Create a wl_surface for the panel popup.
+        let popup_surface_obj = compositor.create_surface(&qh, ());
+
         let input_method = im_manager.get_input_method(&seat, &qh, ());
 
         // Create the keyboard grab.
@@ -293,12 +305,18 @@ impl InputMethodFrontend {
         // Create the virtual keyboard for forwarding unhandled keys.
         let virtual_keyboard = _vk_manager.create_virtual_keyboard(&seat, &qh, ());
 
+        // Create the popup surface (for the candidate panel).
+        let popup_surface = input_method.get_input_popup_surface(&popup_surface_obj, &qh, ());
+
         let state = InputMethodState {
             seat,
             input_method,
             keyboard_grab,
             virtual_keyboard,
             compositor,
+            popup_surface_obj,
+            popup_surface,
+            text_input_rect: None,
             serial: 0,
             active: false,
             initialized: false,
@@ -546,6 +564,32 @@ impl Dispatch<WlCompositor, ()> for InputMethodState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
+    }
+}
+
+impl Dispatch<wl_surface::WlSurface, ()> for InputMethodState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &wl_surface::WlSurface,
+        _event: <wl_surface::WlSurface as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwpInputPopupSurfaceV2, ()> for InputMethodState {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwpInputPopupSurfaceV2,
+        event: zwp_input_popup_surface_v2::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        let zwp_input_popup_surface_v2::Event::TextInputRectangle { x, y, width, height } = event;
+        state.text_input_rect = Some((x, y, width, height));
     }
 }
 
