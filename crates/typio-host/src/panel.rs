@@ -17,7 +17,7 @@
 //! ```
 
 use std::ffi::c_void;
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_int};
 use std::ptr;
 
 use flux_sys::{
@@ -290,10 +290,8 @@ extern "C" fn registry_global(
 unsafe fn raw_create_wl_surface(
     wl_display: *mut c_void,
 ) -> Result<*mut c_void, String> {
-    let display = wl_display;
-
     // Get the registry.
-    let registry = wl_display_get_registry(display);
+    let registry = raw_get_registry(wl_display);
     if registry.is_null() {
         return Err("wl_display_get_registry failed".into());
     }
@@ -309,33 +307,24 @@ unsafe fn raw_create_wl_surface(
         global_remove: None,
     };
 
-    wl_registry_add_listener(
+    wl_proxy_add_listener(
         registry,
         &listener,
         &mut ctx as *mut RegistryCtx as *mut c_void,
     );
 
     // Roundtrip to receive the global events.
-    wl_display_roundtrip(display);
+    wl_display_roundtrip(wl_display);
 
     if ctx.compositor_name == 0 {
         return Err("compositor not found in registry".into());
     }
 
-    // Find the wl_compositor_interface symbol (C global).
-    let iface_ptr = libc::dlsym(
-        libc::RTLD_DEFAULT,
-        c"wl_compositor_interface".as_ptr(),
-    );
-    if iface_ptr.is_null() {
-        return Err("cannot find wl_compositor_interface symbol".into());
-    }
-
-    // Bind the compositor.
-    let compositor = wl_registry_bind(
+    // Bind the compositor via the exported interface data symbol.
+    let compositor = raw_registry_bind(
         registry,
         ctx.compositor_name,
-        iface_ptr,
+        &wl_compositor_interface as *const _ as *const c_void,
         ctx.compositor_version,
     );
 
@@ -344,7 +333,7 @@ unsafe fn raw_create_wl_surface(
     }
 
     // Create the surface.
-    let surface = wl_compositor_create_surface(compositor);
+    let surface = raw_create_surface(compositor);
     if surface.is_null() {
         return Err("wl_compositor_create_surface failed".into());
     }
@@ -352,29 +341,74 @@ unsafe fn raw_create_wl_surface(
     Ok(surface)
 }
 
-// Direct FFI to libwayland-client.so. These are stable C API functions
-// that don't change between versions.
+// Direct FFI to libwayland-client.so. Protocol-level functions like
+// wl_compositor_create_surface are inline in the C headers and NOT
+// exported from the shared library — we reimplement them using the
+// low-level wl_proxy_marshal_constructor.
 #[repr(C)]
 struct WlRegistryListener {
     global: Option<extern "C" fn(*mut c_void, *mut c_void, u32, *const c_char, u32)>,
     global_remove: Option<extern "C" fn(*mut c_void, *mut c_void, u32)>,
 }
 
+#[link(name = "wayland-client")]
 extern "C" {
-    fn wl_display_get_registry(display: *mut c_void) -> *mut c_void;
-    fn wl_display_roundtrip(display: *mut c_void) -> i32;
-    fn wl_registry_add_listener(
-        registry: *mut c_void,
+    fn wl_display_connect(name: *const c_char) -> *mut c_void;
+    fn wl_display_roundtrip(display: *mut c_void) -> c_int;
+    fn wl_proxy_marshal_constructor(
+        proxy: *mut c_void,
+        opcode: u32,
+        interface: *const c_void,
+        ...
+    ) -> *mut c_void;
+    fn wl_proxy_add_listener(
+        proxy: *mut c_void,
         listener: *const WlRegistryListener,
         data: *mut c_void,
-    ) -> i32;
-    fn wl_registry_bind(
-        registry: *mut c_void,
-        name: u32,
-        interface: *const c_void,
-        version: u32,
-    ) -> *mut c_void;
-    fn wl_compositor_create_surface(compositor: *mut c_void) -> *mut c_void;
+    ) -> c_int;
+
+    // Data symbols — interface metadata structs exported by libwayland.
+    static wl_compositor_interface: c_void;
+    static wl_registry_interface: c_void;
+    static wl_surface_interface: c_void;
+}
+
+/// Reimplementation of the inline `wl_display_get_registry`.
+unsafe fn raw_get_registry(display: *mut c_void) -> *mut c_void {
+    wl_proxy_marshal_constructor(
+        display,
+        1, // WL_DISPLAY_GET_REGISTRY opcode
+        &wl_registry_interface as *const _ as *const c_void,
+        ptr::null::<c_void>(),
+    )
+}
+
+/// Reimplementation of the inline `wl_compositor_create_surface`.
+unsafe fn raw_create_surface(compositor: *mut c_void) -> *mut c_void {
+    wl_proxy_marshal_constructor(
+        compositor,
+        0, // WL_COMPOSITOR_CREATE_SURFACE opcode
+        &wl_surface_interface as *const _ as *const c_void,
+        ptr::null::<c_void>(),
+    )
+}
+
+/// Reimplementation of the inline `wl_registry_bind`.
+unsafe fn raw_registry_bind(
+    registry: *mut c_void,
+    name: u32,
+    interface: *const c_void,
+    version: u32,
+) -> *mut c_void {
+    // bind opcode is 0 on wl_registry. The variadic args are:
+    // name (uint32_t), then NULL (the new_id is created by the constructor).
+    wl_proxy_marshal_constructor(
+        registry,
+        0, // WL_REGISTRY_BIND opcode
+        interface,
+        name,
+        ptr::null::<c_void>(),
+    )
 }
 
 // ── Vulkan Wayland surface creation ───────────────────────────────────────
