@@ -296,12 +296,26 @@ impl App {
             }
         }
 
-        // Activate first keyboard engine if any were registered.
-        if let Some(first) = registered_keyboards.first() {
-            if let Ok(c_name) = CString::new(first.as_str()) {
-                c_registry::typio_registry_set_active_keyboard(registry, c_name.as_ptr());
-                eprintln!("OK:   active keyboard = {first}");
+        // Restore the persisted language (last-used if still enabled,
+        // otherwise the first enabled language). This both activates the
+        // matching keyboard/voice engines for that language and sets
+        // `active_language` so the tray icon shows the right badge (中 / EN /
+        // あ …) instead of the generic `typio-keyboard-symbolic`. Falls back
+        // to the first registered keyboard when no languages are declared so
+        // legacy layout-only setups keep working.
+        let restored = c_registry::typio_registry_restore_language(registry);
+        if restored != typio::TypioResult::TypioOk {
+            if let Some(first) = registered_keyboards.first() {
+                if let Ok(c_name) = CString::new(first.as_str()) {
+                    c_registry::typio_registry_set_active_keyboard(
+                        registry,
+                        c_name.as_ptr(),
+                    );
+                    eprintln!("OK:   active keyboard = {first}");
+                }
             }
+        } else {
+            eprintln!("OK:   language restored");
         }
         eprintln!(
             "OK:   registered {} keyboard(s){}",
@@ -419,6 +433,18 @@ impl App {
         let stop_tx = self.event_tx.clone();
         ipc_bus.borrow_mut().set_stop_callback(move || {
             let _ = stop_tx.send(DaemonEvent::Shutdown);
+        });
+
+        // IPC-driven mutations (engine/language switch, config reload, engine
+        // load/unload) bypass the Rust `StateController` notification path —
+        // the registry is mutated directly via the C ABI. Route a
+        // `StateRefresh` back to the main loop so derived surfaces (controller
+        // snapshot, tray icon, tooltip, menu) re-sync against the new state.
+        // Without this, `typioctl language use en` would update the registry
+        // but leave the tray badge showing the previous language.
+        let state_tx = self.event_tx.clone();
+        ipc_bus.borrow_mut().set_state_change_callback(move || {
+            let _ = state_tx.send(DaemonEvent::StateRefresh);
         });
 
         if let Some(ref mut controller) = self.state_controller {

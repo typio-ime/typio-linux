@@ -517,6 +517,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tray icon never showed the active language badge at startup.** The
+  daemon boot path activated only the first keyboard engine
+  (`typio_registry_set_active_keyboard`) and never called
+  `typio_registry_restore_language`, so the registry's `active_language`
+  stayed `None` even when rime declared `zh` and the user's last session
+  was in Chinese. With no active language, `resolve_language_icon`
+  fell through to layer 3 and the tray rendered
+  `typio-keyboard-symbolic` instead of the expected `中` badge. The
+  daemon now calls `typio_registry_restore_language` after engine
+  discovery (re-activating the last-used language if still enabled,
+  otherwise the first enabled language), and only falls back to the
+  first registered keyboard when no languages are declared at all.
+
+- **IPC-driven state changes did not refresh the tray icon.** Mutations
+  issued through the UDS control surface (`typioctl language use en`,
+  `keyboard.next`, `voice.use`, `config.reload`, `engine.load`, …)
+  mutated the registry directly via the C ABI but never signalled the
+  daemon core, so the `StateController` snapshot, the tray badge, and
+  the tooltip kept showing the previous language/engine until something
+  else (a tray menu click, a config-watcher reload) happened to fire a
+  `StateRefresh`. `StatusService` now exposes a `state_change_callback`
+  wired through `IpcBus::set_state_change_callback`; the daemon core
+  installs a callback that pushes `DaemonEvent::StateRefresh`, so the
+  main loop re-syncs the controller and tray surfaces on every
+  successful mutation. Read-only methods and errored mutations do not
+  fire the callback.
+
 - **Auto-repeat for engine-consumed keys (Backspace, etc.).** When an
   active engine consumed a key — e.g. a pinyin engine handling Backspace
   to delete the last preedit character — the repeat timer was explicitly

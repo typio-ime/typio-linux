@@ -260,6 +260,7 @@ pub trait ServiceBackend {
 
 type StopCallback = Box<dyn FnMut()>;
 type SubscribeCallback = Box<dyn FnMut(ClientToken, Vec<String>)>;
+type StateChangeCallback = Box<dyn FnMut()>;
 
 // ── Service ──────────────────────────────────────────────────────────────
 
@@ -270,6 +271,11 @@ pub struct StatusService<B: ServiceBackend> {
     backend: B,
     stop_callback: Option<StopCallback>,
     subscribe_callback: Option<SubscribeCallback>,
+    /// Fired after any successful mutation (engine/language switch, config
+    /// reload, engine load/unload) so the daemon core can re-sync surfaces
+    /// (tray icon, controller snapshot) that don't sit inside the IPC dispatch
+    /// path. Mirrors the `daemon.stop` callback pattern.
+    state_change_callback: Option<StateChangeCallback>,
     started_at: Instant,
 }
 
@@ -279,6 +285,7 @@ impl<B: ServiceBackend> StatusService<B> {
             backend,
             stop_callback: None,
             subscribe_callback: None,
+            state_change_callback: None,
             started_at: Instant::now(),
         }
     }
@@ -289,6 +296,23 @@ impl<B: ServiceBackend> StatusService<B> {
 
     pub fn set_subscribe_callback<F: FnMut(ClientToken, Vec<String>) + 'static>(&mut self, cb: F) {
         self.subscribe_callback = Some(Box::new(cb));
+    }
+
+    /// Install the callback fired after any IPC-driven mutation succeeds
+    /// (engine/language switch, config reload, engine load/unload). The daemon
+    /// core uses this to push a `StateRefresh` so the controller, tray icon,
+    /// and tooltip re-sync against the mutated registry.
+    pub fn set_state_change_callback<F: FnMut() + 'static>(&mut self, cb: F) {
+        self.state_change_callback = Some(Box::new(cb));
+    }
+
+    /// Fire the state-change callback if installed. Called from the dispatch
+    /// tail of every successful mutation method. Errors and read-only methods
+    /// never trigger it.
+    fn notify_state_change(&mut self) {
+        if let Some(cb) = self.state_change_callback.as_mut() {
+            cb();
+        }
     }
 
     /// Reset the uptime origin (the C version records `started_at` at
@@ -307,7 +331,7 @@ impl<B: ServiceBackend> StatusService<B> {
     ) -> Response {
         use protocol::methods as m;
 
-        match method {
+        let resp = match method {
             m::HELLO => self.handle_hello(id),
             m::CONFIG_GET => self.handle_config_get(params, id),
             m::CONFIG_SET => self.handle_config_set(params, id),
@@ -336,7 +360,18 @@ impl<B: ServiceBackend> StatusService<B> {
             m::DAEMON_VERSION => self.handle_daemon_version(id),
             m::EVENTS_SUBSCRIBE => self.handle_events_subscribe(params, id, client_token),
             _ => err(id, StandardError::MethodNotFound, "Method not found"),
+        };
+
+        // Successful mutations trigger a state-change notification so the
+        // daemon core can re-sync the controller snapshot, tray icon, and
+        // tooltip against the mutated registry. Read-only methods, errors,
+        // and unknown methods are ignored. (config.set touches the same
+        // surface — a per-language icon override — so it is included.)
+        if !resp.is_error() && is_state_mutation_method(method) {
+            self.notify_state_change();
         }
+
+        resp
     }
 
     // ── hello ──
@@ -799,6 +834,33 @@ fn err(id: i64, code: StandardError, _msg: &str) -> Response {
 
 fn err_msg(id: i64, code: StandardError, msg: &str) -> Response {
     Response::error(Id::Number(id), code.code(), msg)
+}
+
+/// Methods whose successful dispatch mutates registry/config state and so
+/// requires the daemon core to re-sync derived surfaces (controller snapshot,
+/// tray icon/tooltip/menu). Read-only methods, lifecycle (`daemon.stop`), and
+/// subscription management are intentionally excluded — they either change no
+/// registry state or are handled by their own dedicated callbacks.
+fn is_state_mutation_method(method: &str) -> bool {
+    use protocol::methods as m;
+    matches!(
+        method,
+        m::CONFIG_SET
+            | m::CONFIG_UNSET
+            | m::CONFIG_RELOAD
+            | m::KEYBOARD_USE
+            | m::KEYBOARD_NEXT
+            | m::KEYBOARD_PREV
+            | m::VOICE_USE
+            | m::VOICE_NEXT
+            | m::VOICE_PREV
+            | m::LANGUAGE_USE
+            | m::LANGUAGE_NEXT
+            | m::LANGUAGE_PREV
+            | m::ENGINE_LOAD
+            | m::ENGINE_UNLOAD
+            | m::ENGINE_RELOAD
+    )
 }
 
 fn get_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
@@ -1459,6 +1521,67 @@ mod tests {
         let r = dispatch(&mut svc, "daemon.stop", json!({}));
         assert!(!r.is_error());
         assert!(*stopped.borrow());
+    }
+
+    // ── state-change callback ──
+
+    #[test]
+    fn state_change_callback_fires_on_language_use() {
+        let fake = fixture().build();
+        let mut svc = StatusService::new(fake);
+        let fired = Rc::new(RefCell::new(false));
+        let f = fired.clone();
+        svc.set_state_change_callback(move || *f.borrow_mut() = true);
+        let r = dispatch(&mut svc, "language.use", json!({"tag": "en"}));
+        assert!(!r.is_error());
+        assert!(*fired.borrow(), "state-change callback must fire on language.use");
+    }
+
+    #[test]
+    fn state_change_callback_fires_on_keyboard_use() {
+        let mut b = fixture();
+        b.keyboards = vec!["compose".into()];
+        b.kinds.insert("compose".into(), EngineKind::Keyboard);
+        let fake = b.build();
+        let mut svc = StatusService::new(fake);
+        let fired = Rc::new(RefCell::new(false));
+        let f = fired.clone();
+        svc.set_state_change_callback(move || *f.borrow_mut() = true);
+        let r = dispatch(&mut svc, "keyboard.use", json!({"name": "compose"}));
+        assert!(!r.is_error());
+        assert!(*fired.borrow());
+    }
+
+    #[test]
+    fn state_change_callback_skipped_for_read_only_methods() {
+        let fake = fixture().build();
+        let mut svc = StatusService::new(fake);
+        let fired = Rc::new(RefCell::new(false));
+        let f = fired.clone();
+        svc.set_state_change_callback(move || *f.borrow_mut() = true);
+        let _ = dispatch(&mut svc, "engine.list", json!({}));
+        let _ = dispatch(&mut svc, "language.list", json!({}));
+        let _ = dispatch(&mut svc, "daemon.status", json!({}));
+        assert!(
+            !*fired.borrow(),
+            "read-only methods must not fire state-change callback"
+        );
+    }
+
+    #[test]
+    fn state_change_callback_skipped_for_errors() {
+        // No registry → mutation handlers return InternalError; callback
+        // must NOT fire.
+        let mut b = fixture();
+        b.present = false;
+        let fake = b.build();
+        let mut svc = StatusService::new(fake);
+        let fired = Rc::new(RefCell::new(false));
+        let f = fired.clone();
+        svc.set_state_change_callback(move || *f.borrow_mut() = true);
+        let r = dispatch(&mut svc, "language.use", json!({"tag": "en"}));
+        assert!(r.is_error());
+        assert!(!*fired.borrow(), "errored mutations must not fire callback");
     }
 
     #[test]

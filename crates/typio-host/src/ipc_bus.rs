@@ -117,6 +117,14 @@ impl IpcBus {
         self.service.set_stop_callback(cb);
     }
 
+    /// Install the callback triggered after any IPC-driven state mutation
+    /// (engine/language switch, config reload, engine load/unload). The daemon
+    /// core uses this to push a `StateRefresh` so derived surfaces (controller
+    /// snapshot, tray icon, tooltip) re-sync against the mutated registry.
+    pub fn set_state_change_callback<F: FnMut() + 'static>(&mut self, cb: F) {
+        self.service.set_state_change_callback(cb);
+    }
+
     /// Drain pending UDS events. Call once per loop iteration.
     pub fn dispatch(&mut self) {
         self.server.dispatch();
