@@ -64,15 +64,37 @@ impl FluxPanel {
     ///
     /// # Safety
     /// `wl_display_ptr` must be valid for the panel's lifetime.
-    pub unsafe fn new(
+    /// Create a panel backed by an EXISTING wl_surface (e.g. one that's
+    /// already connected to zwp_input_popup_surface_v2 for positioning).
+    /// The surface must outlive the panel.
+    pub unsafe fn new_from_surface(
         wl_display_ptr: *mut c_void,
+        wl_surface_ptr: *mut c_void,
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
-        // 1. Create a wl_surface via raw libwayland-client.
-        let wl_surface = raw_create_wl_surface(wl_display_ptr)?;
+        Self::new_inner(wl_display_ptr, wl_surface_ptr, width, height)
+    }
+
+    fn new_inner(
+        wl_display_ptr: *mut c_void,
+        wl_surface_ptr: *mut c_void,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, String> {
+        unsafe { Self::new_inner_unsafe(wl_display_ptr, wl_surface_ptr, width, height) }
+    }
+
+    unsafe fn new_inner_unsafe(
+        wl_display_ptr: *mut c_void,
+        wl_surface_ptr: *mut c_void,
+        width: u32,
+        height: u32,
+    ) -> Result<Self, String> {
+        // 1. Use the provided wl_surface directly.
+        let wl_surface = wl_surface_ptr;
         if wl_surface.is_null() {
-            return Err("cannot create wl_surface".into());
+            return Err("wl_surface is null".into());
         }
 
         // 2. Create Vulkan device with Wayland surface + swapchain extensions.

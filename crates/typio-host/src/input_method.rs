@@ -172,6 +172,13 @@ impl InputMethodState {
         self.virtual_keyboard.modifiers(depressed, latched, locked, group);
     }
 
+    /// Raw pointer to the popup wl_surface. Use this to create a
+    /// FluxPanel on the SAME surface so Vulkan rendering and popup
+    /// positioning share one wl_surface.
+    pub fn popup_surface_raw_ptr(&self) -> *mut std::ffi::c_void {
+        self.popup_surface_obj.id().as_ptr() as *mut std::ffi::c_void
+    }
+
     /// Set the current candidate list + selected index for the panel.
     pub fn set_candidates(&mut self, candidates: Vec<String>, selected: usize) {
         self.candidates = candidates;

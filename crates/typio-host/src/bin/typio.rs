@@ -268,26 +268,26 @@ fn main() -> ExitCode {
     };
     eprintln!("OK: Wayland connected, keyboard grabbed");
 
-    // ── 4. Flux panel ─────────────────────────────────────────────────────
-    // Use the SAME wl_display as the input-method frontend — extract
-    // the raw pointer from the wayland-client Connection.
+    // ── 4. Flux panel on the SAME wl_surface as the popup ─────────────
+    // This ensures the compositor positions the panel (via popup surface
+    // protocol) AND flux renders candidates to it (via Vulkan).
     let panel_display = frontend.raw_display_ptr();
-    let mut panel = if !panel_display.is_null() {
-        unsafe {
-            match FluxPanel::new(panel_display, panel_width, panel_height) {
-                Ok(p) => {
-                    eprintln!("OK: flux panel created");
-                    p
+    let panel_surface = frontend.state().popup_surface_raw_ptr();
+    let mut panel = unsafe {
+        if panel_display.is_null() || panel_surface.is_null() {
+            eprintln!("WARN: null display/surface — running without panel");
+            return run_without_panel(frontend, ctx);
+        }
+        match FluxPanel::new_from_surface(panel_display, panel_surface, panel_width, panel_height) {
+            Ok(p) => {
+                eprintln!("OK: flux panel created");
+                p
             }
-                Err(e) => {
-                    eprintln!("WARN: panel creation failed: {e} — running without panel");
-                    return run_without_panel(frontend, ctx);
-                }
+            Err(e) => {
+                eprintln!("WARN: panel creation failed: {e} — running without panel");
+                return run_without_panel(frontend, ctx);
             }
         }
-    } else {
-        eprintln!("WARN: cannot connect panel display — running without panel");
-        return run_without_panel(frontend, ctx);
     };
 
     // ── 5. UDS server ─────────────────────────────────────────────────────
