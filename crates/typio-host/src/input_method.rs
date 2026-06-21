@@ -469,17 +469,35 @@ impl InputMethodFrontend {
         let display_ptr = frontend.raw_display_ptr();
         let surface_ptr = frontend.state.popup_surface_raw_ptr();
         let viewport = frontend.state.panel_viewport.clone();
-        // Allocate the initial swapchain at a size that covers a typical
-        // banner or a small candidate row, so the first render does not
-        // need to call `flux_surface_resize` (which blocks on
-        // `vkDeviceWaitIdle`). 256x64 physical maps to 256x64 logical at
-        // scale 1x — enough for a `<badge> · <engine> · <mode>` banner
-        // (~100x40) or a short candidate row. The grow-only / viewport
-        // crop path in `ensure_*_size` takes over for larger content; the
-        // difference is that the first expensive resize now happens during
-        // actual user interaction, not on the first automatic indicator
-        // trigger where the watchdog is unforgiving.
-        match unsafe { FluxPanel::new_from_surface(display_ptr, surface_ptr, viewport, 256, 64) } {
+        // Allocate the initial swapchain at `PANEL_PREALLOC_WIDTH ×
+        // PANEL_PREALLOC_HEIGHT` (512×128). This covers the first
+        // automatic indicator banner at scales 1, 1.5, 2 and 3 without
+        // invoking `flux_surface_resize`, which blocks on
+        // `vkDeviceWaitIdle` + compositor swapchain release and trips
+        // the 3 s watchdog on a fresh daemon (the watchdog is armed
+        // before the first PanelUpdate but the resize runs inside that
+        // stage). See the audit table on `PANEL_PREALLOC_WIDTH` in
+        // panel.rs: at scale 3 the longest observed default label
+        // ("中 · Rime · 懿拼音") quantises to 448×128, fitting inside
+        // 512×128 with one width-quantum of headroom.
+        //
+        // Larger labels or scales ≥ 4 still fall through to the
+        // grow-only path in `FluxPanel::apply_grow_only_size`; that
+        // resize then happens during real user interaction, where the
+        // watchdog tolerance has been replaced by genuine cadence.
+        // The previous 256×128 pre-allocation only verified the
+        // height axis and tripped the watchdog at scale 2 on the
+        // width axis (banner needs 320 px quantised vs 256 px
+        // allocated).
+        match unsafe {
+            FluxPanel::new_from_surface(
+                display_ptr,
+                surface_ptr,
+                viewport,
+                crate::panel::PANEL_PREALLOC_WIDTH,
+                crate::panel::PANEL_PREALLOC_HEIGHT,
+            )
+        } {
             Ok(panel) => frontend.panel = Some(panel),
             Err(e) => eprintln!("WARN: FluxPanel creation failed: {e}"),
         }

@@ -791,28 +791,10 @@ impl App {
             //    The focus driver has already applied its effects (grab
             //    build/teardown, anchor reset, panel hide on deactivate);
             //    this only layers the indicator on top.
-            //
-            //    NOTE: `FirstActivate` and `Reactivate` auto-shows are
-            //    currently disabled. The popup's first swapchain
-            //    allocation (`flux_surface_resize` → `vkDeviceWaitIdle`)
-            //    can take longer than the watchdog's 3-second STUCK
-            //    threshold when the compositor has not yet acked the
-            //    surface. The candidate panel avoids this by drawing only
-            //    after the user types (giving the compositor time to
-            //    configure); an auto-triggered indicator on focus does
-            //    not have that luxury. The state-change path (Ctrl+Shift,
-            //    tray, IPC) is user-initiated and typically fires after
-            //    the surface is warm, so it remains enabled. Re-enabling
-            //    the focus path needs either a warm-up frame or moving
-            //    the first present off the watchdog-critical path.
             if let Some(t) = focus_transition {
                 match t {
-                    FocusTransition::FirstActivate => {
-                        // self.trigger_indicator_focus();
-                    }
-                    FocusTransition::Reactivate => {
-                        // self.trigger_indicator_reactivate();
-                    }
+                    FocusTransition::FirstActivate => self.trigger_indicator_focus(),
+                    FocusTransition::Reactivate => self.trigger_indicator_reactivate(),
                     FocusTransition::Deactivate => self.hide_indicator(),
                 }
             }
@@ -1100,24 +1082,16 @@ impl App {
     }
 
     /// Trigger the indicator's focus-path show (FirstActivate). Reads the
-    /// live registry for label sources; the salience gate is bypassed
-    /// (`mode=None`) until the libtypio mode-changed callback is wired in
-    /// (a separate chunk). The recency gate still applies.
-    ///
-    /// Currently disabled at the call site (see `run_with_wayland`
-    /// section 5b comment): the first swapchain allocation can stall the
-    /// watchdog. Kept here so re-enabling is a one-line change once the
-    /// warm-up path lands.
+    /// live registry and cached mode from libtypio; applies the salience
+    /// gate + acknowledged-recency gate.
     #[cfg(feature = "wayland")]
-    #[allow(dead_code)]
     fn trigger_indicator_focus(&mut self) {
         self.trigger_indicator_show(IndicatorPath::Focus);
     }
 
-    /// Trigger the indicator's reactivate-path show. Same caveat as
-    /// [`Self::trigger_indicator_focus`]: salience gate bypassed.
+    /// Trigger the indicator's reactivate-path show (Reactivate). Gates:
+    /// salience only — recency is skipped per ADR-0018.
     #[cfg(feature = "wayland")]
-    #[allow(dead_code)]
     fn trigger_indicator_reactivate(&mut self) {
         self.trigger_indicator_show(IndicatorPath::Reactivate);
     }
@@ -1278,6 +1252,7 @@ impl App {
     /// when a queued show later becomes renderable.
     #[cfg(feature = "wayland")]
     fn render_indicator_banner(&mut self, label: &str, now: Instant) {
+        let t0 = Instant::now();
         eprintln!("indicator: rendering banner '{label}'");
         let scale = self
             .frontend
@@ -1290,9 +1265,14 @@ impl App {
             .and_then(|f| f.panel_mut())
         {
             panel.set_scale(scale);
+            let t1 = Instant::now();
+            eprintln!("indicator: set_scale={} took {:.3} ms", scale, t1.duration_since(t0).as_secs_f64() * 1000.0);
             panel.ensure_banner_size(label);
+            let t2 = Instant::now();
+            eprintln!("indicator: ensure_banner_size took {:.3} ms", t2.duration_since(t1).as_secs_f64() * 1000.0);
             panel.draw_status_banner(label);
-            eprintln!("indicator: banner rendered and presented");
+            let t3 = Instant::now();
+            eprintln!("indicator: draw_status_banner took {:.3} ms (banner rendered and presented)", t3.duration_since(t2).as_secs_f64() * 1000.0);
         } else {
             eprintln!("indicator: no FluxPanel attached, cannot render");
         }
@@ -1706,7 +1686,6 @@ fn set_active_voice(instance: *mut TypioInstance, name: &str) -> Result<(), SvcE
 /// for each arm.
 #[cfg(feature = "wayland")]
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // Focus / Reactivate auto-triggers disabled at call site; see app.rs 5b.
 enum IndicatorPath {
     Focus,
     Reactivate,

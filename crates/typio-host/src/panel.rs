@@ -55,14 +55,46 @@ const PANEL_FRAME_TIMEOUT_NS: u64 = 200_000_000;
 const SURFACE_WIDTH_QUANTUM: u32 = 64;
 /// Height quantum (same grow-only logic as width). Banner and
 /// candidate rows are both ~40 px at scale 1; a 32 px quantum rounds
-/// the first request up to 64 px, matching the pre-allocation in
-/// `InputMethodFrontend::connect` and so avoiding a first-render
+/// the first request up to 64 px, fitting inside the pre-allocation
+/// in `InputMethodFrontend::connect` and so avoiding a first-render
 /// `flux_surface_resize` (which blocks the loop on the compositor's
 /// swapchain release and trips the 3 s watchdog on the very first
 /// indicator banner). Without this, height was exact-matched while
 /// width was grow-only — a quiet asymmetry that made every panel
 /// flush in a new process pay a full swapchain recreate.
 const SURFACE_HEIGHT_QUANTUM: u32 = 32;
+/// Initial swapchain size passed to `FluxPanel::new_from_surface` by
+/// `InputMethodFrontend::connect`. Sized to skip the first automatic
+/// indicator banner's `flux_surface_resize` (and its `vkDeviceWaitIdle`
+/// + compositor swapchain release) at the common display scales, where
+/// the watchdog is armed but unforgiving — see the audit after the
+/// 0a91080 height-quantisation fix that still tripped the watchdog on
+/// width at scale 2.
+///
+/// Banner geometry for the longest observed default indicator label
+/// `"中 · Rime · 懿拼音"` (text metric 119.3 px logical, plus
+/// `2 * BANNER_PADDING = 20`):
+///
+/// | scale | phys (W×H) | quantised (W×H) |
+/// |------:|-----------|-----------------|
+/// |  1.0  | 140 × 40  | 192 × 64        |
+/// |  1.5  | 210 × 60  | 256 × 64        |
+/// |  2.0  | 280 × 80  | 320 × 96        |
+/// |  3.0  | 420 × 120 | 448 × 128       |
+///
+/// `512 × 128` covers every cell in the table with one width-quantum
+/// of headroom (512 − 448 = 64). Larger indicator labels (long engine
+/// names, verbose mode displays) and scales ≥ 4 still trigger a
+/// one-time resize — but only after the user has actually started
+/// typing or switched engine, by which point the watchdog tolerance
+/// has been replaced by genuine interaction cadence.
+///
+/// `PANEL_PREALLOC_WIDTH` is a multiple of `SURFACE_WIDTH_QUANTUM`,
+/// `PANEL_PREALLOC_HEIGHT` of `SURFACE_HEIGHT_QUANTUM`; this keeps the
+/// initial allocation on a quantum boundary so the first grow-only
+/// decision in `apply_grow_only_size` is a no-op when the content fits.
+pub const PANEL_PREALLOC_WIDTH: u32 = 512;
+pub const PANEL_PREALLOC_HEIGHT: u32 = 128;
 const PANEL_PADDING: f32 = 8.0;
 const PANEL_ROW_HEIGHT: f32 = 24.0;
 const CANDIDATE_FONT_SIZE: f32 = 16.0;
@@ -552,6 +584,13 @@ impl FluxPanel {
         if label.is_empty() {
             return;
         }
+        let mut t = std::time::Instant::now();
+        let step = |name: &str, start: std::time::Instant| -> std::time::Instant {
+            let now = std::time::Instant::now();
+            eprintln!("draw_status_banner: {name} took {:.3} ms",
+                      now.duration_since(start).as_secs_f64() * 1000.0);
+            now
+        };
         unsafe {
             flux_arena_reset(&mut self.arena);
 
@@ -562,13 +601,17 @@ impl FluxPanel {
             };
             let mut frame: *mut flux_frame = ptr::null_mut();
             let r = flux_surface_begin_frame(self.surface, &frame_desc, &mut frame);
+            t = step("begin_frame", t);
             if !flux_result_is_ok(r) {
+                eprintln!("draw_status_banner: begin_frame failed, bailing");
                 return;
             }
 
             let bg = flux_color_rgba(28, 28, 32, 255);
             let r = flux_canvas_begin(self.canvas, frame, &bg);
+            t = step("canvas_begin", t);
             if !flux_result_is_ok(r) {
+                eprintln!("draw_status_banner: canvas_begin failed, bailing");
                 return;
             }
 
@@ -587,6 +630,7 @@ impl FluxPanel {
                 bytes.len(),
                 &style,
             );
+            t = step("text_measure", t);
 
             // Vertically centre the text inside the banner row.
             let text_y = BANNER_PADDING + (BANNER_FONT_SIZE * 1.3 - metrics.height).max(0.0) / 2.0;
@@ -602,13 +646,18 @@ impl FluxPanel {
                 bytes.len(),
                 &style,
             );
+            t = step("text_draw", t);
 
             flux_canvas_end(self.canvas);
+            t = step("canvas_end", t);
             let r = flux_frame_submit(frame);
+            t = step("frame_submit", t);
             if !flux_result_is_ok(r) {
+                eprintln!("draw_status_banner: frame_submit failed, bailing");
                 return;
             }
             flux_frame_present(frame);
+            step("frame_present", t);
         }
     }
 
@@ -629,6 +678,7 @@ impl FluxPanel {
         };
 
         let bytes = label.as_bytes();
+        let t = std::time::Instant::now();
         let metrics = unsafe {
             flux_sys::flux_text_measure(
                 self.text,
@@ -637,6 +687,8 @@ impl FluxPanel {
                 &style,
             )
         };
+        eprintln!("ensure_banner_size: text_measure took {:.3} ms (width={:.1}, height={:.1})",
+                  t.elapsed().as_secs_f64() * 1000.0, metrics.width, metrics.height);
 
         let desired_width = (BANNER_PADDING * 2.0 + metrics.width).max(10.0).ceil() as u32;
         let desired_height = (BANNER_ROW_HEIGHT).ceil() as u32;
@@ -644,10 +696,17 @@ impl FluxPanel {
         let phys_width = (desired_width as f32 * self.scale).ceil() as u32;
         let phys_height = (desired_height as f32 * self.scale).ceil() as u32;
 
+        eprintln!("ensure_banner_size: scale={} desired={}x{} phys={}x{} current_alloc={}x{}",
+                  self.scale, desired_width, desired_height, phys_width, phys_height,
+                  self.width, self.height);
+
         let content_w_logical = desired_width as i32;
         let content_h_logical = desired_height as i32;
 
+        let t = std::time::Instant::now();
         self.apply_grow_only_size(phys_width, phys_height, content_w_logical, content_h_logical);
+        eprintln!("ensure_banner_size: apply_grow_only_size took {:.3} ms (final_alloc={}x{})",
+                  t.elapsed().as_secs_f64() * 1000.0, self.width, self.height);
     }
 }
 

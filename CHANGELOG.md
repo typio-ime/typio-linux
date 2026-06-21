@@ -539,6 +539,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **First indicator banner killed the daemon at HiDPI scales.** The
+  `FluxPanel` swapchain was pre-allocated at 256×128 physical pixels
+  to keep the first automatic indicator banner off the
+  `flux_surface_resize` path (which does `vkDeviceWaitIdle` + WSI
+  swapchain release and trips the 3 s `LoopStage::PanelUpdate`
+  watchdog on a fresh daemon). The sizing comment in
+  `InputMethodFrontend::connect` only audited the **height** axis —
+  and at scale 2 the default Rime indicator label `中 · Rime · 懿拼音`
+  needs 280 px physical wide → 320 px after the 64 px grow-only
+  quantum, exceeding the 256 px allocation and forcing the very
+  resize the pre-allocation was meant to avoid. The panel was
+  SIGKILLed on every fresh daemon start under a scale-2 display. The
+  pre-allocation is now exposed as `PANEL_PREALLOC_WIDTH` /
+  `PANEL_PREALLOC_HEIGHT` (512×128) with the width/height audit
+  table for scales 1, 1.5, 2 and 3 documented on the constants, so
+  future tuning has both dimensions to reason about instead of
+  repeating the height-only oversight. The previous commit 0a91080
+  (height quantisation) and this width audit together close the
+  first-banner watchdog class.
+
 - **Keyboard shortcuts swallowed during soft-pause.** When the
   keyboard grab was retained across a `deactivate` (soft pause) but no
   text field was active (`state.active == false`), key events from the
