@@ -60,6 +60,17 @@ const CANDIDATE_ITEM_X_PADDING: f32 = 5.0;
 const CANDIDATE_ITEM_GAP: f32 = 8.0;
 const CANDIDATE_NUMBER_FONT_SIZE: f32 = 11.0;
 const CANDIDATE_NUMBER_GAP: f32 = 4.0;
+/// Status-banner (indicator / voice) layout constants. Kept separate from
+/// the candidate-row metrics above: the banner is a single centred text
+/// segment, not a two-column "number + candidate" row, so its padding and
+/// font size are tuned independently. The same VkSurface / flux_text /
+/// atlas stack is shared (ADR-0017 — one popup surface, mutually exclusive
+/// owners).
+const BANNER_PADDING: f32 = 10.0;
+const BANNER_FONT_SIZE: f32 = 15.0;
+/// Computed banner row height: padding above + font box + padding below.
+/// `1.3` is the typical line-height factor flux applies for default fonts.
+const BANNER_ROW_HEIGHT: f32 = BANNER_PADDING * 2.0 + BANNER_FONT_SIZE * 1.3;
 
 /// A candidate panel backed by flux on a raw Wayland surface.
 ///
@@ -494,6 +505,137 @@ impl FluxPanel {
     pub fn hide(&mut self) {
         unsafe {
             wl_surface_detach_and_commit(self._wl_surface);
+        }
+    }
+
+    /// Draw the status banner — a single centred text label used by the
+    /// indicator (engine · mode feedback) and voice status overlays. Shares
+    /// the candidate panel's VkSurface and flux text stack per ADR-0017
+    /// (one positioned popup surface, mutually exclusive owners).
+    ///
+    /// Empty labels are ignored — caller should `hide()` instead.
+    pub fn draw_status_banner(&mut self, label: &str) {
+        if label.is_empty() {
+            return;
+        }
+        unsafe {
+            flux_arena_reset(&mut self.arena);
+
+            let frame_desc = flux_frame_begin_desc {
+                type_: FType::FLUX_TYPE_FRAME_BEGIN_DESC,
+                next: ptr::null(),
+                timeout_ns: PANEL_FRAME_TIMEOUT_NS,
+            };
+            let mut frame: *mut flux_frame = ptr::null_mut();
+            let r = flux_surface_begin_frame(self.surface, &frame_desc, &mut frame);
+            if !flux_result_is_ok(r) {
+                return;
+            }
+
+            let bg = flux_color_rgba(28, 28, 32, 255);
+            let r = flux_canvas_begin(self.canvas, frame, &bg);
+            if !flux_result_is_ok(r) {
+                return;
+            }
+
+            let text_color = flux_color_rgba(240, 240, 240, 255);
+            let style = flux_text_style {
+                size_px: BANNER_FONT_SIZE,
+                weight: 400.0,
+                color: text_color,
+                family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+            };
+
+            let bytes = label.as_bytes();
+            let metrics = flux_sys::flux_text_measure(
+                self.text,
+                bytes.as_ptr() as *const _,
+                bytes.len(),
+                &style,
+            );
+
+            // Vertically centre the text inside the banner row.
+            let text_y = BANNER_PADDING + (BANNER_FONT_SIZE * 1.3 - metrics.height).max(0.0) / 2.0;
+            let text_x = BANNER_PADDING;
+
+            flux_text_draw(
+                self.text,
+                self.canvas,
+                &mut self.arena,
+                text_x,
+                text_y,
+                bytes.as_ptr() as *const _,
+                bytes.len(),
+                &style,
+            );
+
+            flux_canvas_end(self.canvas);
+            let r = flux_frame_submit(frame);
+            if !flux_result_is_ok(r) {
+                return;
+            }
+            flux_frame_present(frame);
+        }
+    }
+
+    /// Ensure the surface is big enough for a single-row banner of `label`.
+    /// Mirrors `ensure_candidate_size`'s two-path strategy (ADR-0013):
+    /// grow-only with `wp_viewport` when available, exact-size resize
+    /// otherwise. Banner rows are usually narrower than candidate rows, so
+    /// after a candidate-panel showing the swapchain typically reuses the
+    /// existing quantum without any `vkDeviceWaitIdle`.
+    pub fn ensure_banner_size(&mut self, label: &str) {
+        let style = flux_text_style {
+            size_px: BANNER_FONT_SIZE,
+            weight: 400.0,
+            // Colour is irrelevant for `flux_text_measure`; provide one to
+            // keep the struct fully initialised.
+            color: unsafe { flux_color_rgba(0, 0, 0, 0) },
+            family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+        };
+
+        let bytes = label.as_bytes();
+        let metrics = unsafe {
+            flux_sys::flux_text_measure(
+                self.text,
+                bytes.as_ptr() as *const _,
+                bytes.len(),
+                &style,
+            )
+        };
+
+        let desired_width = (BANNER_PADDING * 2.0 + metrics.width).max(10.0).ceil() as u32;
+        let desired_height = (BANNER_ROW_HEIGHT).ceil() as u32;
+
+        let phys_width = (desired_width as f32 * self.scale).ceil() as u32;
+        let phys_height = (desired_height as f32 * self.scale).ceil() as u32;
+
+        let content_w_logical = desired_width as i32;
+        let content_h_logical = desired_height as i32;
+
+        if let Some(viewport) = self.viewport.as_ref() {
+            let quantised_phys_w =
+                phys_width.div_ceil(SURFACE_WIDTH_QUANTUM) * SURFACE_WIDTH_QUANTUM;
+            let target_phys_w = self.width.max(quantised_phys_w);
+            if target_phys_w != self.width || phys_height != self.height {
+                self.width = target_phys_w;
+                self.height = phys_height;
+                if !self.surface.is_null() {
+                    unsafe {
+                        flux_sys::flux_surface_resize(self.surface, target_phys_w, phys_height);
+                    }
+                }
+            }
+            if content_w_logical != self.content_w_logical
+                || content_h_logical != self.content_h_logical
+            {
+                viewport.set_source(0.0, 0.0, content_w_logical as f64, content_h_logical as f64);
+                viewport.set_destination(content_w_logical, content_h_logical);
+                self.content_w_logical = content_w_logical;
+                self.content_h_logical = content_h_logical;
+            }
+        } else {
+            self.resize(phys_width, phys_height);
         }
     }
 }

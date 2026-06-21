@@ -108,6 +108,23 @@ impl Default for FocusDriver {
     }
 }
 
+/// The focus-transition outcome of a single tick, if any. The driver's
+/// `apply` step has already executed the side effects (grab build/teardown,
+/// anchor reset, etc.); this value lets the caller layer additional
+/// follow-on work — notably, the indicator's focus-path trigger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusTransition {
+    /// First activation of a field (was inactive, now active). Drives the
+    /// indicator's `show_on_focus` path (salience + recency gates).
+    FirstActivate,
+    /// Re-focus inside the same session (active, fresh `activate`). Drives
+    /// the indicator's `show_on_reactivate` path (salience gate only).
+    Reactivate,
+    /// Focus left the field. Hides the indicator along with all other
+    /// Panel UI.
+    Deactivate,
+}
+
 impl FocusDriver {
     pub fn new() -> Self {
         Self {
@@ -117,13 +134,16 @@ impl FocusDriver {
 
     /// Run one tick of the pipeline:
     ///   take facts → reduce → observe → diff → apply.
+    ///
+    /// Returns the focus transition that fired this tick, if any. The
+    /// `apply` step has already happened by the time this returns.
     pub fn tick(
         &mut self,
         frontend: &mut InputMethodFrontend,
         router: &mut KeyboardRouter,
         timer: &mut RepeatTimer,
         engine_present: bool,
-    ) {
+    ) -> Option<FocusTransition> {
         let mut facts = frontend.state_mut().take_facts();
         facts.engine_present = engine_present;
 
@@ -131,9 +151,21 @@ impl FocusDriver {
         let actual = observe(frontend.state(), router);
         let effects = focus_controller::diff(&desired, &actual);
 
+        // Capture the transition before `apply` consumes the effects.
+        let transition = if effects.send_focus_in {
+            Some(FocusTransition::FirstActivate)
+        } else if effects.reactivate {
+            Some(FocusTransition::Reactivate)
+        } else if effects.send_focus_out {
+            Some(FocusTransition::Deactivate)
+        } else {
+            None
+        };
+
         apply(&effects, &mut (frontend, router, timer));
 
         self.prev = desired;
+        transition
     }
 }
 

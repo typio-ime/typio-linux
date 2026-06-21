@@ -5,10 +5,11 @@
 //! Wayland frontend / tray / IPC surfaces.
 
 use std::cell::RefCell;
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{c_char, c_void, CString, CStr};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 use clap::Parser;
@@ -20,19 +21,27 @@ use typio_abi::TypioEngineInfo;
 use crate::config_watcher::ConfigWatcher;
 use crate::engine_loader::manifest::EngineManifest;
 use crate::engine_loader::resolve_engine_dirs;
+use crate::indicator::{EngineModeSnapshot, Indicator, IndicatorConfig, LabelSources, Salience};
 use crate::ipc::protocol;
 use crate::ipc::protocol::topics;
 use crate::ipc_bus::{IpcBus, TypioBackend, TypioRegistryView};
-use crate::panel_coordinator::UiOwner;
+use crate::panel_coordinator::{FlushDecision, UiOwner};
 use crate::panel_scheduler::{self, PanelUpdateResult};
 use crate::resume_signal::ResumeSignal;
-use crate::session_glue::FocusDriver;
+use crate::session_glue::{FocusDriver, FocusTransition};
 use crate::state_controller::{StateChange, StateController};
 use crate::service::SvcError;
 use crate::tray_menu::{EngineDesc, RegistrySnapshot};
 use crate::tray_sni::{MenuAction, Tray, TrayAction};
 use crate::uds_server::UdsServer;
 use crate::watchdog::{LoopStage, Watchdog};
+
+#[cfg(feature = "wayland")]
+use {
+    nix::sys::time::TimeSpec,
+    nix::sys::timerfd::{ClockId, Expiration, TimerFd as NixTimerFd, TimerFlags, TimerSetTimeFlags},
+    std::os::fd::{AsFd, AsRawFd},
+};
 
 #[cfg(feature = "wayland")]
 use crate::input_method::InputMethodFrontend;
@@ -123,6 +132,38 @@ extern "C" fn signal_handler(_sig: libc::c_int) {
     SHUTDOWN_FROM_SIGNAL.store(true, Ordering::SeqCst);
 }
 
+/// Process-global sender for the mode-changed callback. Stored in a
+/// `OnceLock` because the C ABI callback holds a raw `user_data` pointer
+/// that must be valid for the instance's lifetime, and there is only one
+/// daemon per process. The `Mutex` makes `&Sender` safely shareable
+/// across the engine communication thread (where out-of-process engine
+/// responses fire the callback) and the main loop thread.
+static MODE_CALLBACK_TX: OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<DaemonEvent>>> =
+    OnceLock::new();
+
+/// C trampoline for `TypioKeyboardModeChangedCallback`. Fires when an
+/// engine reports a **deliberate** mode change (e.g. rime switching schema
+/// or toggling 中/A). Marshals to the main loop via `DaemonEvent::StateRefresh`;
+/// the main loop then reads the fresh mode from
+/// `typio_instance_get_last_keyboard_mode` and triggers the indicator's
+/// no-gate deliberate-change path.
+///
+/// The first parameter uses the **opaque** `typio_abi::TypioInstance`
+/// (not `typio::instance::TypioInstance`) to match the callback typedef
+/// exactly. The actual pointer is to the real struct; we never dereference
+/// it here, so the opacity is harmless.
+extern "C" fn mode_changed_trampoline(
+    _instance: *mut typio_abi::TypioInstance,
+    _mode: *const typio_abi::TypioKeyboardEngineMode,
+    _user_data: *mut c_void,
+) {
+    if let Some(mutex) = MODE_CALLBACK_TX.get() {
+        if let Ok(tx) = mutex.lock() {
+            let _ = tx.send(DaemonEvent::StateRefresh);
+        }
+    }
+}
+
 fn install_signal_handlers() {
     unsafe {
         libc::signal(
@@ -155,6 +196,25 @@ pub struct App {
     resume_signal: Option<ResumeSignal>,
     #[cfg(feature = "wayland")]
     focus_driver: Option<FocusDriver>,
+    /// On-screen indicator state machine (gate state + label composition).
+    /// Pure; the popup surface is owned by `PanelCoordinator`, the auto-hide
+    /// timer by [`Self::indicator_timer`].
+    indicator: Option<Indicator>,
+    /// Cached indicator configuration snapshot. Re-read from libtypio on
+    /// startup and on every config reload so the running loop never does
+    /// FFI on the hot path.
+    indicator_config: IndicatorConfig,
+    /// Auto-hide timerfd for the indicator. Armed when the indicator
+    /// actually becomes visible (coordinator accepted the show); disarmed
+    /// on hide, focus-loss, or shutdown. Polled as part of the main poll
+    /// set; expiry drives `indicator.hide()` + panel detach.
+    #[cfg(feature = "wayland")]
+    indicator_timer: Option<NixTimerFd>,
+    /// Absolute time when the indicator should auto-hide, mirroring the
+    /// kernel timerfd state. Tracked in user space so the poll timeout
+    /// can be lowered without a `timerfd_gettime` syscall on every tick.
+    #[cfg(feature = "wayland")]
+    indicator_hide_deadline: Option<Instant>,
     config_watcher: Option<ConfigWatcher>,
     watchdog: Option<Watchdog>,
     /// Sender half of the daemon event channel. Cloned into the IPC
@@ -199,6 +259,12 @@ impl App {
             resume_signal: None,
             #[cfg(feature = "wayland")]
             focus_driver: None,
+            indicator: None,
+            indicator_config: IndicatorConfig::default(),
+            #[cfg(feature = "wayland")]
+            indicator_timer: None,
+            #[cfg(feature = "wayland")]
+            indicator_hide_deadline: None,
             config_watcher: None,
             watchdog: None,
             event_tx,
@@ -329,6 +395,23 @@ impl App {
 
         self.instance = Some(instance);
 
+        // Wire the mode-changed callback so engine-internal mode switches
+        // (rime schema changes, 中/A toggle, etc.) reach the indicator.
+        // The trampoline stores its sender in `MODE_CALLBACK_TX` so the
+        // callback (which fires on the engine-comm thread for out-of-process
+        // engines like rime) can safely reach the main loop. Without this,
+        // only Ctrl+Shift engine switches trigger the indicator — rime's
+        // own mode/schema switches are silent.
+        let _ = MODE_CALLBACK_TX.set(std::sync::Mutex::new(self.event_tx.clone()));
+        {
+            let raw = self.instance.as_ref().unwrap().as_ref() as *const TypioInstance as *mut TypioInstance;
+            typio::instance::typio_instance_set_keyboard_mode_changed_callback(
+                raw,
+                mode_changed_trampoline as _,
+                std::ptr::null_mut(),
+            );
+        }
+
         #[cfg(feature = "wayland")]
         {
             match InputMethodFrontend::connect(None) {
@@ -366,7 +449,18 @@ impl App {
 
                 self.resume_signal = Some(ResumeSignal::new());
                 self.focus_driver = Some(FocusDriver::new());
+
+                // Indicator subsystem: state machine + auto-hide timerfd.
+                // The timer is created disarmed and only armed when a show
+                // actually lands on screen (see `arm_indicator_timer`).
+                self.indicator = Some(Indicator::new());
+                match NixTimerFd::new(ClockId::CLOCK_MONOTONIC, TimerFlags::TFD_NONBLOCK) {
+                    Ok(tf) => self.indicator_timer = Some(tf),
+                    Err(e) => eprintln!("WARN: failed to create indicator timer: {e}"),
+                }
             }
+
+            self.indicator_config = self.load_indicator_config();
         }
 
         let raw = self.instance.as_mut().unwrap().as_mut() as *mut TypioInstance;
@@ -527,6 +621,15 @@ impl App {
             .map(|w| (w.inotify_fd(), w.timer_fd()))
             .unwrap_or((-1, -1));
 
+        // Indicator auto-hide timer. We pull the raw fd up-front (stable
+        // for the timerfd's lifetime) so we can add it to the static poll
+        // set; the timer is armed/disarmed via `TimerFd::set` elsewhere.
+        let indicator_fd = self
+            .indicator_timer
+            .as_ref()
+            .map(|t| t.as_fd().as_raw_fd())
+            .unwrap_or(-1);
+
         let mut fds = [
             libc::pollfd {
                 fd: wl_fd,
@@ -550,6 +653,11 @@ impl App {
             },
             libc::pollfd {
                 fd: cfg_timer_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: indicator_fd,
                 events: libc::POLLIN,
                 revents: 0,
             },
@@ -603,6 +711,7 @@ impl App {
             fds[2].revents = 0;
             fds[3].revents = 0;
             fds[4].revents = 0;
+            fds[5].revents = 0;
 
             // 3. Poll. Let the panel scheduler and the panel anchor deadline
             //    shorten the timeout.
@@ -625,6 +734,11 @@ impl App {
                     .anchor_deadline_remaining_ms(Instant::now())
                 {
                     timeout_ms = timeout_ms.min(remaining as i32);
+                }
+                if let Some(indicator_remaining) =
+                    self.indicator_hide_remaining_ms(Instant::now())
+                {
+                    timeout_ms = timeout_ms.min(indicator_remaining);
                 }
                 timeout_ms
             };
@@ -656,7 +770,7 @@ impl App {
 
             // 5. Run the focus-controller pipeline.
             wd!().set_stage(LoopStage::AuxIo);
-            {
+            let focus_transition = {
                 let engine_present = self
                     .instance
                     .as_ref()
@@ -666,8 +780,40 @@ impl App {
                 let frontend = self.frontend.as_mut().unwrap();
                 let router = self.router.as_mut().unwrap();
                 let timer = self.repeat_timer.as_mut().unwrap();
+                let mut transition = None;
                 if let Some(ref mut driver) = self.focus_driver {
-                    driver.tick(frontend, router, timer, engine_present);
+                    transition = driver.tick(frontend, router, timer, engine_present);
+                }
+                transition
+            };
+
+            // 5b. Translate the focus transition into an indicator trigger.
+            //    The focus driver has already applied its effects (grab
+            //    build/teardown, anchor reset, panel hide on deactivate);
+            //    this only layers the indicator on top.
+            //
+            //    NOTE: `FirstActivate` and `Reactivate` auto-shows are
+            //    currently disabled. The popup's first swapchain
+            //    allocation (`flux_surface_resize` → `vkDeviceWaitIdle`)
+            //    can take longer than the watchdog's 3-second STUCK
+            //    threshold when the compositor has not yet acked the
+            //    surface. The candidate panel avoids this by drawing only
+            //    after the user types (giving the compositor time to
+            //    configure); an auto-triggered indicator on focus does
+            //    not have that luxury. The state-change path (Ctrl+Shift,
+            //    tray, IPC) is user-initiated and typically fires after
+            //    the surface is warm, so it remains enabled. Re-enabling
+            //    the focus path needs either a warm-up frame or moving
+            //    the first present off the watchdog-critical path.
+            if let Some(t) = focus_transition {
+                match t {
+                    FocusTransition::FirstActivate => {
+                        // self.trigger_indicator_focus();
+                    }
+                    FocusTransition::Reactivate => {
+                        // self.trigger_indicator_reactivate();
+                    }
+                    FocusTransition::Deactivate => self.hide_indicator(),
                 }
             }
 
@@ -688,11 +834,21 @@ impl App {
                     let compositor_info = state.compositor_repeat_info;
                     if key.state == 1 {
                         let consumed = router.dispatch_key(&key, mods);
+                        // Any key that reached the engine (consumed or
+                        // forwarded) counts as "user activity" for the
+                        // indicator's acknowledged-recency gate. Releases,
+                        // modifier-only events, and filtered-out keys do
+                        // not (mirrors the C `record_key_activity` caller
+                        // in keyboard.c).
+                        if let Some(indicator) = self.indicator.as_mut() {
+                            indicator.record_key_activity(Instant::now());
+                        }
                         if router.take_switch_chord_fired() {
                             // Ctrl+Shift (default) just completed. Cycle
                             // to the next registered keyboard and let the
                             // next drain refresh surfaces. Suppresses
                             // forwarding of the modifier press itself.
+                            eprintln!("indicator: Ctrl+Shift chord fired");
                             let instance_ptr = self
                                 .instance
                                 .as_mut()
@@ -788,17 +944,31 @@ impl App {
 
             // 7b. Flush any pending positioned status UI (indicator / voice)
             //     when the anchor becomes ready or the caret fallback fires.
+            //     Drives the deferred-show path: a `show_on_focus` or
+            //     `show_for_state_change` call returned a label, the
+            //     coordinator queued it because the anchor wasn't ready,
+            //     and now the anchor resolved (or the caret fallback fired).
             {
-                let frontend = self.frontend.as_mut().unwrap();
-                let state = frontend.state_mut();
-                if let Some((UiOwner::Indicator | UiOwner::Voice, label)) = state
-                    .panel_coord_mut()
-                    .flush_pending_with_timeout(Instant::now())
-                {
-                    // TODO: render status overlay once FluxPanel
-                    // supports status text (Phase 9).
-                    let _ = label;
+                let now = Instant::now();
+                let flushed = {
+                    let frontend = self.frontend.as_mut().unwrap();
+                    let state = frontend.state_mut();
+                    state
+                        .panel_coord_mut()
+                        .flush_pending_with_timeout(now)
+                };
+                if let Some((owner, label)) = flushed {
+                    eprintln!(
+                        "indicator: deferred flush owner={:?} label='{}'",
+                        owner, label
+                    );
+                    if owner == UiOwner::Indicator {
+                        self.render_indicator_banner(&label, now);
+                    }
                 }
+                // UiOwner::Voice is reserved for a future chunk; the flush
+                // path is in place and tested by panel_coordinator's queue
+                // tests, but no producer feeds it yet.
             }
 
             // 8. Repeat timer expiration.
@@ -823,6 +993,25 @@ impl App {
                         let _ = timer.stop();
                     }
                 }
+            }
+
+            // 8b. Indicator auto-hide timer expiration. The timerfd fires
+            //     once after `display.indicator_duration_ms`; we hide the
+            //     popup and disarm. The indicator's recency tracking is
+            //     left intact so a recent indicator still suppresses the
+            //     next focus-path reveal.
+            if fds[5].revents & libc::POLLIN != 0 {
+                let mut buf = [0u8; 8];
+                if let Some(tf) = self.indicator_timer.as_ref() {
+                    unsafe {
+                        libc::read(
+                            tf.as_fd().as_raw_fd(),
+                            buf.as_mut_ptr() as *mut c_void,
+                            buf.len(),
+                        );
+                    }
+                }
+                self.hide_indicator();
             }
 
             // End-of-tick heartbeat.
@@ -879,10 +1068,306 @@ impl App {
         match typio::instance::typio_instance_reload_config(raw) {
             typio::TypioResult::TypioOk => {
                 eprintln!("typio: configuration reloaded");
+                self.indicator_config = self.load_indicator_config();
                 self.refresh_state_surfaces();
             }
             _ => eprintln!("typio: configuration reload failed"),
         }
+    }
+
+    /// Read the indicator configuration snapshot from libtypio. The keys
+    /// (`display.indicator_enabled`, `display.indicator_duration_ms`) are
+    /// read on demand from the live config object, matching the C host's
+    /// behaviour, but the values are cached on [`App`] so the hot path
+    /// never crosses the FFI.
+    fn load_indicator_config(&self) -> IndicatorConfig {
+        let raw = match self.instance.as_ref() {
+            Some(i) => i.as_ref() as *const TypioInstance as *mut TypioInstance,
+            None => return IndicatorConfig::default(),
+        };
+        let cfg = typio::instance::typio_instance_get_config(raw);
+        if cfg.is_null() {
+            return IndicatorConfig::default();
+        }
+        let enabled =
+            typio::config::typio_config_get_bool(cfg, c"display.indicator_enabled".as_ptr(), true);
+        let duration_ms = typio::config::typio_config_get_int(
+            cfg,
+            c"display.indicator_duration_ms".as_ptr(),
+            1500,
+        );
+        IndicatorConfig::from_values(enabled, duration_ms.into())
+    }
+
+    /// Trigger the indicator's focus-path show (FirstActivate). Reads the
+    /// live registry for label sources; the salience gate is bypassed
+    /// (`mode=None`) until the libtypio mode-changed callback is wired in
+    /// (a separate chunk). The recency gate still applies.
+    ///
+    /// Currently disabled at the call site (see `run_with_wayland`
+    /// section 5b comment): the first swapchain allocation can stall the
+    /// watchdog. Kept here so re-enabling is a one-line change once the
+    /// warm-up path lands.
+    #[cfg(feature = "wayland")]
+    #[allow(dead_code)]
+    fn trigger_indicator_focus(&mut self) {
+        self.trigger_indicator_show(IndicatorPath::Focus);
+    }
+
+    /// Trigger the indicator's reactivate-path show. Same caveat as
+    /// [`Self::trigger_indicator_focus`]: salience gate bypassed.
+    #[cfg(feature = "wayland")]
+    #[allow(dead_code)]
+    fn trigger_indicator_reactivate(&mut self) {
+        self.trigger_indicator_show(IndicatorPath::Reactivate);
+    }
+
+    /// Trigger the indicator's deliberate-change show (no gates beyond
+    /// `enabled`). Called from the `StateRefresh` drain — covers Ctrl+Shift
+    /// chord, tray-driven engine/language switch, and IPC-driven mutations.
+    #[cfg(feature = "wayland")]
+    fn trigger_indicator_state_change(&mut self) {
+        self.trigger_indicator_show(IndicatorPath::StateChange);
+    }
+
+    /// Shared body of the three trigger paths. Resolves label sources from
+    /// the live registry, asks the [`Indicator`] state machine for a label,
+    /// and feeds any returned label to [`Self::request_indicator_show`].
+    #[cfg(feature = "wayland")]
+    fn trigger_indicator_show(&mut self, path: IndicatorPath) {
+        let now = Instant::now();
+
+        // Read the current mode from libtypio's cache. The mode-changed
+        // callback stores the fresh mode in `last_mode` before firing, so
+        // by the time StateRefresh delivers us here, the data is current.
+        // This covers rime's schema/mode switches: the engine reports its
+        // new active mode (e.g. display_label="中", salience=Notable), the
+        // callback fires, we read it here, and the indicator shows the mode
+        // suffix instead of just the bare engine name.
+        let mode_display: Option<String> = self.read_mode_display_label();
+        let mode_salience = self.read_mode_salience();
+
+        let label = {
+            let Some(instance) = self.instance.as_ref() else {
+                eprintln!("indicator: no instance, skipping");
+                return;
+            };
+            let Some(registry) = instance.registry_rust() else {
+                eprintln!("indicator: no registry, skipping");
+                return;
+            };
+            let sources = RegistryLabelSources { registry };
+            let Some(indicator) = self.indicator.as_mut() else {
+                eprintln!("indicator: no indicator state machine, skipping");
+                return;
+            };
+            let cfg = self.indicator_config;
+
+            // Build the mode snapshot from the libtypio-cached mode. The
+            // snapshot always exists when we have a valid mode pointer,
+            // even if `display_label` is None — the salience gate still
+            // needs to see it.
+            let mode_snapshot = EngineModeSnapshot {
+                display_label: mode_display.as_deref(),
+                salience: mode_salience,
+            };
+            let mode_ref = Some(&mode_snapshot);
+
+            let label = match path {
+                IndicatorPath::Focus => {
+                    indicator.show_on_focus(now, mode_ref, &cfg, &sources)
+                }
+                IndicatorPath::Reactivate => {
+                    indicator.show_on_reactivate(now, mode_ref, &cfg, &sources)
+                }
+                IndicatorPath::StateChange => {
+                    indicator.show_for_state_change(now, mode_ref, &cfg, &sources)
+                }
+            };
+            eprintln!(
+                "indicator: path={:?} mode_display={:?} salience={:?} lang={:?} engine={:?} → label={:?}",
+                path,
+                mode_display,
+                mode_salience,
+                sources.active_language_tag(),
+                sources.active_engine_name(),
+                label
+            );
+            label
+        };
+        if let Some(label) = label {
+            self.request_indicator_show(label, now);
+        }
+    }
+
+    /// Read the cached mode's `display_label` from libtypio (e.g. "中",
+    /// "A", "Latin"). Returns `None` when no engine has reported a mode
+    /// yet, or when the mode has no display label.
+    fn read_mode_display_label(&self) -> Option<String> {
+        let raw = self.instance.as_ref()?;
+        let raw = raw.as_ref() as *const TypioInstance as *mut TypioInstance;
+        let mode_ptr = typio::instance::typio_instance_get_last_keyboard_mode(raw);
+        if mode_ptr.is_null() {
+            return None;
+        }
+        let mode = unsafe { &*mode_ptr };
+        if mode.display_label.is_null() {
+            None
+        } else {
+            Some(unsafe { CStr::from_ptr(mode.display_label) }.to_string_lossy().into_owned())
+        }
+    }
+
+    /// Read the cached mode's salience. Returns `Quiet` when no mode is set.
+    fn read_mode_salience(&self) -> Salience {
+        let raw = match self.instance.as_ref() {
+            Some(i) => i.as_ref() as *const TypioInstance as *mut TypioInstance,
+            None => return Salience::Quiet,
+        };
+        let mode_ptr = typio::instance::typio_instance_get_last_keyboard_mode(raw);
+        if mode_ptr.is_null() {
+            return crate::indicator::Salience::Quiet;
+        }
+        let mode = unsafe { &*mode_ptr };
+        match mode.salience {
+            typio_abi::TypioStatusSalience::TypioStatusSalienceNotable => Salience::Notable,
+            _ => Salience::Quiet,
+        }
+    }
+
+    /// Feed an indicator show request through the [`PanelCoordinator`].
+    /// If the anchor is ready the banner renders immediately and the
+    /// auto-hide timer is armed; otherwise the coordinator queues the
+    /// request and it flushes on a later tick through
+    /// `flush_pending_with_timeout`.
+    #[cfg(feature = "wayland")]
+    fn request_indicator_show(&mut self, label: String, now: Instant) {
+        let decision = {
+            let Some(frontend) = self.frontend.as_mut() else {
+                eprintln!("indicator: no frontend, skipping");
+                return;
+            };
+            let coord = frontend.state_mut().panel_coord_mut();
+            let anchor_ready = coord.anchor_ready();
+            let decision = coord.decide_positioned_flush(UiOwner::Indicator, &label);
+            eprintln!(
+                "indicator: coordinator anchor_ready={} → {:?}",
+                anchor_ready, decision
+            );
+            decision
+        };
+        match decision {
+            FlushDecision::Show => self.render_indicator_banner(&label, now),
+            FlushDecision::Pending => {
+                eprintln!("indicator: queued, will flush when anchor resolves");
+            }
+            FlushDecision::Cancel => {
+                eprintln!("indicator: coordinator cancelled the request");
+                if let Some(indicator) = self.indicator.as_mut() {
+                    indicator.hide();
+                }
+            }
+        }
+    }
+
+    /// Render the indicator banner onto the candidate Panel's surface,
+    /// mark the indicator as shown (updates recency tracking), and arm
+    /// the auto-hide timer. Called either from
+    /// [`Self::request_indicator_show`] when the coordinator accepts
+    /// immediately, or from the loop's `flush_pending_with_timeout` path
+    /// when a queued show later becomes renderable.
+    #[cfg(feature = "wayland")]
+    fn render_indicator_banner(&mut self, label: &str, now: Instant) {
+        eprintln!("indicator: rendering banner '{label}'");
+        let scale = self
+            .frontend
+            .as_ref()
+            .map(|f| f.state().buffer_scale)
+            .unwrap_or(1.0);
+        if let Some(panel) = self
+            .frontend
+            .as_mut()
+            .and_then(|f| f.panel_mut())
+        {
+            panel.set_scale(scale);
+            panel.ensure_banner_size(label);
+            panel.draw_status_banner(label);
+            eprintln!("indicator: banner rendered and presented");
+        } else {
+            eprintln!("indicator: no FluxPanel attached, cannot render");
+        }
+        if let Some(indicator) = self.indicator.as_mut() {
+            indicator.note_shown(now);
+        }
+        self.arm_indicator_timer(now);
+    }
+
+    /// Hide the indicator (timer expiry, deactivate, or coordinator
+    /// cancel). Clears the indicator's active flag, dismisses any queued
+    /// request for the Indicator owner, detaches the popup surface if the
+    /// Indicator was the visible owner, and disarms the auto-hide timer.
+    /// Leaves the recency edges intact: a recently-shown indicator still
+    /// suppresses the next focus-path reveal.
+    #[cfg(feature = "wayland")]
+    fn hide_indicator(&mut self) {
+        if let Some(indicator) = self.indicator.as_mut() {
+            indicator.hide();
+        }
+        let indicator_owned = {
+            let Some(frontend) = self.frontend.as_mut() else {
+                return;
+            };
+            let coord = frontend.state_mut().panel_coord_mut();
+            let was_visible = coord.visible_owner() == UiOwner::Indicator;
+            coord.hide(UiOwner::Indicator);
+            was_visible
+        };
+        if indicator_owned {
+            if let Some(panel) = self
+                .frontend
+                .as_mut()
+                .and_then(|f| f.panel_mut())
+            {
+                panel.hide();
+            }
+        }
+        self.disarm_indicator_timer();
+    }
+
+    /// Arm the auto-hide timer for the indicator's configured duration
+    /// (clamped to 100–10000 ms in [`IndicatorConfig`]). Idempotent —
+    /// re-arming replaces any prior deadline.
+    #[cfg(feature = "wayland")]
+    fn arm_indicator_timer(&mut self, now: Instant) {
+        let duration = self.indicator_config.duration;
+        if let Some(tf) = self.indicator_timer.as_ref() {
+            let expiration =
+                Expiration::OneShot(TimeSpec::from_duration(duration));
+            let _ = tf.set(expiration, TimerSetTimeFlags::empty());
+        }
+        self.indicator_hide_deadline = Some(now + duration);
+    }
+
+    /// Disarm the auto-hide timer. Safe to call on an already-disarmed
+    /// timer; arming with a zero `it_value` is the kernel-defined disarm.
+    #[cfg(feature = "wayland")]
+    fn disarm_indicator_timer(&mut self) {
+        if let Some(tf) = self.indicator_timer.as_ref() {
+            let expiration =
+                Expiration::OneShot(TimeSpec::from_duration(std::time::Duration::ZERO));
+            let _ = tf.set(expiration, TimerSetTimeFlags::empty());
+        }
+        self.indicator_hide_deadline = None;
+    }
+
+    /// Remaining milliseconds until the indicator auto-hide deadline, or
+    /// `None` when the timer is not armed.
+    #[cfg(feature = "wayland")]
+    fn indicator_hide_remaining_ms(&self, now: Instant) -> Option<i32> {
+        self.indicator_hide_deadline
+            .and_then(|d| d.checked_duration_since(now))
+            .map(|rem| rem.as_millis() as i32)
+            .map(|ms| ms.max(0))
     }
 
     /// Re-sync the Rust-side `StateController` with libtypio, then push
@@ -959,7 +1444,17 @@ impl App {
         }
 
         if state_refresh {
+            eprintln!("indicator: StateRefresh received, refreshing state surfaces");
             self.refresh_state_surfaces();
+            // StateRefresh covers every deliberate registry mutation:
+            // Ctrl+Shift engine-switch chord, tray menu picks, and
+            // IPC-driven switches (`typioctl language use …`). All are
+            // user-initiated, so they go through the indicator's
+            // no-gate deliberate-change path.
+            #[cfg(feature = "wayland")]
+            if self.frontend.is_some() {
+                self.trigger_indicator_state_change();
+            }
         }
 
         should_exit
@@ -1205,6 +1700,43 @@ fn set_active_voice(instance: *mut TypioInstance, name: &str) -> Result<(), SvcE
 /// Auto-repeat is suppressed entirely when a repeat-suppressing
 /// modifier (Ctrl / Alt / Super) is held, or when the compositor
 /// advertises `rate == 0`.
+/// Which indicator show-path to take. Mirror of [`Indicator`]'s three
+/// public methods, lifted into a tag so [`App::trigger_indicator_show`]
+/// can dispatch on a single borrow scope without re-borrowing `self`
+/// for each arm.
+#[cfg(feature = "wayland")]
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Focus / Reactivate auto-triggers disabled at call site; see app.rs 5b.
+enum IndicatorPath {
+    Focus,
+    Reactivate,
+    StateChange,
+}
+
+/// [`LabelSources`] backed by the live `EngineRegistry`. Borrows its
+/// strings so the indicator label composition is zero-allocation on the
+/// hot path.
+#[cfg(feature = "wayland")]
+struct RegistryLabelSources<'a> {
+    registry: &'a typio::core::registry::EngineRegistry,
+}
+
+#[cfg(feature = "wayland")]
+impl<'a> LabelSources for RegistryLabelSources<'a> {
+    fn active_language_tag(&self) -> Option<&str> {
+        self.registry.active_language()
+    }
+    fn active_engine_name(&self) -> Option<&str> {
+        self.registry.active_keyboard_name()
+    }
+    fn active_engine_display_name(&self) -> Option<&str> {
+        self.registry
+            .active_keyboard_name()
+            .and_then(|name| self.registry.engine_info(name))
+            .map(|info| info.display_name.as_str())
+    }
+}
+
 #[cfg(feature = "wayland")]
 fn arm_repeat(
     timer: &mut RepeatTimer,
@@ -1391,6 +1923,12 @@ mod tests {
             resume_signal: None,
             #[cfg(feature = "wayland")]
             focus_driver: None,
+            indicator: None,
+            indicator_config: IndicatorConfig::default(),
+            #[cfg(feature = "wayland")]
+            indicator_timer: None,
+            #[cfg(feature = "wayland")]
+            indicator_hide_deadline: None,
             config_watcher: None,
             watchdog: None,
             event_tx: tx,

@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **On-screen status indicator (`typio_host::indicator` + `FluxPanel`
+  banner).** The transient `<badge> · <engine> · <mode>` popup anchored
+  near the caret now actually renders, completing the Wayland-frontend
+  phase that ADR-0035 had scoped but left as a stub (`app.rs` carried a
+  `TODO: Phase 9` placeholder that discarded the label). Three trigger
+  paths are wired, matching ADR-0017/0018: `FirstActivate` (salience +
+  3-second acknowledged-recency gates), `Reactivate` (salience only),
+  and deliberate change (no gates — covers the Ctrl+Shift chord,
+  tray-driven engine/language switches, IPC-driven mutations via
+  `typioctl`, and the future `summon_indicator` shortcut). A typed
+  `IndicatorConfig` snapshot reads `display.indicator_enabled` and
+  `display.indicator_duration_ms` (default 1500 ms, clamped 100–10000)
+  once at startup and on reload; the hot path is FFI-free. The
+  auto-hide timerfd is armed only when the coordinator actually maps
+  the popup, fixing a latent issue where a queued show that later
+  flushed through `flush_pending_with_timeout` never armed the timer
+  nor updated the recency edge. `FluxPanel::draw_status_banner` and
+  `ensure_banner_size` share the candidate panel's Vulkan surface and
+  flux text stack per ADR-0017 but use independent layout constants.
+  `FocusDriver::tick` now returns the focus transition so the loop can
+  layer the indicator on top without re-observing effect state.
+
 - **Tray SNI menu layout + IPC bus wiring (`typio_host::tray_sni`,
   `typio_host::ipc_bus`).** Phase 6 port. The StatusNotifierItem
   `GetLayout` method now serialises the `tray_menu::RegistrySnapshot`
@@ -527,6 +549,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   grab's `Key` event handler now forwards keys directly to the virtual
   keyboard when the text input is not active, so unhandled keys reach
   the focused application throughout the grab's lifetime.
+
+- **Indicator behaviour description contradicted ADR-0018.**
+  `docs/explanation/wayland-input-method.md` claimed the indicator
+  "stays hidden on `REACTIVATE`", but ADR-0018 explicitly states the
+  indicator "re-reveals correctly on reactivation" and the C
+  implementation (`focus_effects.c`) actually re-evaluates against the
+  salience gate on `Reactivate`. The doc table is updated to reflect
+  the three-path model (focus / reactivate / deliberate-change) with
+  the correct gate semantics, and the surrounding paragraph no longer
+  contradicts the design record.
 
 - **Tray badge rendering was clipped, off-centre, and visually muddy.**
   `icon_badge::render_one` used a fixed `px = size*0.82` font scale and

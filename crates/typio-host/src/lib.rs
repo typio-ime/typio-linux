@@ -27,6 +27,7 @@ pub mod engine_loader;
 pub mod focus_controller;
 pub mod health;
 pub mod icon_badge;
+pub mod indicator;
 pub mod input_method;
 pub mod ipc;
 pub mod ipc_bus;

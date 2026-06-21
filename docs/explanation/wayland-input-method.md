@@ -167,14 +167,15 @@ In both cases the input context is never `focus_out`'d, so the engine's in-fligh
 
 ## Indicator behaviour
 
-The indicator (the transient Panel showing the active engine and mode label) has two show paths, each with different gate semantics:
+The indicator (the transient Panel showing the active engine and mode label) has three show paths, each with different gate semantics:
 
 | Path | Trigger | Gates |
 |---|---|---|
-| Focus path (`show_indicator_on_focus`) | `ACTIVATE` only | salience (suppress `QUIET` states) + acknowledged-recency (suppress if user typed or saw indicator within the last 3 s) |
-| Deliberate-change path (`show_indicator_for_state`) | engine switch, mode change, profile toggle | none — user just acted, always announce |
+| First-focus (`show_on_focus`) | `FirstActivate` only | salience (suppress `QUIET` states) + acknowledged-recency (suppress if user typed or saw indicator within the last 3 s) |
+| Reactivate (`show_on_reactivate`) | `Reactivate` | salience only — the user moved to a new caret in the same session, so do not suppress on recency (the new field's context can differ from the previous one's) |
+| Deliberate-change (`show_for_state_change`) | engine switch, mode change, profile toggle, `summon_indicator` shortcut | none — user just acted, always announce |
 
-On `DEACTIVATE`, `transition_to_inactive` hides all Panel UI. On `REACTIVATE`, the indicator stays hidden (it was already hidden by the `activate` handler); the engine state has not changed across a field switch so there is nothing to announce.
+On `DEACTIVATE`, the indicator is hidden along with all other Panel UI. On `REACTIVATE`, the indicator re-evaluates against the salience gate: `NOTABLE` modes re-show (the user has moved to a new caret whose context can differ), while `QUIET` modes stay suppressed. The recency gate does not apply on `REACTIVATE`. See [ADR-0018](../adr/0018-focus-transition-classification.md).
 
 The indicator auto-hides after `display.indicator_duration_ms` (default 1500 ms, clamped 100–10000 ms) via a timerfd.
 
