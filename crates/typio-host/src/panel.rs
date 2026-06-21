@@ -449,13 +449,6 @@ impl FluxPanel {
         heartbeat: &dyn Fn(),
         before_present: &dyn Fn(),
     ) {
-        let mut t = std::time::Instant::now();
-        let step = |name: &str, start: std::time::Instant| -> std::time::Instant {
-            let now = std::time::Instant::now();
-            eprintln!("draw_candidates: {name} took {:.3} ms",
-                      now.duration_since(start).as_secs_f64() * 1000.0);
-            now
-        };
         heartbeat();
         unsafe {
             flux_arena_reset(&mut self.arena);
@@ -468,19 +461,15 @@ impl FluxPanel {
             };
             let mut frame: *mut flux_frame = ptr::null_mut();
             let r = flux_surface_begin_frame(self.surface, &frame_desc, &mut frame);
-            t = step("begin_frame", t);
             heartbeat();
             if !flux_result_is_ok(r) {
-                eprintln!("draw_candidates: begin_frame failed (timeout or surface-lost), skipping frame");
                 return;
             }
 
             let bg = flux_color_rgba(28, 28, 32, 255);
             let r = flux_canvas_begin(self.canvas, frame, &bg);
-            t = step("canvas_begin", t);
             heartbeat();
             if !flux_result_is_ok(r) {
-                eprintln!("draw_candidates: canvas_begin failed, bailing");
                 return;
             }
 
@@ -568,22 +557,17 @@ impl FluxPanel {
 
                 current_x += item_width + CANDIDATE_ITEM_GAP;
             }
-            t = step("text_draw_loop", t);
             heartbeat();
 
             flux_canvas_end(self.canvas);
-            t = step("canvas_end", t);
             heartbeat();
             let r = flux_frame_submit(frame);
-            t = step("frame_submit", t);
             heartbeat();
             if !flux_result_is_ok(r) {
-                eprintln!("draw_candidates: frame_submit failed, bailing");
                 return;
             }
             before_present();
             flux_frame_present(frame);
-            step("frame_present", t);
             heartbeat();
         }
     }
@@ -763,13 +747,6 @@ impl FluxPanel {
         if label.is_empty() {
             return;
         }
-        let mut t = std::time::Instant::now();
-        let step = |name: &str, start: std::time::Instant| -> std::time::Instant {
-            let now = std::time::Instant::now();
-            eprintln!("draw_status_banner: {name} took {:.3} ms",
-                      now.duration_since(start).as_secs_f64() * 1000.0);
-            now
-        };
         heartbeat();
         unsafe {
             flux_arena_reset(&mut self.arena);
@@ -782,19 +759,15 @@ impl FluxPanel {
             };
             let mut frame: *mut flux_frame = ptr::null_mut();
             let r = flux_surface_begin_frame(self.surface, &frame_desc, &mut frame);
-            t = step("begin_frame", t);
             heartbeat();
             if !flux_result_is_ok(r) {
-                eprintln!("draw_status_banner: begin_frame failed (timeout or surface-lost), skipping frame");
                 return;
             }
 
             let bg = flux_color_rgba(28, 28, 32, 255);
             let r = flux_canvas_begin(self.canvas, frame, &bg);
-            t = step("canvas_begin", t);
             heartbeat();
             if !flux_result_is_ok(r) {
-                eprintln!("draw_status_banner: canvas_begin failed, bailing");
                 return;
             }
 
@@ -813,10 +786,8 @@ impl FluxPanel {
                 bytes.len(),
                 &style,
             );
-            t = step("text_measure", t);
             heartbeat();
 
-            // Vertically centre the text inside the banner row.
             let text_y = BANNER_PADDING + (BANNER_FONT_SIZE * 1.3 - metrics.height).max(0.0) / 2.0;
             let text_x = BANNER_PADDING;
 
@@ -830,22 +801,17 @@ impl FluxPanel {
                 bytes.len(),
                 &style,
             );
-            t = step("text_draw", t);
             heartbeat();
 
             flux_canvas_end(self.canvas);
-            t = step("canvas_end", t);
             heartbeat();
             let r = flux_frame_submit(frame);
-            t = step("frame_submit", t);
             heartbeat();
             if !flux_result_is_ok(r) {
-                eprintln!("draw_status_banner: frame_submit failed, bailing");
                 return;
             }
             before_present();
             flux_frame_present(frame);
-            step("frame_present", t);
             heartbeat();
         }
     }

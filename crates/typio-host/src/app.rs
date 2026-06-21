@@ -932,21 +932,14 @@ impl App {
                         panel.set_scale(scale);
                         heartbeat();
                         if candidates.is_empty() {
-                            eprintln!("panel: hide (no candidates)");
                             panel.hide();
                         } else {
                             panel.ensure_candidate_size(&candidates);
                             heartbeat();
-                            eprintln!(
-                                "panel: draw {} candidate(s), selected={}",
-                                candidates.len(),
-                                selected
-                            );
                             panel.draw_candidates(&candidates, selected, &heartbeat, &enter_present);
                         }
                         PanelUpdateResult::Done
                     } else {
-                        eprintln!("panel: flush requested but no FluxPanel attached");
                         PanelUpdateResult::Done
                     };
                     frontend.state_mut().panel_schedule_state = panel_scheduler::complete(result);
@@ -1282,18 +1275,12 @@ impl App {
     #[cfg(feature = "wayland")]
     fn render_indicator_banner(&mut self, label: &str, now: Instant) {
         let t0 = Instant::now();
-        eprintln!("indicator: rendering banner '{label}'");
+        let _ = t0; // keep the Instant for potential future profiling
         let scale = self
             .frontend
             .as_ref()
             .map(|f| f.state().buffer_scale)
             .unwrap_or(1.0);
-        // Pull the watchdog handle up-front so the heartbeat closure
-        // captures only this reference, not all of `self`. Without the
-        // extraction the closure would borrow `self` immutably and
-        // conflict with the mutable `self.frontend.as_mut()` borrow
-        // used to obtain `panel` below — a classic split-borrow error.
-        // The disjoint-field borrow of `self.watchdog` is fine.
         let wd_ref = self.watchdog.as_ref();
         let heartbeat = move || {
             if let Some(wd) = wd_ref {
@@ -1311,18 +1298,10 @@ impl App {
             .and_then(|f| f.panel_mut())
         {
             panel.set_scale(scale);
-            let t1 = Instant::now();
-            eprintln!("indicator: set_scale={} took {:.3} ms", scale, t1.duration_since(t0).as_secs_f64() * 1000.0);
             heartbeat();
             panel.ensure_banner_size(label);
-            let t2 = Instant::now();
-            eprintln!("indicator: ensure_banner_size took {:.3} ms", t2.duration_since(t1).as_secs_f64() * 1000.0);
             heartbeat();
             panel.draw_status_banner(label, &heartbeat, &enter_present);
-            let t3 = Instant::now();
-            eprintln!("indicator: draw_status_banner took {:.3} ms (banner rendered and presented)", t3.duration_since(t2).as_secs_f64() * 1000.0);
-        } else {
-            eprintln!("indicator: no FluxPanel attached, cannot render");
         }
         if let Some(indicator) = self.indicator.as_mut() {
             indicator.note_shown(now);
