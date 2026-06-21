@@ -114,6 +114,93 @@ const BANNER_FONT_SIZE: f32 = 15.0;
 /// `1.3` is the typical line-height factor flux applies for default fonts.
 const BANNER_ROW_HEIGHT: f32 = BANNER_PADDING * 2.0 + BANNER_FONT_SIZE * 1.3;
 
+// ── Pipeline-cache persistence ────────────────────────────────────────
+//
+// flux's new pipeline-cache API (Skia PersistentCache model) lets the
+// consumer own the storage strategy via load/save callbacks on
+// flux_device_desc. We persist to $XDG_CACHE_HOME/typio/pipeline.bin
+// (or $HOME/.cache/typio/pipeline.bin) so shader compilation cost is
+// paid once; subsequent daemon starts reuse the cached VkPipelineCache
+// blob. The load callback returns a libc::malloc'd buffer (flux frees
+// it with C free()); the save callback writes atomically (temp +
+// rename). Both are best-effort and silent on failure — the cache is
+// an optimisation, not a correctness path.
+
+/// Resolve the pipeline-cache path following XDG conventions.
+/// Returns None when no cache home is available.
+fn pipeline_cache_path() -> Option<std::path::PathBuf> {
+    if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
+        if !xdg.is_empty() {
+            return Some(std::path::PathBuf::from(xdg).join("typio/pipeline.bin"));
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        if !home.is_empty() {
+            return Some(std::path::PathBuf::from(home).join(".cache/typio/pipeline.bin"));
+        }
+    }
+    None
+}
+
+unsafe extern "C" fn pipeline_cache_load(
+    userdata: *mut c_void,
+    out_size: *mut usize,
+) -> *mut c_void {
+    if userdata.is_null() || out_size.is_null() {
+        return ptr::null_mut();
+    }
+    let path = std::ffi::CStr::from_ptr(userdata as *const c_char);
+    let path = match path.to_str() {
+        Ok(s) => std::path::Path::new(s),
+        Err(_) => return ptr::null_mut(),
+    };
+    match std::fs::read(path) {
+        Ok(data) => {
+            let size = data.len();
+            let buf = libc::malloc(size);
+            if buf.is_null() {
+                return ptr::null_mut();
+            }
+            ptr::copy_nonoverlapping(data.as_ptr(), buf as *mut u8, size);
+            *out_size = size;
+            buf
+        }
+        Err(_) => {
+            *out_size = 0;
+            ptr::null_mut()
+        }
+    }
+}
+
+unsafe extern "C" fn pipeline_cache_save(
+    userdata: *mut c_void,
+    data: *const c_void,
+    size: usize,
+) {
+    if userdata.is_null() || data.is_null() || size == 0 {
+        return;
+    }
+    let path = std::ffi::CStr::from_ptr(userdata as *const c_char);
+    let path = match path.to_str() {
+        Ok(s) => s.to_owned(),
+        Err(_) => return,
+    };
+    if let Some(parent) = std::path::Path::new(&path).parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let bytes = std::slice::from_raw_parts(data as *const u8, size);
+    let tmp = format!("{path}.tmp.{pid}", pid = std::process::id());
+    if std::fs::write(&tmp, bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+fn free_cache_path(p: *mut c_char) {
+    if !p.is_null() {
+        unsafe { let _ = std::ffi::CString::from_raw(p); }
+    }
+}
+
 /// A candidate panel backed by flux on a raw Wayland surface.
 ///
 /// Created from a raw `wl_display*` (obtainable from
@@ -142,6 +229,11 @@ pub struct FluxPanel {
     content_h_logical: i32,
     // Keep the raw wl_surface alive for the panel's lifetime.
     _wl_surface: *mut c_void,
+    /// Heap-allocated C string for the pipeline-cache path. Owned by
+    /// FluxPanel so it outlives `flux_device_release` (which fires the
+    /// save callback). Null when cache persistence is unavailable
+    /// (no XDG_CACHE_HOME / HOME).
+    pipeline_cache_path: *mut c_char,
 }
 
 impl FluxPanel {
@@ -202,6 +294,16 @@ impl FluxPanel {
             c"VK_KHR_wayland_surface".as_ptr(),
         ];
         let device_exts: [*const c_char; 1] = [c"VK_KHR_swapchain".as_ptr()];
+        // Resolve pipeline-cache path before creating the desc so the
+        // load/save callbacks and userdata can be wired in.
+        let cache_path_c: *mut c_char = match &pipeline_cache_path() {
+            Some(path) => {
+                let cstring = std::ffi::CString::new(path.to_string_lossy().as_ref())
+                    .map_err(|e| format!("cache path has NUL: {e}"))?;
+                cstring.into_raw()
+            }
+            None => ptr::null_mut(),
+        };
         let mut device_desc: flux_device_desc = std::mem::zeroed();
         device_desc.type_ = FType::FLUX_TYPE_DEVICE_DESC;
         device_desc.required_instance_extensions = instance_exts.as_ptr();
@@ -209,10 +311,16 @@ impl FluxPanel {
         device_desc.required_device_extensions = device_exts.as_ptr();
         device_desc.required_device_extension_count = device_exts.len() as u32;
         device_desc.frames_in_flight = 2;
+        if !cache_path_c.is_null() {
+            device_desc.pipeline_cache_load = Some(pipeline_cache_load);
+            device_desc.pipeline_cache_save = Some(pipeline_cache_save);
+            device_desc.pipeline_cache_userdata = cache_path_c as *mut c_void;
+        }
 
         let mut device: *mut flux_device = ptr::null_mut();
         let r = flux_device_create(&device_desc, &mut device);
         if !flux_result_is_ok(r) {
+            free_cache_path(cache_path_c);
             return Err(flux_last_error_string("flux_device_create"));
         }
 
@@ -221,6 +329,7 @@ impl FluxPanel {
         let vk_surface = create_wayland_vk_surface(vk_instance, wl_display_ptr, wl_surface)?;
         if vk_surface.is_null() {
             flux_device_release(device);
+            free_cache_path(cache_path_c);
             return Err("vkCreateWaylandSurfaceKHR returned NULL".into());
         }
 
@@ -235,6 +344,7 @@ impl FluxPanel {
         let r = flux_surface_create(device, &surface_desc, &mut surface);
         if !flux_result_is_ok(r) {
             flux_device_release(device);
+            free_cache_path(cache_path_c);
             return Err(flux_last_error_string("flux_surface_create"));
         }
 
@@ -249,6 +359,7 @@ impl FluxPanel {
         if !flux_result_is_ok(r) {
             flux_surface_release(surface);
             flux_device_release(device);
+            free_cache_path(cache_path_c);
             return Err(flux_last_error_string("flux_canvas_create"));
         }
 
@@ -263,6 +374,7 @@ impl FluxPanel {
             flux_sys::flux_canvas_destroy(canvas);
             flux_surface_release(surface);
             flux_device_release(device);
+            free_cache_path(cache_path_c);
             return Err(flux_last_error_string("flux_text_create"));
         }
 
@@ -271,9 +383,10 @@ impl FluxPanel {
         let r = flux_arena_init(&mut arena, 256 * 1024, ptr::null_mut());
         if !flux_result_is_ok(r) {
             flux_text_destroy(text);
-            flux_canvas_destroy(canvas);
+            flux_sys::flux_canvas_destroy(canvas);
             flux_surface_release(surface);
             flux_device_release(device);
+            free_cache_path(cache_path_c);
             return Err(flux_last_error_string("flux_arena_init"));
         }
 
@@ -290,6 +403,7 @@ impl FluxPanel {
             content_w_logical: 0,
             content_h_logical: 0,
             _wl_surface: wl_surface,
+            pipeline_cache_path: cache_path_c,
         })
     }
 
@@ -801,6 +915,9 @@ impl Drop for FluxPanel {
             if !self.device.is_null() {
                 flux_device_release(self.device);
             }
+            // Free the cache path AFTER flux_device_release so the
+            // save callback (fired inside release) can still read it.
+            free_cache_path(self.pipeline_cache_path);
         }
     }
 }
