@@ -113,7 +113,7 @@ fn print_globals(contents: &GlobalListContents) {
             "wp_fractional_scale_manager_v1",
             "fractional-scale (future)",
         ),
-        ("wp_viewporter", "viewporter (future)"),
+        ("wp_viewporter", "viewporter (panel grow-only swapchain, ADR-0013)"),
     ];
     let list = contents.clone_list();
     eprintln!("Global list from compositor ({} advertised):", list.len());

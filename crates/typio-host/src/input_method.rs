@@ -49,6 +49,8 @@ use crate::protocols::input_method_v2::zwp_input_method_v2::{self, ZwpInputMetho
 use crate::protocols::input_method_v2::zwp_input_popup_surface_v2::{self, ZwpInputPopupSurfaceV2};
 use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1};
+use crate::protocols::viewporter::wp_viewport::WpViewport;
+use crate::protocols::viewporter::wp_viewporter::WpViewporter;
 
 /// Callback type for input-method lifecycle events.
 pub type LifecycleCallback = Box<dyn FnMut(LifecycleEvent) + Send>;
@@ -137,6 +139,16 @@ pub struct InputMethodState {
     /// The input-method popup surface (positioning protocol).
     #[allow(dead_code)]
     popup_surface: ZwpInputPopupSurfaceV2,
+    /// `wp_viewporter` global. Bound when the compositor advertises it;
+    /// `None` falls back to exact-size resize (the legacy path described
+    /// by ADR-0013).
+    #[allow(dead_code)]
+    viewporter: Option<WpViewporter>,
+    /// `wp_viewport` attached to `popup_surface_obj`. Used by the panel
+    /// to crop an oversized, grow-only swapchain to the exact content
+    /// rect (ADR-0013).
+    #[allow(dead_code)]
+    panel_viewport: Option<WpViewport>,
     /// Text input rectangle from the compositor (cursor position).
     pub text_input_rect: Option<(i32, i32, i32, i32)>,
     /// Current candidate list for the panel to render.
@@ -456,7 +468,8 @@ impl InputMethodFrontend {
 
         let display_ptr = frontend.raw_display_ptr();
         let surface_ptr = frontend.state.popup_surface_raw_ptr();
-        match unsafe { FluxPanel::new_from_surface(display_ptr, surface_ptr, 1, 1) } {
+        let viewport = frontend.state.panel_viewport.clone();
+        match unsafe { FluxPanel::new_from_surface(display_ptr, surface_ptr, viewport, 1, 1) } {
             Ok(panel) => frontend.panel = Some(panel),
             Err(e) => eprintln!("WARN: FluxPanel creation failed: {e}"),
         }
@@ -494,8 +507,23 @@ impl InputMethodFrontend {
             .bind(&qh, 1..=6, ())
             .map_err(|e| ConnectError::BindFailed("wl_compositor", format!("{e:?}")))?;
 
+        // Bind wp_viewporter if the compositor advertises it. ADR-0013
+        // requires this for the grow-only swapchain: without a viewport
+        // the buffer must equal the content exactly, which forces a
+        // swapchain rebuild (vkDeviceWaitIdle + WSI roundtrips) on every
+        // candidate-page width change — the watchdog-killing stall.
+        // Compositors without viewporter fall back to exact-size resize.
+        let viewporter: Option<WpViewporter> = globals.bind(&qh, 1..=1, ()).ok();
+
         // Create a wl_surface for the panel popup.
         let popup_surface_obj = compositor.create_surface(&qh, ());
+
+        // Attach a wp_viewport to the popup surface (if we have a
+        // viewporter). Cloned into FluxPanel later so it owns its own
+        // reference; the original stays here for lifetime.
+        let panel_viewport: Option<WpViewport> = viewporter
+            .as_ref()
+            .map(|vp| vp.get_viewport(&popup_surface_obj, &qh, ()));
 
         let input_method = im_manager.get_input_method(&seat, &qh, ());
 
@@ -520,6 +548,8 @@ impl InputMethodFrontend {
             compositor,
             popup_surface_obj,
             popup_surface,
+            viewporter,
+            panel_viewport,
             text_input_rect: None,
             candidates: Vec::new(),
             selected_candidate: 0,
@@ -928,6 +958,30 @@ impl Dispatch<WlCompositor, ()> for InputMethodState {
         _state: &mut Self,
         _proxy: &WlCompositor,
         _event: <WlCompositor as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpViewporter, ()> for InputMethodState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpViewporter,
+        _event: <WpViewporter as Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpViewport, ()> for InputMethodState {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WpViewport,
+        _event: <WpViewport as Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,

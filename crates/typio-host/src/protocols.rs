@@ -25,7 +25,7 @@
 //! | `virtual_keyboard_v1` | virtual-keyboard-unstable-v1.xml           | yes (required) |
 //! | `foreign_toplevel_v1` | ext-foreign-toplevel-list-v1.xml           | future         |
 //! | `fractional_scale_v1` | fractional-scale-v1.xml                    | future         |
-//! | `viewporter`          | viewporter.xml                             | future         |
+//! | `viewporter`          | viewporter.xml                             | yes (panel)    |
 //!
 //! XML paths are relative to this crate's manifest dir
 //! (`typio-linux/crates/typio-host`), so `../../protocols/<name>.xml`

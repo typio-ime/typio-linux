@@ -35,6 +35,8 @@ use wayland_sys::{
     common::wl_argument,
 };
 
+use crate::protocols::viewporter::wp_viewport::WpViewport;
+
 use flux_struct_type as FType;
 use flux_text_family as FontFamily;
 
@@ -43,6 +45,14 @@ use flux_text_family as FontFamily;
 /// by the compositor) fails fast instead of blocking the main loop past
 /// the watchdog's 3-second stuck threshold.
 const PANEL_FRAME_TIMEOUT_NS: u64 = 200_000_000;
+/// Swapchain width quantum (ADR-0013). The buffer is allocated in
+/// multiples of this and grows only; sub-quantum widenings reuse the
+/// existing swapchain and are cropped to the exact content rect with
+/// `wp_viewport`. 64 px is large enough that typical candidate-row
+/// width variation stays inside one quantum, so after a short warm-up
+/// `flux_surface_resize` (and its `vkDeviceWaitIdle` + WSI roundtrips)
+/// is never called again during steady-state paging.
+const SURFACE_WIDTH_QUANTUM: u32 = 64;
 const PANEL_PADDING: f32 = 8.0;
 const PANEL_ROW_HEIGHT: f32 = 24.0;
 const CANDIDATE_FONT_SIZE: f32 = 16.0;
@@ -66,6 +76,17 @@ pub struct FluxPanel {
     width: u32,
     height: u32,
     scale: f32,
+    /// `wp_viewport` on the panel surface, used to crop the grow-only
+    /// swapchain to the exact content rect (ADR-0013). `None` only when
+    /// the compositor lacks `wp_viewporter`; in that case the swapchain
+    /// is sized exactly to the content and the per-page resize cost
+    /// returns.
+    viewport: Option<WpViewport>,
+    /// Last content width (logical, pre-scale) sent to `wp_viewport`.
+    /// Tracked so we only re-issue set_source/set_destination when the
+    /// visible size actually changes, not on every redraw.
+    content_w_logical: i32,
+    content_h_logical: i32,
     // Keep the raw wl_surface alive for the panel's lifetime.
     _wl_surface: *mut c_void,
 }
@@ -77,6 +98,11 @@ impl FluxPanel {
     /// from the same Wayland connection the input-method frontend
     /// uses (via `Connection::backend().display_ptr()`).
     ///
+    /// `viewport`, when present, attaches a `wp_viewport` to the
+    /// surface so the swapchain can be allocated grow-only and cropped
+    /// to exact content (ADR-0013). `None` falls back to exact-size
+    /// resize.
+    ///
     /// # Safety
     /// `wl_display_ptr` must be valid for the panel's lifetime.
     /// Create a panel backed by an EXISTING wl_surface (e.g. one that's
@@ -85,24 +111,29 @@ impl FluxPanel {
     pub unsafe fn new_from_surface(
         wl_display_ptr: *mut c_void,
         wl_surface_ptr: *mut c_void,
+        viewport: Option<WpViewport>,
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
-        Self::new_inner(wl_display_ptr, wl_surface_ptr, width, height)
+        Self::new_inner(wl_display_ptr, wl_surface_ptr, viewport, width, height)
     }
 
     fn new_inner(
         wl_display_ptr: *mut c_void,
         wl_surface_ptr: *mut c_void,
+        viewport: Option<WpViewport>,
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
-        unsafe { Self::new_inner_unsafe(wl_display_ptr, wl_surface_ptr, width, height) }
+        unsafe {
+            Self::new_inner_unsafe(wl_display_ptr, wl_surface_ptr, viewport, width, height)
+        }
     }
 
     unsafe fn new_inner_unsafe(
         wl_display_ptr: *mut c_void,
         wl_surface_ptr: *mut c_void,
+        viewport: Option<WpViewport>,
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
@@ -202,6 +233,9 @@ impl FluxPanel {
             width,
             height,
             scale: 1.0,
+            viewport,
+            content_w_logical: 0,
+            content_h_logical: 0,
             _wl_surface: wl_surface,
         })
     }
@@ -350,8 +384,22 @@ impl FluxPanel {
     }
 
     /// Ensure the surface is big enough for `candidate_count` rows.
-    /// Only calls `resize` when the computed dimensions differ from the
-    /// current ones, avoiding unnecessary swapchain recreations.
+    ///
+    /// Two paths, per ADR-0013:
+    ///
+    /// - **With `wp_viewport` (preferred).** The swapchain buffer is
+    ///   quantised up to `SURFACE_WIDTH_QUANTUM` and grows only. A width
+    ///   change inside the current quantum reuses the existing swapchain
+    ///   — no `vkDeviceWaitIdle`, no WSI roundtrips — and the exact
+    ///   content rect is cropped via `wp_viewport.set_source` /
+    ///   `set_destination`. After a short warm-up the buffer reaches the
+    ///   widest candidate row and `flux_surface_resize` is never called
+    ///   again during steady-state paging.
+    ///
+    /// - **Without `wp_viewport` (legacy).** The buffer must equal the
+    ///   content exactly (the buffer maps 1:1 to the surface), so any
+    ///   width change rebuilds the swapchain. This is the watchdog-killing
+    ///   path when candidate pages churn; viewporter is the fix.
     pub fn ensure_candidate_size(&mut self, candidates: &[String]) {
         let mut total_width: f32 = PANEL_PADDING;
 
@@ -406,7 +454,40 @@ impl FluxPanel {
 
         let phys_width = (desired_width as f32 * self.scale).ceil() as u32;
         let phys_height = (desired_height as f32 * self.scale).ceil() as u32;
-        self.resize(phys_width, phys_height);
+
+        let content_w_logical = desired_width as i32;
+        let content_h_logical = desired_height as i32;
+
+        if let Some(viewport) = self.viewport.as_ref() {
+            // Grow-only: round the physical width up to the next quantum
+            // and never shrink. Sub-quantum changes reuse the buffer.
+            let quantised_phys_w = phys_width.div_ceil(SURFACE_WIDTH_QUANTUM) * SURFACE_WIDTH_QUANTUM;
+            let target_phys_w = self.width.max(quantised_phys_w);
+            if target_phys_w != self.width || phys_height != self.height {
+                self.width = target_phys_w;
+                self.height = phys_height;
+                if !self.surface.is_null() {
+                    unsafe {
+                        flux_sys::flux_surface_resize(self.surface, target_phys_w, phys_height);
+                    }
+                }
+            }
+            // Always re-issue the crop so the compositor shows the exact
+            // content rect regardless of buffer width. Cheap: two protocol
+            // requests, applied at the next commit (i.e. the present in
+            // draw_candidates or the detach in hide).
+            if content_w_logical != self.content_w_logical
+                || content_h_logical != self.content_h_logical
+            {
+                viewport.set_source(0.0, 0.0, content_w_logical as f64, content_h_logical as f64);
+                viewport.set_destination(content_w_logical, content_h_logical);
+                self.content_w_logical = content_w_logical;
+                self.content_h_logical = content_h_logical;
+            }
+        } else {
+            // Legacy path: buffer must equal content exactly.
+            self.resize(phys_width, phys_height);
+        }
     }
 
     /// Hide the panel by detaching the current Wayland buffer.

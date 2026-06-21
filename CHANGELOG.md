@@ -626,6 +626,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TypioErrorAlreadyExists`. `is_manifest_filename` now excludes the
   `.installed.toml` variant.
 
+- **Watchdog killed the daemon while cycling rime candidates (ADR-0013
+  port).** The Rust `FluxPanel` sized its swapchain to the exact
+  candidate-row width and called `flux_surface_resize` on every width
+  change. Each resize runs an unbounded `vkDeviceWaitIdle` + swapchain
+  rebuild + WSI compositor roundtrips on the single-threaded IME loop;
+  under rapid candidate paging (e.g. holding Down) one roundtrip
+  exceeded the watchdog's 3 s `PanelUpdate` threshold and the daemon
+  was SIGKILLed. The panel now binds `wp_viewporter`, allocates the
+  buffer quantised to 64 px grow-only, and crops to the exact content
+  rect via `wp_viewport.set_source` / `set_destination`. After a short
+  warm-up `flux_surface_resize` is not called again during steady-state
+  paging. Compositors without `wp_viewporter` fall back to the
+  previous exact-size resize.
+
 ### Added
 
 - **Ctrl+Shift engine-switch chord.** The pure
