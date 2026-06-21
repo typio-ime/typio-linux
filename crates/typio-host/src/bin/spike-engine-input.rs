@@ -227,7 +227,9 @@ fn main() -> ExitCode {
         }
 
         // Drain pending key: route through engine or direct passthrough.
-        if let Some(key) = frontend.state_mut().pending_key.take() {
+        // Loop over the queue so a release that arrived in the same
+        // dispatch batch as the next press is not lost.
+        for key in frontend.state_mut().take_pending_keys() {
             // Clear any stale commit from a previous key.
             if let Ok(mut slot) = COMMITTED_TEXT.lock() {
                 *slot = None;

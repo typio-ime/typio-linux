@@ -539,6 +539,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Candidate panel froze and the daemon was SIGKILLed by the
+  watchdog after prolonged rime paging — four root causes, all
+  fixed.** The diagnostic trace evolved across four iterations:
+
+  1. **Per-glyph GPU submit (flux `atlas.c` + `layout.c`).** Every
+     glyph cache miss fired a full `vkQueueSubmit2` +
+     `vkWaitForFences` cycle inside `flux_vk_upload_to_image` — one
+     GPU pipeline stall per new glyph, 40+ stalls per frame for
+     Chinese candidates. Fixed by deferring uploads: cache-miss
+     blits expand a dirty bounding box via `txt_atlas_mark_dirty`;
+     `txt_atlas_flush` batch-uploads the box in a single
+     `flux_image_update_region` before each `draw_glyph_run`.
+
+  2. **Atlas full-reset death spiral (flux `atlas.c`).** The 2048×2048
+     atlas held ~4200 CJK glyphs at HiDPI scale and was constantly
+     full. Every new glyph triggered `atlas_reset`, which re-rasterised
+     **all** 4200 cached entries via FreeType (40-55 ms each, 10
+     resets per frame = ~470 ms). Fixed by replacing `atlas_reset`
+     with `atlas_clear`: O(1) cursor reset + cache invalidation, no
+     re-rasterisation. Atlas also enlarged to 4096×4096 (16 MB).
+
+  3. **`vkQueuePresentKHR` blocked the main loop for 15+ s (flux
+     `surface.c` + `frame.c`).** Even after the text path was fast,
+     the synchronous present call stalled under compositor
+     back-pressure, blocking the single-threaded event loop. Fixed
+     with a dedicated **present thread**: `flux_frame_present` now
+     rotates frame state and enqueues a present request (ring
+     buffer + binary-semaphore pool of 4), returning immediately. The
+     present thread calls `vkQueuePresentKHR` without holding
+     `queue_lock` (Mesa's WSI uses its own internal lock), so the
+     main thread's `vkQueueSubmit2` proceeds concurrently. When the
+     pool is exhausted (compositor severely behind), frames are
+     submitted but not presented — dropped, not blocked.
+
+  4. **Watchdog Present-stage threshold (typio-linux `watchdog.rs`).
+     `LoopStage::Present` was added so the watchdog attributes the
+     time correctly; with the async present thread it is
+     non-restful (the enqueue itself is fast — a stall there is a
+     genuine bug). A `before_present` callback lets the caller
+     transition the stage before the (now-instant) present call.
+
+- **Watchdog still SIGKILLed the daemon during rapid rime candidate
+  paging.** The earlier heartbeat-between-calls fix (see the entry
+  below) covered every FFI call *except* the one that actually
+  blocks: `vkQueuePresentKHR` inside `flux_frame_present`. Under
+  compositor back-pressure the WSI dispatches Wayland events
+  synchronously inside the present, and with the swapchain images
+  held by the compositor a single present call stalled for >3 s —
+  long enough to trip the watchdog's default threshold with no way
+  to heartbeat from the same thread. The trace pattern was
+  diagnostic: every sub-step (`begin_frame`, `canvas_begin`,
+  `text_draw_loop`, `canvas_end`, `frame_submit`) completed in
+  <0.2 ms, then the process died inside `frame_present` before its
+  timing line was printed. A new `LoopStage::Present` is now set
+  immediately before `flux_frame_present` in both
+  `FluxPanel::draw_candidates` and `FluxPanel::draw_status_banner`
+  (via a `before_present` callback the callers in `App` fill with
+  `wd.set_stage(LoopStage::Present)`). The watchdog gained a
+  per-stage stuck threshold: `Present` tolerates 15 s
+  (`PRESENT_STUCK_MS`) vs the 3 s default, absorbing transient
+  present stalls while still catching a genuine deadlock eventually.
+  `stuck_threshold_ms()` on `LoopStage` drives the detection so
+  future stages can tune their own thresholds.
+
+- **Occasional stuck key after release (the "stuck backspace"
+  symptom).** `InputMethodState.pending_key` was a single
+  `Option<DecodedKeyEvent>` slot, overwritten by every `Event::Key`
+  callback. When the Wayland library delivered two key events in the
+  same dispatch batch — most commonly a backspace release immediately
+  followed by another key event — the second event overwrote the
+  release in the slot, and the event-loop driver (which drained only
+  one event per iteration via `take_pending_key()`) never saw the
+  release. The repeat timer, armed on the press, kept firing
+  `RepeatOutcome::Consumed` for the consumed key forever, long after
+  the user had physically released the key. The slot is now a
+  `Vec<DecodedKeyEvent>` queue (`pending_keys`) drained in arrival
+  order via `take_pending_keys()`; the loop processes every queued
+  event per iteration so releases always reach `router.on_release` +
+  `timer.stop()`. The regression test in
+  `input_method::tests::state_helpers_round_trip` now pushes a press
+  and a release and asserts the drain preserves order. The same
+  drain pattern was applied to the `spike-engine-input` dev binary.
+
+- **Rapid candidate cycling tripped the PanelUpdate watchdog.** When
+  the user held the next-candidate key, the engine emitted a
+  composition callback per repeat, each scheduling a panel flush.
+  Once the compositor fell behind releasing swapchain images — a
+  single `vkQueuePresentKHR` or `vkAcquireNextImageKHR` call inside
+  `FluxPanel::draw_candidates` blocked for >3 s — the daemon was
+  SIGKILLed by the watchdog, which had no heartbeat inside the
+  render call and so could not distinguish "slow but progressing"
+  from "hung." `draw_candidates` and `draw_status_banner` now take a
+  `&dyn Fn()` heartbeat callback and invoke it between every
+  blocking FFI call (begin_frame / canvas_begin / text loop /
+  canvas_end / frame_submit / frame_present). `App::run_with_wayland`
+  and `App::render_indicator_banner` pass `&|| wd.heartbeat()` and
+  also heartbeat between `set_scale`, `ensure_*_size`, and the draw
+  call. A genuinely deadlocked FFI call still stops heartbeating and
+  the watchdog still fires; only legitimate slow renders are now
+  tolerated. The heartbeat is extracted as `wd_ref` before the
+  mutable `frontend` borrow so the closure capture is disjoint from
+  the panel's `&mut self`. Per-stage timing logs (`draw_candidates:
+  begin_frame took X ms`, …) mirror the existing
+  `draw_status_banner` instrumentation so any future stall can be
+  pinned to the exact FFI call from the stderr trace.
+
 - **First indicator banner killed the daemon at HiDPI scales.** The
   `FluxPanel` swapchain was pre-allocated at 256×128 physical pixels
   to keep the first automatic indicator banner off the

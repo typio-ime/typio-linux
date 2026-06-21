@@ -799,7 +799,12 @@ impl App {
                 }
             }
 
-            // 6. Drain engine output and process any pending key event.
+            // 6. Drain engine output and process all pending key events.
+            //    Draining the whole queue (not just one event) is what
+            //    prevents the "stuck backspace" symptom: if a release and
+            //    a subsequent press arrive in the same Wayland dispatch
+            //    batch, both must reach the router in order — losing the
+            //    release leaves the repeat timer armed forever.
             {
                 let frontend = self.frontend.as_mut().unwrap();
                 let state = frontend.state_mut();
@@ -809,7 +814,8 @@ impl App {
                 router.drain_commit(state);
                 router.drain_composition(state);
 
-                if let Some(key) = state.take_pending_key() {
+                let pending_keys = state.take_pending_keys();
+                for key in pending_keys {
                     // Snapshot the values we need before any mutable borrows
                     // below — both are cheap `Copy` reads.
                     let mods = state.mods_depressed;
@@ -881,6 +887,27 @@ impl App {
             // 7. Flush the candidate panel if the scheduler says so.
             wd!().set_stage(LoopStage::PanelUpdate);
             {
+                // Pull the watchdog handle up-front, mirroring
+                // `render_indicator_banner`. The heartbeat closure
+                // captures only this reference (not all of `self`),
+                // which lets it coexist with the mutable `frontend`
+                // borrow used to obtain `panel` — a split-borrow
+                // requirement that the inline `wd!()` form would
+                // trip when nested inside a closure passed to
+                // `draw_candidates`.
+                let wd_ref = self.watchdog.as_ref();
+                let heartbeat = move || {
+                    if let Some(wd) = wd_ref {
+                        wd.heartbeat();
+                    }
+                };
+                let enter_present = move || {
+                    if let Some(wd) = wd_ref {
+                        wd.set_stage(LoopStage::Present);
+                    }
+                };
+                heartbeat();
+
                 let frontend = self.frontend.as_mut().unwrap();
                 let router = self.router.as_mut().unwrap();
                 let (schedule_state, candidates, selected) = {
@@ -903,17 +930,19 @@ impl App {
                     let scale = frontend.state().buffer_scale;
                     let result = if let Some(panel) = frontend.panel_mut() {
                         panel.set_scale(scale);
+                        heartbeat();
                         if candidates.is_empty() {
                             eprintln!("panel: hide (no candidates)");
                             panel.hide();
                         } else {
                             panel.ensure_candidate_size(&candidates);
+                            heartbeat();
                             eprintln!(
                                 "panel: draw {} candidate(s), selected={}",
                                 candidates.len(),
                                 selected
                             );
-                            panel.draw_candidates(&candidates, selected);
+                            panel.draw_candidates(&candidates, selected, &heartbeat, &enter_present);
                         }
                         PanelUpdateResult::Done
                     } else {
@@ -1259,6 +1288,23 @@ impl App {
             .as_ref()
             .map(|f| f.state().buffer_scale)
             .unwrap_or(1.0);
+        // Pull the watchdog handle up-front so the heartbeat closure
+        // captures only this reference, not all of `self`. Without the
+        // extraction the closure would borrow `self` immutably and
+        // conflict with the mutable `self.frontend.as_mut()` borrow
+        // used to obtain `panel` below — a classic split-borrow error.
+        // The disjoint-field borrow of `self.watchdog` is fine.
+        let wd_ref = self.watchdog.as_ref();
+        let heartbeat = move || {
+            if let Some(wd) = wd_ref {
+                wd.heartbeat();
+            }
+        };
+        let enter_present = move || {
+            if let Some(wd) = wd_ref {
+                wd.set_stage(LoopStage::Present);
+            }
+        };
         if let Some(panel) = self
             .frontend
             .as_mut()
@@ -1267,10 +1313,12 @@ impl App {
             panel.set_scale(scale);
             let t1 = Instant::now();
             eprintln!("indicator: set_scale={} took {:.3} ms", scale, t1.duration_since(t0).as_secs_f64() * 1000.0);
+            heartbeat();
             panel.ensure_banner_size(label);
             let t2 = Instant::now();
             eprintln!("indicator: ensure_banner_size took {:.3} ms", t2.duration_since(t1).as_secs_f64() * 1000.0);
-            panel.draw_status_banner(label);
+            heartbeat();
+            panel.draw_status_banner(label, &heartbeat, &enter_present);
             let t3 = Instant::now();
             eprintln!("indicator: draw_status_banner took {:.3} ms (banner rendered and presented)", t3.duration_since(t2).as_secs_f64() * 1000.0);
         } else {

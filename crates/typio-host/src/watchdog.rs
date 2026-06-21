@@ -15,8 +15,16 @@ use std::time::{Duration, Instant};
 
 /// Coarse sample interval (ms). Mirrors `TYPIO_WL_WATCHDOG_SAMPLE_MS`.
 const SAMPLE_MS: u64 = 1000;
-/// Stuck threshold (ms). Mirrors `TYPIO_WL_WATCHDOG_STUCK_MS`.
+/// Default stuck threshold (ms). Mirrors `TYPIO_WL_WATCHDOG_STUCK_MS`.
 const STUCK_MS: u64 = 3000;
+/// Stuck threshold for `LoopStage::Present` (ms). `vkQueuePresentKHR` on
+/// Wayland can transiently block well past the default 3 s threshold when
+/// the compositor falls behind releasing swapchain images during rapid
+/// candidate paging, even under MAILBOX. A single blocking FFI call
+/// cannot heartbeat, so the default threshold kills a recovering panel
+/// rather than a deadlocked one. 15 s tolerates observed transient
+/// stalls while still catching a genuine present deadlock eventually.
+const PRESENT_STUCK_MS: u64 = 15_000;
 
 /// Loop stage identifiers. The discriminants mirror `TypioWlLoopStage` in
 /// `src/wayland/internal.h` so trace output lines up with the C version.
@@ -34,10 +42,15 @@ pub enum LoopStage {
     AuxIo = 7,
     Repeat = 8,
     ConfigReload = 9,
+    Present = 10,
 }
 
 impl LoopStage {
-    /// Stages where blocking indefinitely is legitimate.
+    /// Stages where blocking indefinitely is legitimate. With the
+    /// async present thread in flux, `vkQueuePresentKHR` never blocks
+    /// the main loop, so `Present` is not restful — if the main loop
+    /// stalls in Present it means the enqueue itself hung, which is a
+    /// genuine bug worth killing the process for.
     fn is_restful(&self) -> bool {
         matches!(self, LoopStage::Poll | LoopStage::Idle)
     }
@@ -54,7 +67,19 @@ impl LoopStage {
             7 => LoopStage::AuxIo,
             8 => LoopStage::Repeat,
             9 => LoopStage::ConfigReload,
+            10 => LoopStage::Present,
             _ => LoopStage::Idle,
+        }
+    }
+
+    /// Per-stage stuck threshold. `Present` gets a longer window because
+    /// `vkQueuePresentKHR` can block inside the WSI/driver for several
+    /// seconds during compositor back-pressure and a single FFI call
+    /// cannot heartbeat; other non-restful stages use the default.
+    fn stuck_threshold_ms(&self) -> u64 {
+        match self {
+            LoopStage::Present => PRESENT_STUCK_MS,
+            _ => STUCK_MS,
         }
     }
 }
@@ -214,7 +239,7 @@ fn watchdog_thread(inner: Arc<WatchdogInner>) {
         if unchanged && !stage_enum.is_restful() {
             let now = inner.now_ms();
             let stuck_ms = now.saturating_sub(heartbeat_ms);
-            if stuck_ms >= STUCK_MS {
+            if stuck_ms >= stage_enum.stuck_threshold_ms() {
                 eprintln!("Watchdog: loop stuck for {stuck_ms} ms in stage={stage_enum:?}");
                 if inner.lethal.load(Ordering::SeqCst) {
                     unsafe {
@@ -288,5 +313,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
         }
         assert!(!wd.stall_detected());
+    }
+
+    #[test]
+    fn present_stage_is_not_restful() {
+        // Present runs on the async present thread; on the main loop
+        // it is just a fast enqueue. If the main loop stalls in
+        // Present, something is genuinely wrong.
+        assert!(!LoopStage::Present.is_restful());
+        assert!(LoopStage::Poll.is_restful());
     }
 }

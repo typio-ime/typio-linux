@@ -306,9 +306,46 @@ impl FluxPanel {
     }
 
     /// Draw candidate strings with the selected one highlighted.
-    pub fn draw_candidates(&mut self, candidates: &[String], selected: usize) {
+    ///
+    /// `heartbeat` is invoked between each blocking FFI call
+    /// (`flux_surface_begin_frame`, `flux_frame_submit`,
+    /// `flux_frame_present`, …) so the daemon's watchdog sees
+    /// progress even when a single call blocks past the 3-second
+    /// stuck threshold — the documented failure mode under rapid
+    /// candidate cycling, where the Wayland compositor cannot
+    /// release swapchain images as fast as the engine emits
+    /// composition callbacks and `vkQueuePresentKHR`/`vkAcquireNext-
+    /// ImageKHR` stall waiting for them. Heartbeating between
+    /// sub-steps distinguishes "slow but progressing" from a true
+    /// hang; a genuinely deadlocked FFI call stops heartbeating too
+    /// and the watchdog still fires. Callers pass `&|| wd!().heart-
+    /// beat()` from the loop; tests pass `&|| {}`.
+    ///
+    /// `before_present` is invoked immediately before
+    /// `flux_frame_present` — the one FFI call that can block
+    /// inside the WSI/driver for several seconds under compositor
+    /// back-pressure with no opportunity to heartbeat from the same
+    /// thread. Callers set the watchdog stage to `Present` so the
+    /// per-stage threshold (15 s) tolerates the transient stall
+    /// instead of SIGKILLing a recovering panel. Tests pass `&|| {}`.
+    pub fn draw_candidates(
+        &mut self,
+        candidates: &[String],
+        selected: usize,
+        heartbeat: &dyn Fn(),
+        before_present: &dyn Fn(),
+    ) {
+        let mut t = std::time::Instant::now();
+        let step = |name: &str, start: std::time::Instant| -> std::time::Instant {
+            let now = std::time::Instant::now();
+            eprintln!("draw_candidates: {name} took {:.3} ms",
+                      now.duration_since(start).as_secs_f64() * 1000.0);
+            now
+        };
+        heartbeat();
         unsafe {
             flux_arena_reset(&mut self.arena);
+            heartbeat();
 
             let frame_desc = flux_frame_begin_desc {
                 type_: FType::FLUX_TYPE_FRAME_BEGIN_DESC,
@@ -317,13 +354,19 @@ impl FluxPanel {
             };
             let mut frame: *mut flux_frame = ptr::null_mut();
             let r = flux_surface_begin_frame(self.surface, &frame_desc, &mut frame);
+            t = step("begin_frame", t);
+            heartbeat();
             if !flux_result_is_ok(r) {
+                eprintln!("draw_candidates: begin_frame failed (timeout or surface-lost), skipping frame");
                 return;
             }
 
             let bg = flux_color_rgba(28, 28, 32, 255);
             let r = flux_canvas_begin(self.canvas, frame, &bg);
+            t = step("canvas_begin", t);
+            heartbeat();
             if !flux_result_is_ok(r) {
+                eprintln!("draw_candidates: canvas_begin failed, bailing");
                 return;
             }
 
@@ -411,13 +454,23 @@ impl FluxPanel {
 
                 current_x += item_width + CANDIDATE_ITEM_GAP;
             }
+            t = step("text_draw_loop", t);
+            heartbeat();
 
             flux_canvas_end(self.canvas);
+            t = step("canvas_end", t);
+            heartbeat();
             let r = flux_frame_submit(frame);
+            t = step("frame_submit", t);
+            heartbeat();
             if !flux_result_is_ok(r) {
+                eprintln!("draw_candidates: frame_submit failed, bailing");
                 return;
             }
+            before_present();
             flux_frame_present(frame);
+            step("frame_present", t);
+            heartbeat();
         }
     }
 
@@ -580,7 +633,19 @@ impl FluxPanel {
     /// (one positioned popup surface, mutually exclusive owners).
     ///
     /// Empty labels are ignored — caller should `hide()` instead.
-    pub fn draw_status_banner(&mut self, label: &str) {
+    ///
+    /// `heartbeat` mirrors [`FluxPanel::draw_candidates`]: invoked
+    /// between blocking FFI calls so a slow compositor does not trip
+    /// the watchdog. `before_present` is invoked immediately before
+    /// `flux_frame_present` so the caller can transition the watchdog
+    /// to the longer-threshold `Present` stage; see
+    /// [`FluxPanel::draw_candidates`] for the rationale.
+    pub fn draw_status_banner(
+        &mut self,
+        label: &str,
+        heartbeat: &dyn Fn(),
+        before_present: &dyn Fn(),
+    ) {
         if label.is_empty() {
             return;
         }
@@ -591,8 +656,10 @@ impl FluxPanel {
                       now.duration_since(start).as_secs_f64() * 1000.0);
             now
         };
+        heartbeat();
         unsafe {
             flux_arena_reset(&mut self.arena);
+            heartbeat();
 
             let frame_desc = flux_frame_begin_desc {
                 type_: FType::FLUX_TYPE_FRAME_BEGIN_DESC,
@@ -602,14 +669,16 @@ impl FluxPanel {
             let mut frame: *mut flux_frame = ptr::null_mut();
             let r = flux_surface_begin_frame(self.surface, &frame_desc, &mut frame);
             t = step("begin_frame", t);
+            heartbeat();
             if !flux_result_is_ok(r) {
-                eprintln!("draw_status_banner: begin_frame failed, bailing");
+                eprintln!("draw_status_banner: begin_frame failed (timeout or surface-lost), skipping frame");
                 return;
             }
 
             let bg = flux_color_rgba(28, 28, 32, 255);
             let r = flux_canvas_begin(self.canvas, frame, &bg);
             t = step("canvas_begin", t);
+            heartbeat();
             if !flux_result_is_ok(r) {
                 eprintln!("draw_status_banner: canvas_begin failed, bailing");
                 return;
@@ -631,6 +700,7 @@ impl FluxPanel {
                 &style,
             );
             t = step("text_measure", t);
+            heartbeat();
 
             // Vertically centre the text inside the banner row.
             let text_y = BANNER_PADDING + (BANNER_FONT_SIZE * 1.3 - metrics.height).max(0.0) / 2.0;
@@ -647,17 +717,22 @@ impl FluxPanel {
                 &style,
             );
             t = step("text_draw", t);
+            heartbeat();
 
             flux_canvas_end(self.canvas);
             t = step("canvas_end", t);
+            heartbeat();
             let r = flux_frame_submit(frame);
             t = step("frame_submit", t);
+            heartbeat();
             if !flux_result_is_ok(r) {
                 eprintln!("draw_status_banner: frame_submit failed, bailing");
                 return;
             }
+            before_present();
             flux_frame_present(frame);
             step("frame_present", t);
+            heartbeat();
         }
     }
 

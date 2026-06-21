@@ -170,10 +170,22 @@ pub struct InputMethodState {
     pub mods_depressed: u32,
     pub mods_latched: u32,
     pub mods_locked: u32,
-    /// Pending key event to be processed by the engine after dispatch.
-    /// Set by the Dispatch impl when a key press arrives; the event-loop
-    /// driver drains it after dispatch_pending returns.
-    pub pending_key: Option<DecodedKeyEvent>,
+    /// Pending key events to be processed by the engine after dispatch.
+    /// Set by the Dispatch impl when a key press or release arrives;
+    /// the event-loop driver drains all of them after dispatch_pending
+    /// returns.
+    ///
+    /// This is a queue, not a single slot, so that two key events
+    /// delivered in the same Wayland dispatch batch — most commonly
+    /// `release(BS)` followed immediately by `press(other)` or
+    /// vice-versa — are both preserved. With a single `Option` slot,
+    /// the second event overwrote the first and the lost event was
+    /// usually the release of a key whose repeat timer was armed;
+    /// the daemon then repeated that key forever (the "stuck
+    /// backspace" symptom). The queue guarantees release events
+    /// always reach the loop, so `router.on_release` +
+    /// `timer.stop()` fire on every release.
+    pub pending_keys: Vec<DecodedKeyEvent>,
     /// Pending text to commit to the compositor on the next flush.
     pub pending_commit: Option<String>,
     /// Raw input facts recorded this tick for the focus controller.
@@ -346,9 +358,11 @@ impl InputMethodState {
         self.selected_candidate = selected;
     }
 
-    /// Take the pending key event for processing by the event loop.
-    pub fn take_pending_key(&mut self) -> Option<DecodedKeyEvent> {
-        self.pending_key.take()
+    /// Take all pending key events for processing by the event loop.
+    /// Returns the events in arrival order. The Vec is empty when no
+    /// key events are pending.
+    pub fn take_pending_keys(&mut self) -> Vec<DecodedKeyEvent> {
+        std::mem::take(&mut self.pending_keys)
     }
 
     fn fire(&mut self, event: LifecycleEvent) {
@@ -591,7 +605,7 @@ impl InputMethodFrontend {
             mods_depressed: 0,
             mods_latched: 0,
             mods_locked: 0,
-            pending_key: None,
+            pending_keys: Vec::new(),
             pending_commit: None,
             facts: InputFacts::default(),
             stopped: false,
@@ -1133,13 +1147,21 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
                 // and stop the repeat timer. Without queueing releases,
                 // the timer fires forever after a single press.
                 //
+                // Multiple events may arrive in the same Wayland dispatch
+                // batch (e.g. `release(BS)` immediately followed by
+                // `press(other)`); all are queued in arrival order so the
+                // loop sees every release and can disarm the repeat timer.
+                // A single-slot overwrite here was the root cause of the
+                // occasional "stuck backspace" — the release was lost and
+                // the timer kept firing the consumed press forever.
+                //
                 // When the text field is deactivated (state.active == false)
                 // the grab may still be retained as a soft pause. Forward
                 // the key directly to the virtual keyboard so shortcuts and
                 // regular keys still reach the focused application instead
                 // of being silently swallowed by the retained grab.
                 if state.active {
-                    state.pending_key = Some(DecodedKeyEvent {
+                    state.pending_keys.push(DecodedKeyEvent {
                         keycode: key,
                         xkb_keycode,
                         keysym,
@@ -1229,7 +1251,7 @@ mod tests {
         assert_eq!(facts.im_done_serial, 7);
         assert_eq!(state.facts.im_done_serial, 0);
 
-        let key = DecodedKeyEvent {
+        let press = DecodedKeyEvent {
             keycode: 30,
             xkb_keycode: 38,
             keysym: 0x0061,
@@ -1237,9 +1259,28 @@ mod tests {
             state: 1,
             time: 123,
         };
-        state.pending_key = Some(key.clone());
-        assert_eq!(state.take_pending_key(), Some(key));
-        assert!(state.take_pending_key().is_none());
+        let release = DecodedKeyEvent {
+            keycode: 30,
+            xkb_keycode: 38,
+            keysym: 0x0061,
+            unicode: String::new(),
+            state: 0,
+            time: 130,
+        };
+
+        // Single-event drain.
+        state.pending_keys.push(press.clone());
+        assert_eq!(state.take_pending_keys(), vec![press.clone()]);
+        assert!(state.take_pending_keys().is_empty());
+
+        // Multi-event drain preserves arrival order. Regression test for
+        // the "stuck backspace" bug: a single-slot Option overwrote the
+        // release when a second event arrived in the same Wayland
+        // dispatch batch, leaving the repeat timer armed forever.
+        state.pending_keys.push(press.clone());
+        state.pending_keys.push(release.clone());
+        assert_eq!(state.take_pending_keys(), vec![press.clone(), release.clone()]);
+        assert!(state.take_pending_keys().is_empty());
 
         state.pending_commit = Some("hello".to_string());
         assert_eq!(state.take_pending_commit(), Some("hello".to_string()));
