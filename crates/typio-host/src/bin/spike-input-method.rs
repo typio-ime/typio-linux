@@ -37,10 +37,12 @@ fn main() -> ExitCode {
             LifecycleEvent::Unavailable => {
                 eprintln!("UNAVAILABLE — another IME grabbed the seat");
             }
-            LifecycleEvent::SurroundingText { text, cursor, anchor } => {
-                eprintln!(
-                    "surrounding_text cursor={cursor} anchor={anchor} text={text:?}"
-                );
+            LifecycleEvent::SurroundingText {
+                text,
+                cursor,
+                anchor,
+            } => {
+                eprintln!("surrounding_text cursor={cursor} anchor={anchor} text={text:?}");
             }
             LifecycleEvent::ContentType { hint, purpose } => {
                 eprintln!("content_type hint={hint} purpose={purpose}");

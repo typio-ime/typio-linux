@@ -60,9 +60,8 @@ pub const WL_KEYBOARD_KEY_STATE_PRESSED: u32 = 1;
 /// Bitmask of the three "blocking" modifiers: Ctrl, Alt, Super. A chord
 /// of any of these suppresses plain-key routing and triggers engine
 /// switch / shortcut logic.
-const BLOCKING_MODIFIERS: Modifiers = Modifiers(
-    Modifiers::CTRL.0 | Modifiers::ALT.0 | Modifiers::SUPER.0,
-);
+const BLOCKING_MODIFIERS: Modifiers =
+    Modifiers(Modifiers::CTRL.0 | Modifiers::ALT.0 | Modifiers::SUPER.0);
 
 // ── modifiers ────────────────────────────────────────────────────────────
 
@@ -109,13 +108,13 @@ pub fn effective_modifiers(
 
 /// Overlay xkb-derived Shift/Ctrl/Alt/Super onto physical (which may be
 /// stale for those keys). Port of `sync_physical_modifiers` in C.
-pub fn sync_physical_modifiers(physical_modifiers: Modifiers, xkb_modifiers: Modifiers) -> Modifiers {
-    let blocking = Modifiers(
-        Modifiers::SHIFT.0 | Modifiers::CTRL.0 | Modifiers::ALT.0 | Modifiers::SUPER.0,
-    );
-    Modifiers(
-        (physical_modifiers.0 & !blocking.0) | (xkb_modifiers.0 & blocking.0),
-    )
+pub fn sync_physical_modifiers(
+    physical_modifiers: Modifiers,
+    xkb_modifiers: Modifiers,
+) -> Modifiers {
+    let blocking =
+        Modifiers(Modifiers::SHIFT.0 | Modifiers::CTRL.0 | Modifiers::ALT.0 | Modifiers::SUPER.0);
+    Modifiers((physical_modifiers.0 & !blocking.0) | (xkb_modifiers.0 & blocking.0))
 }
 
 fn modifiers_for_current_key(modifiers: Modifiers, keysym: Keysym, state: u32) -> Modifiers {
@@ -186,9 +185,7 @@ fn keysym_is_modifier_for(required_mods: Modifiers, keysym: Keysym) -> bool {
     {
         return true;
     }
-    if required_mods.intersects(Modifiers::ALT)
-        && (keysym == KEY_ALT_L || keysym == KEY_ALT_R)
-    {
+    if required_mods.intersects(Modifiers::ALT) && (keysym == KEY_ALT_L || keysym == KEY_ALT_R) {
         return true;
     }
     if required_mods.intersects(Modifiers::SUPER)
@@ -312,9 +309,7 @@ pub fn tracking_mark_released_pending(states: &mut [KeyTrackState]) -> usize {
     for s in states.iter_mut() {
         if matches!(
             *s,
-            KeyTrackState::Forwarded
-                | KeyTrackState::BasicPassthrough
-                | KeyTrackState::AppShortcut
+            KeyTrackState::Forwarded | KeyTrackState::BasicPassthrough | KeyTrackState::AppShortcut
         ) {
             *s = KeyTrackState::ReleasedPending;
             changed += 1;

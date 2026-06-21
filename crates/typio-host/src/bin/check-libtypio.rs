@@ -58,17 +58,11 @@ fn main() {
     //    follow-up to ADR-0035): no C ABI wrappers needed.
     eprintln!();
     eprintln!("Demonstrating TypioInstance Rust-native constructor:");
-    let temp = std::env::temp_dir().join(format!(
-        "typio-spike-check-libtypio-{}",
-        std::process::id()
-    ));
+    let temp =
+        std::env::temp_dir().join(format!("typio-spike-check-libtypio-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&temp);
-    let mut instance = TypioInstance::new_rust(
-        temp.to_str(),
-        temp.to_str(),
-        temp.to_str(),
-        Vec::new(),
-    );
+    let mut instance =
+        TypioInstance::new_rust(temp.to_str(), temp.to_str(), temp.to_str(), Vec::new());
     eprintln!("OK:   TypioInstance::new_rust allocated");
 
     // Before init: accessors return None.

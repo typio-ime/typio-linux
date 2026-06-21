@@ -26,11 +26,7 @@ pub const DEFAULT_MAX_ATTEMPTS: u32 = 12;
 /// The doubling is computed shift-safe so a large `attempt` cannot
 /// overflow; once `base << shift` would exceed the max we just clamp.
 pub fn reconnect_delay_ms(attempt: u32) -> u32 {
-    reconnect_delay_ms_with(
-        attempt,
-        DEFAULT_BASE_DELAY_MS,
-        DEFAULT_MAX_DELAY_MS,
-    )
+    reconnect_delay_ms_with(attempt, DEFAULT_BASE_DELAY_MS, DEFAULT_MAX_DELAY_MS)
 }
 
 /// Whether attempt `attempt` (0-based) should still be tried.

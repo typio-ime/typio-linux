@@ -28,8 +28,8 @@
 //! The same rules as the C parser, lifted into a pure function on
 //! [`resolve_path_arg`].
 
-use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
 /// Default language code used when a manifest declares neither `language`
 /// nor `languages`. Matches the C constant.
@@ -207,10 +207,17 @@ pub fn resolve_path_arg(manifest_path: &Path, value: &str) -> String {
     value.to_string()
 }
 
-/// True iff `name` looks like a `typio-engine-*.toml` filename (the only
-/// filenames the loader recognises as manifests in an engine directory).
+/// True iff `name` looks like a `typio-engine-*.toml` filename that the
+/// loader should pick up.
+///
+/// Recognises plain manifests (`typio-engine-rime.toml`) and skips the
+/// `.installed.toml` variant that packaging tools generate alongside
+/// the source manifest — both describe the same engine, so loading both
+/// triggers `TypioErrorAlreadyExists`.
 pub fn is_manifest_filename(name: &str) -> bool {
-    name.starts_with("typio-engine-") && name.ends_with(".toml")
+    name.starts_with("typio-engine-")
+        && name.ends_with(".toml")
+        && !name.ends_with(".installed.toml")
 }
 
 #[cfg(test)]
@@ -242,7 +249,10 @@ optional = ["prediction", "learning"]
         assert_eq!(m.display_name.as_deref(), Some("Rime"));
         assert_eq!(m.icon.as_deref(), Some("typio-rime-symbolic"));
         assert_eq!(m.language.as_deref(), Some("zh"));
-        assert_eq!(m.languages.as_deref(), Some(&["zh".to_string(), "yue".to_string()][..]));
+        assert_eq!(
+            m.languages.as_deref(),
+            Some(&["zh".to_string(), "yue".to_string()][..])
+        );
         assert_eq!(m.command.as_deref(), Some("./typio-engine-rime"));
         assert_eq!(
             m.args.as_deref(),
@@ -341,5 +351,9 @@ protocol = "typio-engine-protocol"
         assert!(!is_manifest_filename("typio-engine-rime.txt"));
         assert!(!is_manifest_filename("rime.toml"));
         assert!(!is_manifest_filename("typio-engine-rime.toml.bak"));
+        // The `.installed.toml` variant is the packaging-side copy that
+        // shadows the source manifest; loading both would re-register
+        // the same engine and trip TypioErrorAlreadyExists.
+        assert!(!is_manifest_filename("typio-engine-rime.installed.toml"));
     }
 }

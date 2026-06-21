@@ -210,15 +210,15 @@ heavyweight clients like Chrome.
 
 | Protocol object | Source file | Responsibility |
 |---|---|---|
-| `zwp_input_method_v2` | `src/wayland/input_method.c` | Event handlers (record facts), serial chokepoint |
-| Focus controller (pure) | `src/engine/focus_controller.{c,h}` | `reduce` / `diff` / `classify_done` / guard predicates — dependency-free, unit-tested |
-| Session effects (effectful) | `src/wayland/focus_effects.c` | `observe` and `apply`, including hard teardown, effect-order `_Static_assert` |
-| `zwp_input_method_keyboard_grab_v2` | `src/wayland/keyboard/keyboard.c` | Grab create/destroy, key/modifiers/repeat listeners, emergency exit |
-| Key generation + tracking | `src/wayland/keyboard/policy/tracker.{c,h}` | Generation fence and symmetric press/release |
-| `zwp_virtual_keyboard_v1` | `src/wayland/keyboard/bridge.c` | Keymap handoff, readiness gating, unhandled-key forwarding, fail-safe downgrade |
-| `zwp_input_popup_surface_v2` | `src/ui/panel/surface.c` | Panel geometry, present, retry-on-stall |
-| Panel rendering | `src/ui/panel/paint.c` | Vulkan swapchain on `wl_surface` |
-| Resume detection | `src/engine/logind/resume.c` | logind + boottime heuristic (records facts) |
+| `zwp_input_method_v2` | `crates/typio-host/src/input_method.rs` | Event handlers (record facts), serial chokepoint |
+| Focus controller (pure) | `crates/typio-host/src/focus_controller.rs` | `reduce` / `diff` / guard predicates — dependency-free, unit-tested |
+| Session effects (effectful) | `crates/typio-host/src/session_glue.rs` | `observe` and `apply`, including hard teardown and effect ordering |
+| `zwp_input_method_keyboard_grab_v2` | `crates/typio-host/src/input_method.rs` (`Dispatch<ZwpInputMethodKeyboardGrabV2>`) | Grab create/destroy, key/modifiers/repeat listeners, keymap handoff to vk |
+| Key generation + tracking | `crates/typio-host/src/keyboard_policy.rs`, `crates/typio-host/src/keyboard/router.rs` | Generation fence and symmetric press/release |
+| `zwp_virtual_keyboard_v1` | `crates/typio-host/src/input_method.rs` (`forward_key`, `forward_modifiers`) | Keymap forward, modifier mirror, unhandled-key forwarding |
+| `zwp_input_popup_surface_v2` | `crates/typio-host/src/input_method.rs`, `crates/typio-host/src/panel.rs` | Panel geometry, present, retry-on-stall |
+| Panel rendering | `crates/typio-host/src/panel.rs` | Vulkan swapchain on `wl_surface` |
+| Resume detection | `crates/typio-host/src/resume_signal.rs` | logind + boottime heuristic (records facts) |
 | Protocol XML | `protocols/input-method-unstable-v2.xml` | Wayland protocol definition (upstream) |
 
 ## See Also

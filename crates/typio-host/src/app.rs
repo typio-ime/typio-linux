@@ -9,6 +9,7 @@ use std::ffi::{c_char, c_void, CString};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 use clap::Parser;
 use typio::c_api::registry as c_registry;
@@ -16,25 +17,29 @@ use typio::instance::TypioInstance;
 use typio::TypioResult;
 use typio_abi::TypioEngineInfo;
 
+use crate::config_watcher::ConfigWatcher;
 use crate::engine_loader::manifest::EngineManifest;
 use crate::engine_loader::resolve_engine_dirs;
-use crate::ipc::protocol::topics;
 use crate::ipc::protocol;
+use crate::ipc::protocol::topics;
 use crate::ipc_bus::{IpcBus, TypioBackend, TypioRegistryView};
+use crate::panel_coordinator::UiOwner;
 use crate::panel_scheduler::{self, PanelUpdateResult};
 use crate::resume_signal::ResumeSignal;
 use crate::session_glue::FocusDriver;
 use crate::state_controller::{StateChange, StateController};
+use crate::service::SvcError;
 use crate::tray_menu::{EngineDesc, RegistrySnapshot};
 use crate::tray_sni::{MenuAction, Tray, TrayAction};
 use crate::uds_server::UdsServer;
+use crate::watchdog::{LoopStage, Watchdog};
 
 #[cfg(feature = "wayland")]
 use crate::input_method::InputMethodFrontend;
 #[cfg(feature = "wayland")]
-use crate::keyboard::router::KeyboardRouter;
+use crate::keyboard::router::{KeyboardRouter, RepeatOutcome};
 #[cfg(feature = "wayland")]
-use crate::repeat_timer::RepeatTimer;
+use crate::repeat_timer::{self, RepeatTimer};
 
 /// Command-line options for the typio daemon.
 #[derive(Parser, Debug, Clone)]
@@ -83,37 +88,52 @@ impl From<Cli> for AppOptions {
     }
 }
 
-/// Shared, signal-safe shutdown flag.
-static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
-/// Set by the tray "Restart" action; read in [`App::finish`] to exec-restart.
-static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Async-signal-safe shutdown flag.
+///
+/// Only the SIGINT/SIGTERM handler writes this. The main loop translates
+/// it into a daemon exit on the next tick. Non-signal paths
+/// (`DaemonEvent::Shutdown` via the event channel) must NOT touch this
+/// flag — keeping it signal-only preserves async-signal-safety.
+static SHUTDOWN_FROM_SIGNAL: AtomicBool = AtomicBool::new(false);
+
+/// Cross-thread events delivered to the main loop.
+///
+/// Senders live in:
+/// - the IPC stop callback (UDS `daemon.stop` method),
+/// - the StatusNotifierItem tray action callback (zbus internal thread).
+///
+/// The receiver is owned by [`App`] and drained once per tick by the
+/// main loop. This keeps every mutation of `App` state on the
+/// event-loop thread — the alternative (`AtomicBool` flags for each
+/// cause) loses type information and forces the loop to do untyped
+/// "refresh everything" work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DaemonEvent {
+    /// Cleanly stop the daemon. Causes the main loop to exit.
+    Shutdown,
+    /// Stop and re-exec with the same argv. Causes the main loop to
+    /// exit; [`App::finish`] then `execv`s.
+    Restart,
+    /// libtypio state changed (engine / language / voice switch from
+    /// the tray). Re-sync `StateController`, IPC bus, and tray surface.
+    StateRefresh,
+}
 
 extern "C" fn signal_handler(_sig: libc::c_int) {
-    SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+    SHUTDOWN_FROM_SIGNAL.store(true, Ordering::SeqCst);
 }
 
 fn install_signal_handlers() {
     unsafe {
-        libc::signal(libc::SIGINT, signal_handler as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, signal_handler as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGINT,
+            signal_handler as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGTERM,
+            signal_handler as *const () as libc::sighandler_t,
+        );
     }
-}
-
-fn shutdown_requested() -> bool {
-    SHUTDOWN_REQUESTED.load(Ordering::Relaxed)
-}
-
-fn restart_requested_flag() -> bool {
-    RESTART_REQUESTED.load(Ordering::Relaxed)
-}
-
-fn request_shutdown() {
-    SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
-}
-
-fn request_restart() {
-    RESTART_REQUESTED.store(true, Ordering::SeqCst);
-    request_shutdown();
 }
 
 /// The running daemon.
@@ -135,7 +155,18 @@ pub struct App {
     resume_signal: Option<ResumeSignal>,
     #[cfg(feature = "wayland")]
     focus_driver: Option<FocusDriver>,
-    restart_requested: bool,
+    config_watcher: Option<ConfigWatcher>,
+    watchdog: Option<Watchdog>,
+    /// Sender half of the daemon event channel. Cloned into the IPC
+    /// stop callback and the tray action handler.
+    event_tx: std::sync::mpsc::Sender<DaemonEvent>,
+    /// Receiver half of the daemon event channel. Drained once per tick
+    /// by the main loop; never shared with another thread (`Receiver` is
+    /// `!Sync`).
+    event_rx: Option<std::sync::mpsc::Receiver<DaemonEvent>>,
+    /// Observed `DaemonEvent::Restart` during the last drain. Consumed
+    /// by [`Self::finish`] to decide whether to `execv` after exit.
+    saw_restart: bool,
 }
 
 impl App {
@@ -149,6 +180,7 @@ impl App {
             .map(CString::new)
             .collect::<Result<_, _>>()
             .map_err(|_| "argument contains NUL".to_string())?;
+        let (event_tx, event_rx) = std::sync::mpsc::channel::<DaemonEvent>();
         Ok(Self {
             argv,
             options,
@@ -167,8 +199,25 @@ impl App {
             resume_signal: None,
             #[cfg(feature = "wayland")]
             focus_driver: None,
-            restart_requested: false,
+            config_watcher: None,
+            watchdog: None,
+            event_tx,
+            event_rx: Some(event_rx),
+            saw_restart: false,
         })
+    }
+
+    /// Default config directory: `$XDG_CONFIG_HOME/typio` or `~/.config/typio`.
+    fn default_config_dir() -> PathBuf {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::var_os("HOME")
+                    .map(PathBuf::from)
+                    .unwrap_or_default()
+                    .join(".config")
+            })
+            .join("typio")
     }
 
     /// Initialize the Typio instance and load engines.
@@ -180,12 +229,30 @@ impl App {
             self.options.config_dir.as_deref(),
             self.options.data_dir.as_deref(),
             None, // state_dir — let libtypio pick the default.
-            engine_dirs.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+            engine_dirs
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect(),
         );
 
         instance
             .init_rust()
             .map_err(|e| format!("TypioInstance init failed: {e:?}"))?;
+
+        // Set up the config watcher so the event loop can react to file changes.
+        let config_dir = self
+            .options
+            .config_dir
+            .as_deref()
+            .map(PathBuf::from)
+            .unwrap_or_else(Self::default_config_dir);
+        self.config_watcher = ConfigWatcher::new(&config_dir).ok();
+        if let Some(ref mut watcher) = self.config_watcher {
+            let engines_dir = config_dir.join("engines");
+            if engines_dir.is_dir() {
+                let _ = watcher.watch_engines_dir(&engines_dir);
+            }
+        }
 
         // Register engines from the resolved directories via the C ABI.
         let raw = instance.as_mut() as *mut TypioInstance;
@@ -210,7 +277,7 @@ impl App {
                 let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                     continue;
                 };
-                if !name.starts_with("typio-engine-") || !name.ends_with(".toml") {
+                if !crate::engine_loader::manifest::is_manifest_filename(name) {
                     continue;
                 }
                 let manifest = match EngineManifest::read_from(&path) {
@@ -231,9 +298,20 @@ impl App {
 
         // Activate first keyboard engine if any were registered.
         if let Some(first) = registered_keyboards.first() {
-            let c_name = CString::new(first.as_str()).unwrap();
-            c_registry::typio_registry_set_active_keyboard(registry, c_name.as_ptr());
+            if let Ok(c_name) = CString::new(first.as_str()) {
+                c_registry::typio_registry_set_active_keyboard(registry, c_name.as_ptr());
+                eprintln!("OK:   active keyboard = {first}");
+            }
         }
+        eprintln!(
+            "OK:   registered {} keyboard(s){}",
+            registered_keyboards.len(),
+            if registered_voices.is_empty() {
+                String::new()
+            } else {
+                format!(", {} voice(s)", registered_voices.len())
+            }
+        );
 
         self.instance = Some(instance);
 
@@ -283,8 +361,18 @@ impl App {
         #[cfg(feature = "systray")]
         {
             let mut tray = Tray::new();
-            tray.register();
-            install_tray_action_handler(&tray, raw);
+            let registered = tray.register();
+            if registered {
+                eprintln!(
+                    "OK:   StatusNotifierItem registered as {}",
+                    tray.service_name()
+                );
+            } else {
+                eprintln!(
+                    "WARN: tray did not register (no org.kde.StatusNotifierWatcher on the session bus?)"
+                );
+            }
+            install_tray_action_handler(&tray, raw, self.event_tx.clone());
             if let Some(snapshot) = build_tray_snapshot(raw) {
                 tray.set_menu_snapshot(snapshot);
             }
@@ -325,7 +413,13 @@ impl App {
         let backend = TypioBackend::new(raw);
         let service = crate::service::StatusService::new(backend);
         let ipc_bus = Rc::new(RefCell::new(IpcBus::new(server, service)));
-        ipc_bus.borrow_mut().set_stop_callback(request_shutdown);
+        // The IPC `daemon.stop` method routes through the same event
+        // channel as tray actions — sending Shutdown here makes the main
+        // loop the single place that decides when to exit.
+        let stop_tx = self.event_tx.clone();
+        ipc_bus.borrow_mut().set_stop_callback(move || {
+            let _ = stop_tx.send(DaemonEvent::Shutdown);
+        });
 
         if let Some(ref mut controller) = self.state_controller {
             let ipc = ipc_bus.clone();
@@ -334,9 +428,7 @@ impl App {
                     StateChange::Engine | StateChange::VoiceEngine => {
                         (topics::ENGINE_CHANGED, serde_json::json!({}))
                     }
-                    StateChange::Language => {
-                        (topics::LANGUAGE_CHANGED, serde_json::json!({}))
-                    }
+                    StateChange::Language => (topics::LANGUAGE_CHANGED, serde_json::json!({})),
                     _ => (topics::RUNTIME_CHANGED, serde_json::json!({})),
                 };
                 ipc.borrow_mut().emit(topic, &payload);
@@ -355,13 +447,16 @@ impl App {
 
         #[cfg(feature = "wayland")]
         if self.frontend.is_some() && self.router.is_some() && self.repeat_timer.is_some() {
+            let watchdog = Watchdog::start();
+            watchdog.set_armed(true);
+            self.watchdog = Some(watchdog);
             return self.run_with_wayland(&ipc_bus);
         }
 
         self.run_with_uds(&ipc_bus)
     }
 
-    fn run_with_uds(&self, ipc_bus: &Rc<RefCell<IpcBus>>) -> i32 {
+    fn run_with_uds(&mut self, ipc_bus: &Rc<RefCell<IpcBus>>) -> i32 {
         let uds_fd = ipc_bus.borrow().epoll_fd();
         let mut pollfd = libc::pollfd {
             fd: uds_fd,
@@ -369,7 +464,7 @@ impl App {
             revents: 0,
         };
 
-        while !shutdown_requested() {
+        while !self.drain_events() {
             ipc_bus.borrow_mut().dispatch();
             pollfd.revents = 0;
             let rc = unsafe { libc::poll(&mut pollfd, 1, 100) };
@@ -389,11 +484,23 @@ impl App {
 
     #[cfg(feature = "wayland")]
     fn run_with_wayland(&mut self, ipc_bus: &Rc<RefCell<IpcBus>>) -> i32 {
-        let frontend = self.frontend.as_mut().unwrap();
-        let wl_fd = frontend.fd();
+        let wl_fd = self.frontend.as_mut().unwrap().fd();
         let uds_fd = ipc_bus.borrow().epoll_fd();
-        let timer = self.repeat_timer.as_mut().unwrap();
-        let repeat_fd = timer.fd();
+        let repeat_fd = self.repeat_timer.as_mut().unwrap().fd();
+        // Re-borrow the watchdog field on every use so a long-lived immutable
+        // borrow does not block the mutable borrow needed by reload_config().
+        macro_rules! wd {
+            () => {
+                self.watchdog.as_ref().unwrap()
+            };
+        }
+
+        let (inotify_fd, cfg_timer_fd) = self
+            .config_watcher
+            .as_ref()
+            .map(|w| (w.inotify_fd(), w.timer_fd()))
+            .unwrap_or((-1, -1));
+
         let mut fds = [
             libc::pollfd {
                 fd: wl_fd,
@@ -410,12 +517,22 @@ impl App {
                 events: libc::POLLIN,
                 revents: 0,
             },
+            libc::pollfd {
+                fd: inotify_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: cfg_timer_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
         ];
 
-        let default_delay = crate::repeat_timer::DEFAULT_DELAY;
-        let default_interval = RepeatTimer::interval_from_rate(30);
+        while !self.drain_events() {
+            wd!().set_stage(LoopStage::Idle);
+            wd!().heartbeat();
 
-        while !shutdown_requested() {
             // 1. Start-of-tick fact bookkeeping.
             {
                 let frontend = self.frontend.as_mut().unwrap();
@@ -431,21 +548,88 @@ impl App {
                 }
             }
 
-            // 2. Flush and dispatch Wayland events.
+            // 2. Flush outgoing Wayland requests, then prepare a read and
+            //    dispatch any already-queued events before polling.
+            wd!().set_stage(LoopStage::Flush);
             {
-                let frontend = self.frontend.as_mut().unwrap();
+                let frontend = self.frontend.as_ref().unwrap();
                 if let Err(e) = frontend.flush() {
                     eprintln!("Wayland flush error: {e}");
                     return 1;
                 }
-                if let Err(e) = frontend.dispatch() {
-                    eprintln!("Wayland dispatch error: {e}");
-                    return 1;
-                }
             }
+            wd!().set_stage(LoopStage::PrepareRead);
+            let read_guard = {
+                let frontend = self.frontend.as_mut().unwrap();
+                match frontend.prepare_read_loop() {
+                    Ok(guard) => Some(guard),
+                    Err(e) => {
+                        eprintln!("Wayland prepare_read error: {e}");
+                        return 1;
+                    }
+                }
+            };
+            wd!().set_stage(LoopStage::DispatchPending);
             ipc_bus.borrow_mut().dispatch();
 
-            // 3. Run the focus-controller pipeline.
+            fds[0].revents = 0;
+            fds[1].revents = 0;
+            fds[2].revents = 0;
+            fds[3].revents = 0;
+            fds[4].revents = 0;
+
+            // 3. Poll. Let the panel scheduler and the panel anchor deadline
+            //    shorten the timeout.
+            wd!().set_stage(LoopStage::Poll);
+            wd!().heartbeat();
+            let timeout_ms = {
+                let frontend = self.frontend.as_ref().unwrap();
+                let state = frontend.state();
+                let router = self.router.as_ref().unwrap();
+                let flushable = panel_scheduler::should_flush(
+                    state.panel_schedule_state,
+                    router.is_focused(),
+                    !router.ctx().is_null(),
+                    router.is_focused(),
+                );
+                let mut timeout_ms =
+                    panel_scheduler::poll_timeout_ms(state.panel_schedule_state, flushable, 100);
+                if let Some(remaining) = state
+                    .panel_coord
+                    .anchor_deadline_remaining_ms(Instant::now())
+                {
+                    timeout_ms = timeout_ms.min(remaining as i32);
+                }
+                timeout_ms
+            };
+            let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, timeout_ms) };
+            if rc < 0 {
+                let e = std::io::Error::last_os_error();
+                if e.raw_os_error() == Some(libc::EINTR) {
+                    continue;
+                }
+                eprintln!("poll error: {e}");
+                return 1;
+            }
+
+            // 4. Read and dispatch new Wayland events, or cancel the prepared read.
+            wd!().set_stage(LoopStage::ReadEvents);
+            if fds[0].revents & libc::POLLIN != 0 {
+                let frontend = self.frontend.as_mut().unwrap();
+                if let Some(guard) = read_guard {
+                    if let Err(e) = frontend.read_and_dispatch(guard) {
+                        eprintln!("Wayland read error: {e}");
+                        return 1;
+                    }
+                }
+            } else if fds[0].revents & (libc::POLLERR | libc::POLLHUP) != 0 {
+                eprintln!("Wayland display disconnected");
+                return 1;
+            }
+            // If POLLIN was not set, `read_guard` is dropped here and cancels the read.
+
+            // 5. Run the focus-controller pipeline.
+            wd!().set_stage(LoopStage::AuxIo);
             {
                 let engine_present = self
                     .instance
@@ -461,7 +645,7 @@ impl App {
                 }
             }
 
-            // 4. Drain engine output and process any pending key event.
+            // 6. Drain engine output and process any pending key event.
             {
                 let frontend = self.frontend.as_mut().unwrap();
                 let state = frontend.state_mut();
@@ -472,20 +656,41 @@ impl App {
                 router.drain_composition(state);
 
                 if let Some(key) = state.take_pending_key() {
+                    // Snapshot the values we need before any mutable borrows
+                    // below — both are cheap `Copy` reads.
+                    let mods = state.mods_depressed;
+                    let compositor_info = state.compositor_repeat_info;
                     if key.state == 1 {
-                        let consumed = router.dispatch_key(&key, state.mods_depressed);
-                        if consumed {
+                        let consumed = router.dispatch_key(&key, mods);
+                        if router.take_switch_chord_fired() {
+                            // Ctrl+Shift (default) just completed. Cycle
+                            // to the next registered keyboard and let the
+                            // next drain refresh surfaces. Suppresses
+                            // forwarding of the modifier press itself.
+                            let instance_ptr = self
+                                .instance
+                                .as_mut()
+                                .map(|i| i.as_mut() as *mut TypioInstance)
+                                .unwrap_or(std::ptr::null_mut());
+                            cycle_active_keyboard(instance_ptr);
+                            let _ = self.event_tx.send(DaemonEvent::StateRefresh);
+                        } else if consumed {
+                            // Engine consumed the key. Drain any output it
+                            // produced, then arm the repeat timer in engine
+                            // mode so the held key re-dispatches with
+                            // `is_repeat: true` (e.g. backspace deleting a
+                            // long preedit one char per tick).
                             router.drain_commit(state);
                             router.drain_composition(state);
-                            let _ = timer.stop();
+                            router.on_consumed(key.clone());
+                            arm_repeat(timer, compositor_info, mods);
                         } else {
+                            // Engine declined the key; forward it to the
+                            // focused app and arm the timer in forward mode
+                            // so the main loop synthesises repeats.
                             state.forward_key(key.time, key.keycode, key.state);
                             router.on_forward(key.clone());
-                            if crate::repeat_timer::should_repeat_for_modifiers(
-                                crate::repeat_timer::Modifiers(state.mods_depressed),
-                            ) {
-                                let _ = timer.start(default_delay, default_interval);
-                            }
+                            arm_repeat(timer, compositor_info, mods);
                         }
                     } else {
                         state.forward_key(key.time, key.keycode, key.state);
@@ -495,7 +700,8 @@ impl App {
                 }
             }
 
-            // 5. Flush the candidate panel if the scheduler says so.
+            // 7. Flush the candidate panel if the scheduler says so.
+            wd!().set_stage(LoopStage::PanelUpdate);
             {
                 let frontend = self.frontend.as_mut().unwrap();
                 let router = self.router.as_mut().unwrap();
@@ -516,63 +722,48 @@ impl App {
                     has_context,
                     context_focused,
                 ) {
+                    let scale = frontend.state().buffer_scale;
                     let result = if let Some(panel) = frontend.panel_mut() {
+                        panel.set_scale(scale);
                         if candidates.is_empty() {
+                            eprintln!("panel: hide (no candidates)");
                             panel.hide();
                         } else {
+                            panel.ensure_candidate_size(&candidates);
+                            eprintln!(
+                                "panel: draw {} candidate(s), selected={}",
+                                candidates.len(),
+                                selected
+                            );
                             panel.draw_candidates(&candidates, selected);
                         }
                         PanelUpdateResult::Done
                     } else {
+                        eprintln!("panel: flush requested but no FluxPanel attached");
                         PanelUpdateResult::Done
                     };
                     frontend.state_mut().panel_schedule_state = panel_scheduler::complete(result);
                 }
             }
 
-            fds[0].revents = 0;
-            fds[1].revents = 0;
-            fds[2].revents = 0;
-
-            // Let the panel scheduler shorten the poll timeout when retrying.
-            let timeout_ms = {
-                let frontend = self.frontend.as_ref().unwrap();
-                let state = frontend.state();
-                let router = self.router.as_ref().unwrap();
-                let flushable = panel_scheduler::should_flush(
-                    state.panel_schedule_state,
-                    router.is_focused(),
-                    !router.ctx().is_null(),
-                    router.is_focused(),
-                );
-                panel_scheduler::poll_timeout_ms(state.panel_schedule_state, flushable, 100)
-            };
-            let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, timeout_ms) };
-            if rc < 0 {
-                let e = std::io::Error::last_os_error();
-                if e.raw_os_error() == Some(libc::EINTR) {
-                    continue;
-                }
-                eprintln!("poll error: {e}");
-                return 1;
-            }
-
-            if fds[0].revents & libc::POLLIN != 0 {
+            // 7b. Flush any pending positioned status UI (indicator / voice)
+            //     when the anchor becomes ready or the caret fallback fires.
+            {
                 let frontend = self.frontend.as_mut().unwrap();
-                if let Some(guard) = frontend.prepare_read() {
-                    if let Err(e) = guard.read() {
-                        eprintln!("Wayland read error: {e}");
-                        return 1;
-                    }
+                let state = frontend.state_mut();
+                if let Some((UiOwner::Indicator | UiOwner::Voice, label)) = state
+                    .panel_coord_mut()
+                    .flush_pending_with_timeout(Instant::now())
+                {
+                    // TODO: render status overlay once FluxPanel
+                    // supports status text (Phase 9).
+                    let _ = label;
                 }
             }
-            if fds[0].revents & (libc::POLLERR | libc::POLLHUP) != 0 {
-                eprintln!("Wayland display disconnected");
-                return 1;
-            }
 
+            // 8. Repeat timer expiration.
             if fds[2].revents & libc::POLLIN != 0 {
-                // Consume the timer expiration.
+                wd!().set_stage(LoopStage::Repeat);
                 let mut buf = [0u8; 8];
                 unsafe {
                     libc::read(repeat_fd, buf.as_mut_ptr() as *mut c_void, buf.len());
@@ -580,15 +771,111 @@ impl App {
                 let frontend = self.frontend.as_mut().unwrap();
                 let state = frontend.state_mut();
                 let router = self.router.as_mut().unwrap();
-                if let Some(key) = router.repeat_key() {
-                    state.forward_key(key.time, key.keycode, key.state);
+                let timer = self.repeat_timer.as_mut().unwrap();
+                let mods = state.mods_depressed;
+                match router.dispatch_repeat(state, mods) {
+                    RepeatOutcome::Forwarded => {}
+                    RepeatOutcome::Consumed => {
+                        router.drain_commit(state);
+                        router.drain_composition(state);
+                    }
+                    RepeatOutcome::Stopped => {
+                        let _ = timer.stop();
+                    }
                 }
             }
 
+            // End-of-tick heartbeat.
+            wd!().stage_done();
+
+            // 9. Config watcher events. These are handled after the main
+            //    pipeline so a temporary field borrow can be used for the
+            //    config reload without colliding with the watchdog macro.
+            if fds[3].revents & libc::POLLIN != 0 {
+                if let Some(ref mut watcher) = self.config_watcher {
+                    match watcher.drain_inotify() {
+                        Ok(outcome) => {
+                            if outcome.should_rearm_watches {
+                                let _ = watcher.rearm_watches();
+                            }
+                            if outcome.should_schedule_reload {
+                                let _ = watcher.schedule_reload();
+                            }
+                        }
+                        Err(e) => eprintln!("config watcher inotify error: {e}"),
+                    }
+                }
+            }
+            if fds[4].revents & libc::POLLIN != 0 {
+                let should_reload = if let Some(ref mut watcher) = self.config_watcher {
+                    match watcher.drain_timer() {
+                        Ok(true) => true,
+                        Ok(false) => false,
+                        Err(e) => {
+                            eprintln!("config watcher timer error: {e}");
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+                if should_reload {
+                    wd!().set_stage(LoopStage::ConfigReload);
+                    self.reload_config();
+                }
+            }
         }
 
         eprintln!("typio: shutting down...");
         0
+    }
+
+    /// Reload core/platform configuration and notify listeners.
+    fn reload_config(&mut self) {
+        let Some(ref mut instance) = self.instance else {
+            return;
+        };
+        let raw = instance.as_mut() as *mut TypioInstance;
+        match typio::instance::typio_instance_reload_config(raw) {
+            typio::TypioResult::TypioOk => {
+                eprintln!("typio: configuration reloaded");
+                self.refresh_state_surfaces();
+            }
+            _ => eprintln!("typio: configuration reload failed"),
+        }
+    }
+
+    /// Re-sync the Rust-side `StateController` with libtypio, then push
+    /// the resulting state to every surface that mirrors it: the IPC
+    /// bus (controller listeners), the tray icon + tooltip, and the
+    /// tray menu snapshot.
+    ///
+    /// Called from two paths: the config-watcher reload callback (config
+    /// may have changed the active engine/language), and the main-loop
+    /// drain of `DaemonEvent::StateRefresh` (tray-driven engine/language
+    /// switches that bypass the Rust controller).
+    fn refresh_state_surfaces(&mut self) {
+        let raw = match self.instance.as_mut() {
+            Some(inst) => inst.as_mut() as *mut TypioInstance,
+            None => return,
+        };
+        if let Some(ref mut controller) = self.state_controller {
+            controller.sync();
+            #[cfg(feature = "systray")]
+            if let Some(ref tray) = self.tray {
+                update_tray_from_controller(tray, controller, raw);
+            }
+        }
+        if let Some(ref ipc) = self.ipc_bus {
+            ipc.borrow_mut()
+                .emit(topics::RUNTIME_CHANGED, &serde_json::json!({}));
+        }
+        #[cfg(feature = "systray")]
+        if let Some(ref tray) = self.tray {
+            if let Some(snapshot) = build_tray_snapshot(raw) {
+                tray.set_menu_snapshot(snapshot);
+            }
+        }
     }
 
     fn run_without_uds(&mut self) -> i32 {
@@ -600,14 +887,58 @@ impl App {
             return 0;
         }
 
-        while !shutdown_requested() {
+        while !self.drain_events() {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         0
     }
 
-    /// Tear down runtime services (currently just the instance).
+    /// Drain all pending daemon events and translate the signal-flag into
+    /// the same model. Returns the resulting action set so the main loop
+    /// can break / refresh / nothing in one place.
+    ///
+    /// - `Shutdown` and the SIGINT/SIGTERM flag both set `should_exit`.
+    /// - `Restart` additionally records `saw_restart` for [`Self::finish`].
+    /// - `StateRefresh` triggers a controller + tray + IPC re-sync via
+    ///   [`Self::refresh_state_surfaces`].
+    fn drain_events(&mut self) -> bool {
+        let mut should_exit = SHUTDOWN_FROM_SIGNAL.swap(false, Ordering::Relaxed);
+        let mut state_refresh = false;
+
+        if let Some(rx) = self.event_rx.as_ref() {
+            for event in rx.try_iter() {
+                match event {
+                    DaemonEvent::Shutdown => should_exit = true,
+                    DaemonEvent::Restart => {
+                        self.saw_restart = true;
+                        should_exit = true;
+                    }
+                    DaemonEvent::StateRefresh => state_refresh = true,
+                }
+            }
+        }
+
+        if state_refresh {
+            self.refresh_state_surfaces();
+        }
+
+        should_exit
+    }
+
+    /// Tear down runtime services.
+    ///
+    /// Drops the dependents that hold raw pointers into `TypioInstance`
+    /// (router, frontend, repeat timer, controller) BEFORE the instance
+    /// itself, so their `Drop` impls see valid memory. Without this the
+    /// instance drops first inside `self.instance.take()`, frees the
+    /// `TypioInputContext` (it owns all contexts), and then the router's
+    /// own `Drop` calls `typio_input_context_free` on a dangling pointer
+    /// → double-free segfault.
     pub fn shutdown(&mut self) {
+        drop(self.router.take());
+        drop(self.repeat_timer.take());
+        drop(self.frontend.take());
+        drop(self.state_controller.take());
         if let Some(mut instance) = self.instance.take() {
             instance.shutdown_rust();
         }
@@ -615,9 +946,13 @@ impl App {
 
     /// Finalize: exec on restart, then return the exit code.
     pub fn finish(self, exit_code: i32) -> i32 {
-        if (self.restart_requested || restart_requested_flag()) && exit_code == 0 {
+        if self.saw_restart && exit_code == 0 {
             eprintln!("typio: restarting...");
-            let argv0 = self.argv.first().cloned().unwrap_or_else(|| CString::new("typio").unwrap());
+            let argv0 = self
+                .argv
+                .first()
+                .cloned()
+                .unwrap_or_else(|| CString::new("typio").unwrap());
             let mut ptrs: Vec<*const c_char> = self.argv.iter().map(|s| s.as_ptr()).collect();
             ptrs.push(std::ptr::null());
             unsafe {
@@ -636,35 +971,41 @@ impl App {
 }
 
 #[cfg(feature = "systray")]
-fn install_tray_action_handler(tray: &Tray, instance: *mut TypioInstance) {
+fn install_tray_action_handler(
+    tray: &Tray,
+    instance: *mut TypioInstance,
+    event_tx: std::sync::mpsc::Sender<DaemonEvent>,
+) {
     // Cast to usize so the closure is Send; reconstruct inside each arm.
     let instance_ptr = instance as usize;
     tray.set_action_handler(move |action| {
         let instance = instance_ptr as *mut TypioInstance;
-        match action {
-            TrayAction::Menu(MenuAction::Restart) => request_restart(),
-            TrayAction::Menu(MenuAction::Quit) => request_shutdown(),
+        let event = match action {
+            TrayAction::Menu(MenuAction::Restart) => Some(DaemonEvent::Restart),
+            TrayAction::Menu(MenuAction::Quit) => Some(DaemonEvent::Shutdown),
             TrayAction::Menu(MenuAction::Language(idx)) => {
-                if let Some(tag) = language_at_index(instance, idx as usize) {
-                    let _ = set_active_language(instance, &tag);
-                }
+                language_at_index(instance, idx as usize)
+                    .and_then(|tag| set_active_language(instance, &tag).ok())
+                    .map(|_| DaemonEvent::StateRefresh)
             }
-            TrayAction::Menu(MenuAction::EngineInLanguage { lang_idx: _, engine_idx }) => {
-                if let Some(name) = keyboard_at_index(instance, engine_idx as usize) {
-                    let _ = set_active_keyboard(instance, &name);
-                }
-            }
+            TrayAction::Menu(MenuAction::EngineInLanguage {
+                lang_idx: _,
+                engine_idx,
+            }) => keyboard_at_index(instance, engine_idx as usize)
+                .and_then(|name| set_active_keyboard(instance, &name).ok())
+                .map(|_| DaemonEvent::StateRefresh),
             TrayAction::Menu(MenuAction::OrphanEngine(idx)) => {
-                if let Some(name) = orphan_keyboard_at_index(instance, idx as usize) {
-                    let _ = set_active_keyboard(instance, &name);
-                }
+                orphan_keyboard_at_index(instance, idx as usize)
+                    .and_then(|name| set_active_keyboard(instance, &name).ok())
+                    .map(|_| DaemonEvent::StateRefresh)
             }
-            TrayAction::Menu(MenuAction::Voice(idx)) => {
-                if let Some(name) = voice_at_index(instance, idx as usize) {
-                    let _ = set_active_voice(instance, &name);
-                }
-            }
-            _ => {}
+            TrayAction::Menu(MenuAction::Voice(idx)) => voice_at_index(instance, idx as usize)
+                .and_then(|name| set_active_voice(instance, &name).ok())
+                .map(|_| DaemonEvent::StateRefresh),
+            _ => None,
+        };
+        if let Some(event) = event {
+            let _ = event_tx.send(event);
         }
     });
 }
@@ -696,7 +1037,11 @@ fn build_tray_snapshot(instance: *mut TypioInstance) -> Option<RegistrySnapshot>
         keyboards.push(EngineDesc {
             name: name.to_string(),
             display_name: Some(info.display_name.clone()),
-            languages: info.effective_languages().iter().map(|s| s.to_string()).collect(),
+            languages: info
+                .effective_languages()
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
         });
     }
     let mut voices = Vec::new();
@@ -738,7 +1083,11 @@ fn orphan_keyboard_at_index(instance: *mut TypioInstance, idx: usize) -> Option<
         .into_iter()
         .filter(|name| {
             reg.engine_info(name)
-                .map(|info| info.effective_languages().iter().all(|l| !known.contains(l)))
+                .map(|info| {
+                    info.effective_languages()
+                        .iter()
+                        .all(|l| !known.contains(l))
+                })
                 .unwrap_or(true)
         })
         .map(str::to_string)
@@ -752,34 +1101,94 @@ fn voice_at_index(instance: *mut TypioInstance, idx: usize) -> Option<String> {
     reg.list_voices().get(idx).map(|n| n.to_string())
 }
 
-fn set_active_language(instance: *mut TypioInstance, tag: &str) -> Result<(), ()> {
-    let reg = registry_ptr(instance).ok_or(())?;
-    let tag_c = CString::new(tag).map_err(|_| ())?;
+fn set_active_language(instance: *mut TypioInstance, tag: &str) -> Result<(), SvcError> {
+    let reg = registry_ptr(instance).ok_or(SvcError)?;
+    let tag_c = CString::new(tag).map_err(|_| SvcError)?;
     match c_registry::typio_registry_set_active_language(reg, tag_c.as_ptr()) {
         typio::TypioResult::TypioOk => Ok(()),
-        _ => Err(()),
+        _ => Err(SvcError),
     }
 }
 
-fn set_active_keyboard(instance: *mut TypioInstance, name: &str) -> Result<(), ()> {
-    let reg = registry_ptr(instance).ok_or(())?;
-    let name_c = CString::new(name).map_err(|_| ())?;
+fn set_active_keyboard(instance: *mut TypioInstance, name: &str) -> Result<(), SvcError> {
+    let reg = registry_ptr(instance).ok_or(SvcError)?;
+    let name_c = CString::new(name).map_err(|_| SvcError)?;
     match c_registry::typio_registry_set_active_keyboard(reg, name_c.as_ptr()) {
-        typio::TypioResult::TypioOk => Ok(()),
-        _ => Err(()),
+        typio::TypioResult::TypioOk => {
+            eprintln!("tray: active keyboard -> {name}");
+            Ok(())
+        }
+        _ => {
+            eprintln!("tray: set_active_keyboard({name}) failed");
+            Err(SvcError)
+        }
     }
 }
 
-fn set_active_voice(instance: *mut TypioInstance, name: &str) -> Result<(), ()> {
-    let reg = registry_ptr(instance).ok_or(())?;
-    let name_c = CString::new(name).map_err(|_| ())?;
+/// Cycle to the next registered keyboard engine, called when the user
+/// presses the Ctrl+Shift engine-switch chord. Wraps from last back to
+/// first; if only one keyboard is registered, the call is a no-op.
+fn cycle_active_keyboard(instance: *mut TypioInstance) {
+    let Some(inst) = (unsafe { instance.as_ref() }) else {
+        return;
+    };
+    let Some(reg) = inst.registry_rust() else {
+        return;
+    };
+    let keyboards: Vec<&str> = reg.list_keyboards();
+    if keyboards.len() < 2 {
+        return;
+    }
+    let current: &str = reg.active_keyboard_name().unwrap_or(keyboards[0]);
+    let next = keyboards
+        .iter()
+        .position(|k| *k == current)
+        .and_then(|i| keyboards.get((i + 1) % keyboards.len()).copied())
+        .unwrap_or(keyboards[0]);
+    let _ = set_active_keyboard(instance, next);
+}
+
+fn set_active_voice(instance: *mut TypioInstance, name: &str) -> Result<(), SvcError> {
+    let reg = registry_ptr(instance).ok_or(SvcError)?;
+    let name_c = CString::new(name).map_err(|_| SvcError)?;
     match c_registry::typio_registry_set_active_voice(reg, name_c.as_ptr()) {
         typio::TypioResult::TypioOk => Ok(()),
-        _ => Err(()),
+        _ => Err(SvcError),
     }
 }
 
-fn registry_ptr(instance: *mut TypioInstance) -> Option<*mut typio::c_api::registry::TypioRegistry> {
+/// Arm or disarm the keyboard repeat timer based on the current modifier
+/// state and the compositor's reported repeat preferences.
+///
+/// Used by the main loop after both the engine-consumed and
+/// forwarded-key paths so both kinds of key repeat identically.
+/// Auto-repeat is suppressed entirely when a repeat-suppressing
+/// modifier (Ctrl / Alt / Super) is held, or when the compositor
+/// advertises `rate == 0`.
+#[cfg(feature = "wayland")]
+fn arm_repeat(
+    timer: &mut RepeatTimer,
+    compositor_info: Option<(i32, i32)>,
+    mods_depressed: u32,
+) {
+    if !repeat_timer::should_repeat_for_modifiers(repeat_timer::Modifiers(mods_depressed)) {
+        let _ = timer.stop();
+        return;
+    }
+    match repeat_timer::resolve_repeat_params(compositor_info) {
+        Some((delay, interval)) => {
+            let _ = timer.start(delay, interval);
+        }
+        None => {
+            // Compositor reports rate == 0: do not repeat.
+            let _ = timer.stop();
+        }
+    }
+}
+
+fn registry_ptr(
+    instance: *mut TypioInstance,
+) -> Option<*mut typio::c_api::registry::TypioRegistry> {
     if instance.is_null() {
         return None;
     }
@@ -799,7 +1208,8 @@ fn register_engine_process(
     path: &std::path::Path,
 ) -> Option<(String, String)> {
     let c_name = CString::new(manifest.name.as_str()).ok()?;
-    let c_display = CString::new(manifest.display_name.as_deref().unwrap_or(&manifest.name)).ok()?;
+    let c_display =
+        CString::new(manifest.display_name.as_deref().unwrap_or(&manifest.name)).ok()?;
     let c_desc = CString::new(manifest.description.as_deref().unwrap_or("")).ok()?;
     let c_author = CString::new(manifest.author.as_deref().unwrap_or("")).ok()?;
     let c_icon = manifest
@@ -828,7 +1238,10 @@ fn register_engine_process(
         display_name: c_display.as_ptr(),
         description: c_desc.as_ptr(),
         author: c_author.as_ptr(),
-        icon: c_icon.as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null()),
+        icon: c_icon
+            .as_ref()
+            .map(|s| s.as_ptr())
+            .unwrap_or(std::ptr::null()),
         language: c_lang.as_ptr(),
         type_: if manifest.engine_type == "voice" {
             typio_abi::TypioEngineType::TypioEngineTypeVoice
@@ -839,21 +1252,25 @@ fn register_engine_process(
         optional_capabilities: std::ptr::null(),
     };
 
-    let result = c_registry::typio_registry_register_engine_process(registry, &info, argv_ptrs.as_ptr());
+    let result =
+        c_registry::typio_registry_register_engine_process(registry, &info, argv_ptrs.as_ptr());
 
     if result == TypioResult::TypioOk {
-        // Leak the CStrings — the engine backend holds them for its lifetime.
+        eprintln!(
+            "OK:   registered engine '{}' ({}) from {}",
+            manifest.name,
+            manifest.engine_type,
+            path.display()
+        );
         let name = manifest.name.clone();
         let engine_type = manifest.engine_type.clone();
-        std::mem::forget(c_name);
-        std::mem::forget(c_display);
-        std::mem::forget(c_desc);
-        std::mem::forget(c_author);
-        std::mem::forget(c_icon);
-        std::mem::forget(c_lang);
-        std::mem::forget(argv_strings);
         Some((name, engine_type))
     } else {
+        eprintln!(
+            "WARN: failed to register engine '{}' from {} (result={result:?})",
+            manifest.name,
+            path.display()
+        );
         None
     }
 }
@@ -889,16 +1306,7 @@ mod tests {
     #[test]
     fn cli_parses_into_app_options() {
         let cli = Cli::parse_from([
-            "typio",
-            "-c",
-            "/cfg",
-            "--socket",
-            "/sock",
-            "-E",
-            "/e1",
-            "-E",
-            "/e2",
-            "-vv",
+            "typio", "-c", "/cfg", "--socket", "/sock", "-E", "/e1", "-E", "/e2", "-vv",
         ]);
         let opts: AppOptions = cli.into();
         assert_eq!(opts.config_dir, Some("/cfg".to_string()));
@@ -909,28 +1317,68 @@ mod tests {
     }
 
     #[test]
-    fn signal_flags_can_be_set_and_read() {
+    fn daemon_events_drive_drain_results() {
         let _guard = SIGNAL_FLAG_LOCK.lock().unwrap();
 
-        // Reset to a known state.
-        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
-        RESTART_REQUESTED.store(false, Ordering::SeqCst);
+        // Reset the signal flag so prior tests don't leak.
+        SHUTDOWN_FROM_SIGNAL.store(false, Ordering::SeqCst);
 
-        assert!(!shutdown_requested());
-        request_shutdown();
-        assert!(shutdown_requested());
-        assert!(!restart_requested_flag());
+        // Build a minimal App with just the event channel wired. Other
+        // fields are empty; drain_events does not touch them unless an
+        // event triggers StateRefresh (which we don't send here).
+        let (tx, rx) = std::sync::mpsc::channel::<DaemonEvent>();
+        let mut app = App {
+            argv: vec![],
+            options: AppOptions {
+                config_dir: None,
+                data_dir: None,
+                engine_dirs: vec![],
+                socket_path: None,
+                verbosity: 0,
+            },
+            instance: None,
+            state_controller: None,
+            ipc_bus: None,
+            #[cfg(feature = "systray")]
+            tray: None,
+            #[cfg(feature = "wayland")]
+            frontend: None,
+            #[cfg(feature = "wayland")]
+            router: None,
+            #[cfg(feature = "wayland")]
+            repeat_timer: None,
+            #[cfg(feature = "wayland")]
+            resume_signal: None,
+            #[cfg(feature = "wayland")]
+            focus_driver: None,
+            config_watcher: None,
+            watchdog: None,
+            event_tx: tx,
+            event_rx: Some(rx),
+            saw_restart: false,
+        };
 
-        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
-        RESTART_REQUESTED.store(false, Ordering::SeqCst);
+        // Empty channel + clear signal flag → no exit.
+        assert!(!app.drain_events());
+        assert!(!app.saw_restart);
 
-        request_restart();
-        assert!(shutdown_requested());
-        assert!(restart_requested_flag());
+        // Shutdown via channel.
+        let _ = app.event_tx.send(DaemonEvent::Shutdown);
+        assert!(app.drain_events());
+        assert!(!app.saw_restart);
 
-        // Leave the flags clear for any later test.
-        SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
-        RESTART_REQUESTED.store(false, Ordering::SeqCst);
+        // Restart sets both saw_restart and should_exit.
+        let _ = app.event_tx.send(DaemonEvent::Restart);
+        assert!(app.drain_events());
+        assert!(app.saw_restart);
+
+        // Signal flag still drives exit (async-signal-safe path).
+        app.saw_restart = false;
+        SHUTDOWN_FROM_SIGNAL.store(true, Ordering::SeqCst);
+        assert!(app.drain_events());
+        assert!(!app.saw_restart); // signal path is Shutdown-only
+
+        SHUTDOWN_FROM_SIGNAL.store(false, Ordering::SeqCst);
     }
 
     #[test]
@@ -955,7 +1403,10 @@ mod tests {
         let snapshot = build_tray_snapshot(inst).expect("tray snapshot should build");
         assert_eq!(snapshot.keyboards.len(), 1);
         assert_eq!(snapshot.keyboards[0].name, "fixture");
-        assert_eq!(snapshot.keyboards[0].display_name, Some("Fixture".to_string()));
+        assert_eq!(
+            snapshot.keyboards[0].display_name,
+            Some("Fixture".to_string())
+        );
         assert_eq!(snapshot.voices.len(), 0);
 
         typio::instance::typio_instance_free(inst);

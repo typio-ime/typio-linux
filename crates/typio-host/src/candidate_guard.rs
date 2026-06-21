@@ -133,7 +133,10 @@ bitflags! {
 
 /// True iff `keysym` is Up/Down/Left/Right.
 pub fn is_navigation_keysym(keysym: Keysym) -> bool {
-    matches!(keysym, XKB_KEY_UP | XKB_KEY_DOWN | XKB_KEY_LEFT | XKB_KEY_RIGHT)
+    matches!(
+        keysym,
+        XKB_KEY_UP | XKB_KEY_DOWN | XKB_KEY_LEFT | XKB_KEY_RIGHT
+    )
 }
 
 /// Map a keysym to a [`HostSelKey`]. Returns [`HostSelKey::None`] for
@@ -182,16 +185,8 @@ pub fn host_selection_category(sel: HostSelKey) -> HostSelCategory {
         NavUp | NavDown => HostSelCategory::Navigate,
         CommitSelected => HostSelCategory::Commit,
         CommitRaw => HostSelCategory::CommitRaw,
-        CommitIndex1
-        | CommitIndex2
-        | CommitIndex3
-        | CommitIndex4
-        | CommitIndex5
-        | CommitIndex6
-        | CommitIndex7
-        | CommitIndex8
-        | CommitIndex9
-        | CommitIndex0 => HostSelCategory::IndexPick,
+        CommitIndex1 | CommitIndex2 | CommitIndex3 | CommitIndex4 | CommitIndex5 | CommitIndex6
+        | CommitIndex7 | CommitIndex8 | CommitIndex9 | CommitIndex0 => HostSelCategory::IndexPick,
         None => HostSelCategory::None,
     }
 }
@@ -310,9 +305,15 @@ mod tests {
         assert_eq!(host_selection_keysym(XKB_KEY_LEFT), HostSelKey::NavUp);
         assert_eq!(host_selection_keysym(XKB_KEY_DOWN), HostSelKey::NavDown);
         assert_eq!(host_selection_keysym(XKB_KEY_RIGHT), HostSelKey::NavDown);
-        assert_eq!(host_selection_keysym(XKB_KEY_SPACE), HostSelKey::CommitSelected);
+        assert_eq!(
+            host_selection_keysym(XKB_KEY_SPACE),
+            HostSelKey::CommitSelected
+        );
         assert_eq!(host_selection_keysym(XKB_KEY_RETURN), HostSelKey::CommitRaw);
-        assert_eq!(host_selection_keysym(XKB_KEY_KP_ENTER), HostSelKey::CommitRaw);
+        assert_eq!(
+            host_selection_keysym(XKB_KEY_KP_ENTER),
+            HostSelKey::CommitRaw
+        );
         // Number keys map to indexed picks.
         assert_eq!(host_selection_keysym(XKB_KEY_1), HostSelKey::CommitIndex1);
         assert_eq!(host_selection_keysym(XKB_KEY_5), HostSelKey::CommitIndex5);
@@ -354,25 +355,13 @@ mod tests {
     #[test]
     fn resolve_navigation_clamps_at_edges() {
         // Up at index 0 stays at 0.
-        assert_eq!(
-            host_selection_resolve(HostSelKey::NavUp, 0, 5),
-            Some(0)
-        );
+        assert_eq!(host_selection_resolve(HostSelKey::NavUp, 0, 5), Some(0));
         // Up in the middle decrements.
-        assert_eq!(
-            host_selection_resolve(HostSelKey::NavUp, 3, 5),
-            Some(2)
-        );
+        assert_eq!(host_selection_resolve(HostSelKey::NavUp, 3, 5), Some(2));
         // Down at the last index stays at last.
-        assert_eq!(
-            host_selection_resolve(HostSelKey::NavDown, 4, 5),
-            Some(4)
-        );
+        assert_eq!(host_selection_resolve(HostSelKey::NavDown, 4, 5), Some(4));
         // Down in the middle increments.
-        assert_eq!(
-            host_selection_resolve(HostSelKey::NavDown, 2, 5),
-            Some(3)
-        );
+        assert_eq!(host_selection_resolve(HostSelKey::NavDown, 2, 5), Some(3));
     }
 
     #[test]
@@ -390,20 +379,14 @@ mod tests {
     #[test]
     fn resolve_index_picks_filter_when_out_of_range() {
         // Candidate count = 3, picking index 5 → None.
-        assert_eq!(
-            host_selection_resolve(HostSelKey::CommitIndex5, 0, 3),
-            None
-        );
+        assert_eq!(host_selection_resolve(HostSelKey::CommitIndex5, 0, 3), None);
         // Picking index 2 within count=3 → Some(2).
         assert_eq!(
             host_selection_resolve(HostSelKey::CommitIndex3, 0, 3),
             Some(2)
         );
         // Picking index 0 (key '0', maps to position 9) → out of range.
-        assert_eq!(
-            host_selection_resolve(HostSelKey::CommitIndex0, 0, 5),
-            None
-        );
+        assert_eq!(host_selection_resolve(HostSelKey::CommitIndex0, 0, 5), None);
         // With 10+ candidates, index 0 key resolves to position 9.
         assert_eq!(
             host_selection_resolve(HostSelKey::CommitIndex0, 0, 10),
@@ -413,38 +396,57 @@ mod tests {
 
     #[test]
     fn resolve_returns_none_for_zero_candidates_or_no_key() {
-        assert_eq!(
-            host_selection_resolve(HostSelKey::NavUp, 0, 0),
-            None
-        );
-        assert_eq!(
-            host_selection_resolve(HostSelKey::None, 0, 5),
-            None
-        );
+        assert_eq!(host_selection_resolve(HostSelKey::NavUp, 0, 0), None);
+        assert_eq!(host_selection_resolve(HostSelKey::None, 0, 5), None);
         // CommitRaw is not an index pick.
-        assert_eq!(
-            host_selection_resolve(HostSelKey::CommitRaw, 2, 5),
-            None
-        );
+        assert_eq!(host_selection_resolve(HostSelKey::CommitRaw, 2, 5), None);
     }
 
     #[test]
     fn should_consume_key_with_no_candidates_returns_false() {
         // No candidates → never consume.
-        assert!(!should_consume_key(0, HostSelectionFlags::empty(), XKB_KEY_UP));
-        assert!(!should_consume_key(0, HostSelectionFlags::all(), XKB_KEY_UP));
+        assert!(!should_consume_key(
+            0,
+            HostSelectionFlags::empty(),
+            XKB_KEY_UP
+        ));
+        assert!(!should_consume_key(
+            0,
+            HostSelectionFlags::all(),
+            XKB_KEY_UP
+        ));
     }
 
     #[test]
     fn should_consume_key_default_intercepts_arrows() {
         // With candidates and no declared flags, the default is to
         // intercept arrow keys only.
-        assert!(should_consume_key(3, HostSelectionFlags::empty(), XKB_KEY_UP));
-        assert!(should_consume_key(3, HostSelectionFlags::empty(), XKB_KEY_DOWN));
+        assert!(should_consume_key(
+            3,
+            HostSelectionFlags::empty(),
+            XKB_KEY_UP
+        ));
+        assert!(should_consume_key(
+            3,
+            HostSelectionFlags::empty(),
+            XKB_KEY_DOWN
+        ));
         // But not space, enter, or numbers.
-        assert!(!should_consume_key(3, HostSelectionFlags::empty(), XKB_KEY_SPACE));
-        assert!(!should_consume_key(3, HostSelectionFlags::empty(), XKB_KEY_RETURN));
-        assert!(!should_consume_key(3, HostSelectionFlags::empty(), XKB_KEY_1));
+        assert!(!should_consume_key(
+            3,
+            HostSelectionFlags::empty(),
+            XKB_KEY_SPACE
+        ));
+        assert!(!should_consume_key(
+            3,
+            HostSelectionFlags::empty(),
+            XKB_KEY_RETURN
+        ));
+        assert!(!should_consume_key(
+            3,
+            HostSelectionFlags::empty(),
+            XKB_KEY_1
+        ));
     }
 
     #[test]

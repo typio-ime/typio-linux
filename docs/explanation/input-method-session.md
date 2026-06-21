@@ -144,15 +144,15 @@ it describes.
 
 | Module | Responsibility |
 |--------|---------------|
-| `focus_controller.{c,h}` | pure lifecycle decisions (`reduce`, `diff`) and the data structures that describe them |
-| `focus_effects.c` | `observe` (live resource snapshot) and `apply` (effectful execution of the diff) |
-| `tracker.{c,h}` | the per-key generation stamp and symmetric press/release tracking — mutable, and **never** the routing decision |
-| `router.{c,h}` | the pure routing decision `(key, mods, state) → {action, reason}` |
-| `keyboard.c` | key-event interpretation (XKB → `TypioKeyEvent`) while the session is focused |
-| `bridge.c` | virtual-keyboard health, keymap deadlines, readiness gating, and fail-safe downgrade |
-| `event_loop.c` | poll scheduling, bounded auxiliary-fd dispatch, and deadline-aware wakeups |
-| `runtime_config.c` | config-watch events, debounce timing, watch rearming, and the runtime reload boundary |
-| `pw_capture.c` | voice recording/inference state and deferred voice reload application |
+| `crates/typio-host/src/focus_controller.rs` | pure lifecycle decisions (`reduce`, `diff`) and the data structures that describe them |
+| `crates/typio-host/src/session_glue.rs` | `observe` (live resource snapshot) and `apply` (effectful execution of the diff) |
+| `crates/typio-host/src/keyboard_policy.rs` | the per-key generation stamp and symmetric press/release tracking — mutable, and **never** the routing decision |
+| `crates/typio-host/src/keyboard/router.rs` | the pure routing decision `(key, mods, state) → {action, reason}` |
+| `crates/typio-host/src/input_method.rs` (`Dispatch<ZwpInputMethodKeyboardGrabV2>`) | key-event interpretation (XKB → `TypioKeyEvent`) while the session is focused |
+| `crates/typio-host/src/input_method.rs` (`forward_key`, `forward_modifiers`) | virtual-keyboard health, keymap/modifier handoff, readiness gating, and fail-safe downgrade |
+| `crates/typio-host/src/app.rs` (`App::run`) | poll scheduling, bounded auxiliary-fd dispatch, and deadline-aware wakeups |
+| `crates/typio-host/src/config_watcher.rs` | config-watch events, debounce timing, watch rearming, and the runtime reload boundary |
+| `crates/typio-host/src/pw_capture.rs` | voice recording/inference state and deferred voice reload application |
 | `xkb_state` | the logical modifier view |
 | engine implementations | only engine/composition behavior |
 

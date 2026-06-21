@@ -1,3 +1,0 @@
-leak:FcPatternObjectInsertElt
-leak:FcPatternObjectAddWithBinding
-leak:FcValueSave

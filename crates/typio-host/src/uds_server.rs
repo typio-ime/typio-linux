@@ -247,10 +247,7 @@ impl UdsServer {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                socket_path,
-                std::fs::Permissions::from_mode(0o600),
-            );
+            let _ = std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600));
         }
         listener.set_nonblocking(true)?;
 
@@ -259,7 +256,10 @@ impl UdsServer {
         // Register the listening socket for read events (new connections).
         let listen_fd = listener.as_raw_fd();
         let event = EpollEvent::new(EpollFlags::EPOLLIN, listen_fd as u64);
-        epoll.add(unsafe { std::os::fd::BorrowedFd::borrow_raw(listen_fd) }, event)?;
+        epoll.add(
+            unsafe { std::os::fd::BorrowedFd::borrow_raw(listen_fd) },
+            event,
+        )?;
 
         Ok(Self {
             listener,
@@ -313,8 +313,8 @@ impl UdsServer {
                 self.accept_new_clients();
             } else if let Some(&client_id_raw) = self.fd_to_id.get(&fd) {
                 let client_id = ClientId(client_id_raw);
-                let should_close = (flags & (EpollFlags::EPOLLERR | EpollFlags::EPOLLHUP))
-                    != EpollFlags::empty();
+                let should_close =
+                    (flags & (EpollFlags::EPOLLERR | EpollFlags::EPOLLHUP)) != EpollFlags::empty();
                 if should_close {
                     self.close_client(client_id);
                     continue;
@@ -406,7 +406,10 @@ impl UdsServer {
                     let event = EpollEvent::new(EpollFlags::EPOLLIN, fd_raw as u64);
                     if self
                         .epoll
-                        .add(unsafe { std::os::fd::BorrowedFd::borrow_raw(fd_raw) }, event)
+                        .add(
+                            unsafe { std::os::fd::BorrowedFd::borrow_raw(fd_raw) },
+                            event,
+                        )
                         .is_err()
                     {
                         // Failed to register; drop the connection.
@@ -441,9 +444,7 @@ impl UdsServer {
             let fd = client.fd.as_raw_fd();
             loop {
                 // SAFETY: &mut Client owns the fd.
-                let n = unsafe {
-                    libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len())
-                };
+                let n = unsafe { libc::read(fd, buf.as_mut_ptr() as *mut _, buf.len()) };
                 if n < 0 {
                     let e = io::Error::last_os_error();
                     if e.raw_os_error() == Some(libc::EAGAIN)
@@ -468,12 +469,9 @@ impl UdsServer {
             consumed_total = 0usize;
             while consumed_total + 4 <= client.rbuf.len() {
                 let len_field = &client.rbuf[consumed_total..consumed_total + 4];
-                let frame_len = u32::from_be_bytes([
-                    len_field[0],
-                    len_field[1],
-                    len_field[2],
-                    len_field[3],
-                ]) as usize;
+                let frame_len =
+                    u32::from_be_bytes([len_field[0], len_field[1], len_field[2], len_field[3]])
+                        as usize;
                 if frame_len > MAX_FRAME_BYTES {
                     client.closed = true;
                     return true;
@@ -704,7 +702,10 @@ mod tests {
 
     /// Drive `server.dispatch()` in a background thread until `stop`
     /// becomes true. Returns the join handle.
-    fn spawn_dispatcher(server: Arc<Mutex<UdsServer>>, stop: Arc<std::sync::atomic::AtomicBool>) -> thread::JoinHandle<()> {
+    fn spawn_dispatcher(
+        server: Arc<Mutex<UdsServer>>,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+    ) -> thread::JoinHandle<()> {
         thread::spawn(move || {
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                 if let Ok(mut s) = server.lock() {
@@ -805,7 +806,10 @@ mod tests {
             }
         };
 
-        assert!(response.contains("hello"), "response should echo method: {response}");
+        assert!(
+            response.contains("hello"),
+            "response should echo method: {response}"
+        );
         assert!(response.contains("\"echo\":"));
 
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -838,7 +842,11 @@ mod tests {
 
         // Subscribe the first client by sending hello; the second client
         // never subscribes.
-        write_frame(&mut sub_client, r#"{"jsonrpc":"2.0","id":1,"method":"hello"}"#).unwrap();
+        write_frame(
+            &mut sub_client,
+            r#"{"jsonrpc":"2.0","id":1,"method":"hello"}"#,
+        )
+        .unwrap();
         // Drain sub_client's hello response before emit.
         let _hello_resp = read_frame(&mut sub_client).unwrap();
 
@@ -855,8 +863,9 @@ mod tests {
             }
             match read_frame(&mut sub_client) {
                 Ok(s) => break s,
-                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof
-                    || e.kind() == io::ErrorKind::WouldBlock =>
+                Err(e)
+                    if e.kind() == io::ErrorKind::UnexpectedEof
+                        || e.kind() == io::ErrorKind::WouldBlock =>
                 {
                     thread::sleep(Duration::from_millis(5));
                 }
@@ -904,7 +913,10 @@ mod tests {
 
         let r = RequestOutcome::respond_and_subscribe("ok", SubscriptionUpdate::Unsubscribe);
         assert_eq!(r.response.as_deref(), Some("ok"));
-        assert!(matches!(r.subscription, Some(SubscriptionUpdate::Unsubscribe)));
+        assert!(matches!(
+            r.subscription,
+            Some(SubscriptionUpdate::Unsubscribe)
+        ));
 
         let r = RequestOutcome::silent();
         assert!(r.response.is_none());

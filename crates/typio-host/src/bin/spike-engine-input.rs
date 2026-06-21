@@ -16,8 +16,8 @@ use std::sync::Mutex;
 
 use typio_abi::{TypioEngineInfo, TypioEngineType, TypioEventType, TypioKeyEvent, TypioResult};
 
-use typio_host::input_method::{InputMethodFrontend, LifecycleEvent};
 use typio_host::engine_loader::manifest::EngineManifest;
+use typio_host::input_method::{InputMethodFrontend, LifecycleEvent};
 
 static COMMITTED_TEXT: Mutex<Option<String>> = Mutex::new(None);
 
@@ -98,12 +98,14 @@ fn main() -> ExitCode {
 
             // Build C strings for TypioEngineInfo fields.
             let c_name = CString::new(manifest.name.as_str()).unwrap();
-            let c_display = CString::new(
-                manifest.display_name.as_deref().unwrap_or(&manifest.name),
-            ).unwrap();
+            let c_display =
+                CString::new(manifest.display_name.as_deref().unwrap_or(&manifest.name)).unwrap();
             let c_desc = CString::new(manifest.description.as_deref().unwrap_or("")).unwrap();
             let c_author = CString::new(manifest.author.as_deref().unwrap_or("")).unwrap();
-            let c_icon = manifest.icon.as_ref().map(|s| CString::new(s.as_str()).unwrap());
+            let c_icon = manifest
+                .icon
+                .as_ref()
+                .map(|s| CString::new(s.as_str()).unwrap());
             let c_lang = CString::new(manifest.primary_language()).unwrap();
 
             // Build argv.
@@ -125,7 +127,10 @@ fn main() -> ExitCode {
                 display_name: c_display.as_ptr(),
                 description: c_desc.as_ptr(),
                 author: c_author.as_ptr(),
-                icon: c_icon.as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null()),
+                icon: c_icon
+                    .as_ref()
+                    .map(|s| s.as_ptr())
+                    .unwrap_or(std::ptr::null()),
                 language: c_lang.as_ptr(),
                 type_: if manifest.engine_type == "voice" {
                     TypioEngineType::TypioEngineTypeVoice
@@ -163,15 +168,15 @@ fn main() -> ExitCode {
 
         // Activate the first keyboard engine.
         let mut kb_count: usize = 0;
-        let kb_list = typio::c_api::registry::typio_registry_list_keyboards(
-            reg_ptr,
-            &mut kb_count,
-        );
+        let kb_list = typio::c_api::registry::typio_registry_list_keyboards(reg_ptr, &mut kb_count);
         if !kb_list.is_null() && kb_count > 0 {
             let first = unsafe { *kb_list };
             if !first.is_null() {
                 let name = unsafe { CStr::from_ptr(first) };
-                eprintln!("OK: activating first keyboard engine: {}", name.to_string_lossy());
+                eprintln!(
+                    "OK: activating first keyboard engine: {}",
+                    name.to_string_lossy()
+                );
                 typio::c_api::registry::typio_registry_set_active_keyboard(reg_ptr, first);
             }
         }
@@ -246,10 +251,7 @@ fn main() -> ExitCode {
                 base_keysym: key.keysym,
             };
 
-            let consumed = typio::input_context::typio_input_context_process_key(
-                ctx,
-                &event,
-            );
+            let consumed = typio::input_context::typio_input_context_process_key(ctx, &event);
 
             if consumed {
                 // Engine handled it — check for committed text.

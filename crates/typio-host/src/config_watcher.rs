@@ -106,8 +106,8 @@ impl ConfigWatcher {
         let inotify = Inotify::init()?;
         let dir_watch = inotify.watches().add(config_dir, WATCH_MASK)?;
 
-        let timer = TimerFd::new(ClockId::CLOCK_MONOTONIC, TimerFlags::empty())
-            .map_err(nix_to_io)?;
+        let timer =
+            TimerFd::new(ClockId::CLOCK_MONOTONIC, TimerFlags::TFD_NONBLOCK).map_err(nix_to_io)?;
 
         Ok(Self {
             inotify,
@@ -287,17 +287,22 @@ mod tests {
     /// The driver does NOT handle `should_rearm_watches` (we have no test
     /// for that path yet — it requires deleting the watched dir, which
     /// races with inotify delivery).
-    fn wait_for_one_reload(
-        watcher: &mut ConfigWatcher,
-        timeout: Duration,
-    ) -> bool {
+    fn wait_for_one_reload(watcher: &mut ConfigWatcher, timeout: Duration) -> bool {
         let inotify_fd = watcher.inotify_fd();
         let timer_fd = watcher.timer_fd();
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             let mut fds = [
-                libc::pollfd { fd: inotify_fd, events: libc::POLLIN, revents: 0 },
-                libc::pollfd { fd: timer_fd, events: libc::POLLIN, revents: 0 },
+                libc::pollfd {
+                    fd: inotify_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
+                libc::pollfd {
+                    fd: timer_fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                },
             ];
             let remaining = deadline
                 .saturating_duration_since(Instant::now())
@@ -320,9 +325,7 @@ mod tests {
                     watcher.schedule_reload().expect("schedule");
                 }
             }
-            if fds[1].revents & libc::POLLIN != 0
-                && watcher.drain_timer().expect("drain timer")
-            {
+            if fds[1].revents & libc::POLLIN != 0 && watcher.drain_timer().expect("drain timer") {
                 return true;
             }
         }
@@ -340,8 +343,7 @@ mod tests {
     #[test]
     fn writing_core_toml_triggers_exactly_one_debounced_reload() {
         let temp = tempdir().unwrap();
-        let mut w =
-            ConfigWatcher::with_debounce(temp.path(), Duration::from_millis(20)).unwrap();
+        let mut w = ConfigWatcher::with_debounce(temp.path(), Duration::from_millis(20)).unwrap();
 
         // Three writes in quick succession should collapse to one reload
         // fired ~20ms after the last write.
@@ -357,8 +359,7 @@ mod tests {
     #[test]
     fn writing_unrelated_file_does_not_trigger_reload() {
         let temp = tempdir().unwrap();
-        let mut w =
-            ConfigWatcher::with_debounce(temp.path(), Duration::from_millis(20)).unwrap();
+        let mut w = ConfigWatcher::with_debounce(temp.path(), Duration::from_millis(20)).unwrap();
 
         // An editor backup file; the C version filters this out.
         fs::write(temp.path().join("core.toml~"), "backup").unwrap();
@@ -374,8 +375,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let engines = temp.path().join("engines");
         fs::create_dir(&engines).unwrap();
-        let mut w =
-            ConfigWatcher::with_debounce(temp.path(), Duration::from_millis(20)).unwrap();
+        let mut w = ConfigWatcher::with_debounce(temp.path(), Duration::from_millis(20)).unwrap();
         w.watch_engines_dir(&engines).unwrap();
 
         // Even a "weird" filename in engines/ should trigger — the C
@@ -389,8 +389,7 @@ mod tests {
     #[test]
     fn platform_toml_is_also_a_relevant_filename() {
         let temp = tempdir().unwrap();
-        let mut w =
-            ConfigWatcher::with_debounce(temp.path(), Duration::from_millis(20)).unwrap();
+        let mut w = ConfigWatcher::with_debounce(temp.path(), Duration::from_millis(20)).unwrap();
         fs::write(temp.path().join("platform.toml"), "shutdown = true").unwrap();
 
         let fired = wait_for_one_reload(&mut w, Duration::from_secs(2));
@@ -400,8 +399,7 @@ mod tests {
     #[test]
     fn schedule_reload_sets_pending_flag() {
         let temp = tempdir().unwrap();
-        let mut w =
-            ConfigWatcher::with_debounce(temp.path(), Duration::from_secs(60)).unwrap();
+        let mut w = ConfigWatcher::with_debounce(temp.path(), Duration::from_secs(60)).unwrap();
         assert!(!w.reload_pending());
         w.schedule_reload().unwrap();
         assert!(w.reload_pending());
@@ -410,8 +408,7 @@ mod tests {
     #[test]
     fn drain_timer_returns_false_when_no_reload_pending() {
         let temp = tempdir().unwrap();
-        let w =
-            ConfigWatcher::with_debounce(temp.path(), Duration::from_millis(20)).unwrap();
+        let w = ConfigWatcher::with_debounce(temp.path(), Duration::from_millis(20)).unwrap();
         // Timer fd is not readable, so drain_timer should encounter EAGAIN
         // and return false without blocking.
         // First make the fd non-blocking by setting the timer in the future

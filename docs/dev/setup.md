@@ -1,276 +1,237 @@
 # Developer Setup
 
-This document is for contributors who will modify `typio-linux` source code.
+This document is for contributors who modify `typio-linux` source code.
 
-## Quick start
+## Quick Start
 
-```bash
-export PKG_CONFIG_PATH="../libtypio/target/release:${PKG_CONFIG_PATH}"
-meson setup build --buildtype=debug -Denable_systray=true -Denable_voice=true
-ninja -C build
-```
-
-If `libtypio` is not built locally, Meson clones and builds it automatically
-via `subprojects/libtypio.wrap`.  `flux` is handled similarly (see below).
-
-Run:
+All commands in this document run from the `typio-linux` repository root
+unless a block says otherwise.
 
 ```bash
-export LD_LIBRARY_PATH=../libtypio/target/release:${LD_LIBRARY_PATH}
-./build/src/typio --verbose
+cargo build --release --manifest-path ../libtypio/Cargo.toml
+meson setup ../../flux/build ../../flux    # one-time per flux checkout
+meson compile -C ../../flux/build
+
+export LD_LIBRARY_PATH="$PWD/../libtypio/target/release:$PWD/../../flux/build:${LD_LIBRARY_PATH}"
+cargo build -p typio-host
+cargo test -p typio-host
 ```
 
-`-Denable_voice=true` enables PipeWire audio capture and the `voice_input`
-host capability so voice engine plugins (e.g. Sherpa-ONNX) can load.
-Without it, voice engines are rejected at startup.
+Run the daemon:
+
+```bash
+./target/debug/typio --verbose
+```
+
+The shipping daemon is the Rust `typio` binary from `crates/typio-host`.
+The old Meson host build is no longer the contributor path. `flux` is still
+a native C library, so the setup keeps one Meson build tree for the sibling
+`flux` checkout until that library has a Cargo-native build.
 
 ## Prerequisites
 
 Install these from your system package manager:
 
-- Meson 1.0+, Ninja 1.10+
-- C23 compiler, `pkg-config`
-- `wayland-scanner`, `glslangValidator`
-- Wayland client libraries, `xkbcommon`
-- Vulkan, FreeType, HarfBuzz, fontconfig
-- `libsystemd` (sd-bus, required when `-Denable_systray=true`)
-- `libpipewire-0.3` (if `-Denable_voice=true`)
+- Rust 1.85+ and Cargo
+- Meson 1.0+ and Ninja 1.10+ for the sibling `flux` library
+- C23 compiler and `pkg-config`
+- Wayland client libraries and `xkbcommon`
+- Vulkan headers and loader
+- FreeType, HarfBuzz, fontconfig
+- PipeWire development headers for the `voice` feature
+- `glslangValidator` for the `flux` build
 
-Versions are not capped; the project is tested against latest Arch Linux and
-Fedora releases.
+Versions are not capped; the project is tested against current Arch Linux
+and Fedora releases.
 
-## Project dependencies
+## Repository Layout
 
-Two repositories are resolved automatically.  You do **not** need to install
-them system-wide.
+`typio-linux` lives under a `typio/` umbrella alongside the framework
+library, engine packages, and tools. `flux` is a sibling of `typio/`
+because the canvas library is shared with non-Typio projects:
 
-| Dependency | Resolution | Notes |
-|---|---|---|
-| **libtypio** | `pkg-config` first, else subproject wrap | Point `PKG_CONFIG_PATH` to a local `../libtypio/target/release` build, or let Meson clone and build it via cargo.  Runtime requires `LD_LIBRARY_PATH` to find the shared library. |
-| **flux** | sibling `../flux` or subproject wrap | Always built as **static** and linked into the binary.  If unresolved, candidate Panel rendering is disabled (stubs are used). |
-
-**Recommended layout** for active development:
-
+```text
+projects/
+├── typio/
+│   ├── libtypio/          # cargo --manifest-path ../libtypio/Cargo.toml
+│   ├── typio-engine-compose/    # Cargo: Latin + compose-key keyboard
+│   ├── typio-engine-rime/       # Meson: RIME-based Chinese keyboard
+│   ├── typio-engine-mozc/       # Meson: Mozc-based Japanese keyboard
+│   └── typio-linux/       # run typio-linux commands here
+└── flux/                  # meson setup ../../flux/build ../../flux
 ```
-parent/
-├── libtypio/          ← cargo build --release
-├── flux/              ← optional; auto-symlinked as subprojects/flux
-└── typio-linux/     ← run all commands from here
-```
 
-**Stale `subprojects/flux` symlink?**  If a sibling `../flux` checkout was
-moved or deleted, Meson may find a dangling symlink and refuse to fall back
-to the wrap.  Fix it:
+`typio-linux` has path dependencies on `../libtypio` and
+`../../flux/crates/flux-sys`, so those checkouts must exist for Cargo
+builds.
+
+## Build Dependencies
+
+Build `libtypio` first:
 
 ```bash
-rm -f subprojects/flux
-meson setup --reconfigure build
+cargo build --release --manifest-path ../libtypio/Cargo.toml
 ```
 
-## Local development workflow
+This produces `libtypio.so` in `../libtypio/target/release`. Keep that
+directory on `LD_LIBRARY_PATH` when running Cargo-built typio binaries and
+tests.
 
-For active work on libtypio you'll want a local checkout next to
-typio-linux and discover it via `pkg-config`.  When you're not
-touching libtypio internals, the wrap path (`subprojects/libtypio.wrap`)
-or a system install is enough.
-
-| Checkout | Purpose | Build system |
-|---|---|---|
-| `libtypio` | Core framework library (C ABI) | `cargo` |
-| `typio-engine-basic` | Fallback keyboard engine plugin | `cargo` |
-| `flux` | Candidate Panel renderer | Meson subproject (auto) |
-
-The commands below assume **sibling checkouts** and that you run every
-command from the `typio-linux` directory:
-
-```
-parent/
-├── libtypio/
-├── typio-engine-basic/
-└── typio-linux/   ← run all commands from here
-```
-
-If your layout differs, adjust the `../libtypio` paths accordingly.
-
-### 1. Build libtypio
+Build `flux` next. `meson setup` is one-time per checkout; `meson compile`
+rebuilds on demand:
 
 ```bash
-( cd ../libtypio && cargo build --release )
+meson setup ../../flux/build ../../flux
+meson compile -C ../../flux/build
 ```
 
-This produces `target/release/libtypio.so` and the public C headers under
-`include/typio/`.  It also generates `libtypio.pc` and
-`typio-engine-abi.pc` directly in `target/release/` so C consumers can
-discover the library via `pkg-config`.
+`flux-sys` reads `../../flux/build/meson-uninstalled/flux-uninstalled.pc`,
+generates bindings from the in-tree flux headers, and links the host against
+`../../flux/build/libflux.so`. If Cargo reports an undefined `flux_*` symbol,
+rebuild `flux` and make sure `LD_LIBRARY_PATH` includes `../../flux/build`.
 
-You do **not** need to install these files system-wide for local
-development. The rest of this guide points `PKG_CONFIG_PATH` and
-`LD_LIBRARY_PATH` directly at `../libtypio/target/release`. System
-installation (like `make install`) is only needed when packaging for
-distribution.
+## Build typio-linux
 
-### 2. Build typio-linux
-
-Point `PKG_CONFIG_PATH` at libtypio's `target/release` (where the `.pc`
-files were generated) before running Meson.  If the variable is not set
-and the package is not installed system-wide, Meson falls back to the
-`subprojects/libtypio.wrap` and clones+builds libtypio automatically.
+Build the debug daemon:
 
 ```bash
-export PKG_CONFIG_PATH="../libtypio/target/release:${PKG_CONFIG_PATH}"
-meson setup build --buildtype=debug -Denable_systray=true -Denable_voice=true
-ninja -C build
+export LD_LIBRARY_PATH="$PWD/../libtypio/target/release:$PWD/../../flux/build:${LD_LIBRARY_PATH}"
+cargo build -p typio-host --bin typio
 ```
 
-### 3. Run the daemon while iterating
-
-The built binary links against libtypio's `target/release/libtypio.so`, so
-you must add that **same** directory to the dynamic linker path at runtime:
+Build the release daemon:
 
 ```bash
-export LD_LIBRARY_PATH=../libtypio/target/release:${LD_LIBRARY_PATH}
-./build/src/typio --verbose
+export LD_LIBRARY_PATH="$PWD/../libtypio/target/release:$PWD/../../flux/build:${LD_LIBRARY_PATH}"
+cargo build --release -p typio-host --bin typio
 ```
 
-The verbose log reports how many engines were discovered at startup
-(`Host loader registered N engine(s) from …`).
+Cargo features:
+
+| Feature | Default | When to use it |
+|---|---:|---|
+| `wayland` | yes | Wayland input-method frontend and flux-backed Panel |
+| `systray` | yes | StatusNotifierItem tray over D-Bus via zbus |
+| `voice` | yes | PipeWire capture and the `voice_input` host capability |
+
+Disable default features only when isolating a non-Wayland Rust subsystem:
+
+```bash
+cargo test -p typio-host --no-default-features
+```
+
+## Run the Daemon
+
+Run the debug binary:
+
+```bash
+export LD_LIBRARY_PATH="$PWD/../libtypio/target/release:$PWD/../../flux/build:${LD_LIBRARY_PATH}"
+./target/debug/typio --verbose
+```
 
 For engine work, point the daemon at one or more manifest directories.
-`--engine-dir` is repeatable and takes highest precedence, so you can run
-freshly built engines straight from their build trees — no copy step, no
-symlinking. Pass the directory that **contains** `typio-engine-*.toml`; the
-scan is flat and does not recurse into subdirectories:
+`--engine-dir` is repeatable and takes highest precedence. Pass the
+directory that contains `typio-engine-*.toml`; scanning is flat and does not
+recurse. Manifest locations differ per engine — see the table below:
 
 ```bash
-./build/src/typio -v \
-  --engine-dir ../typio-engine-basic \
+./target/debug/typio -v \
+  --engine-dir ../typio-engine-compose \
+  --engine-dir ../typio-engine-rime/build \
   --engine-dir ../typio-engine-mozc/build
 ```
 
-Equivalently, set the colon-separated `$TYPIO_ENGINE_PATH` (PATH-style) once
-in your shell instead of repeating the flag:
+Equivalently, set the colon-separated `$TYPIO_ENGINE_PATH` once:
 
 ```bash
-export TYPIO_ENGINE_PATH="$PWD/../typio-engine-basic:$PWD/../typio-engine-mozc/build"
-./build/src/typio -v
+export TYPIO_ENGINE_PATH="$PWD/../typio-engine-compose:$PWD/../typio-engine-rime/build:$PWD/../typio-engine-mozc/build"
+./target/debug/typio -v
 ```
 
-The daemon auto-loads only from the system directory; `--engine-dir` and
-`$TYPIO_ENGINE_PATH` are explicit opt-ins, and no per-user directory is
-scanned by default (see [ADR-0025](../adr/0025-engine-discovery-search-path.md)).
+The daemon auto-loads only from the system engine directory. `--engine-dir`
+and `$TYPIO_ENGINE_PATH` are explicit development/test opt-ins; no per-user
+engine directory is scanned by default. See
+[ADR-0025](../adr/0025-engine-discovery-search-path.md).
 
-## Load a keyboard engine (optional)
+## Load a Keyboard Engine
 
-`typio` starts and runs without any keyboard engine — it just has nothing
-to convert keystrokes with, so it logs a "No keyboard engine is active"
-startup warning and falls back to a "No engine loaded" placeholder. To
-actually exercise input conversion (and to verify your build wires up the
-engine ABI correctly), build one engine and point the daemon at it.
+`typio` starts without a keyboard engine, but it has nothing to convert
+keystrokes with. Build an engine and pass its manifest directory to exercise
+input conversion.
 
-Any engine works; this uses `typio-engine-basic`, the zero-dependency
-fallback, as the concrete example. Cargo emits the engine executable and the
-repository contains `typio-engine-basic.toml`:
+The keyboard engines that ship as siblings under `typio/`:
+
+| Engine | Build system | Manifest path | Languages |
+|---|---|---|---|
+| `typio-engine-compose` | Cargo | `typio-engine-compose/typio-engine-compose.toml` | Latin with compose-key picker |
+| `typio-engine-rime` | Meson (needs `librime`, `libcurl`) | `typio-engine-rime/build/typio-engine-rime.toml` | Chinese (zh) |
+| `typio-engine-mozc` | Meson (needs Mozc depot) | `typio-engine-mozc/build/typio-engine-mozc.toml` | Japanese (ja) |
+
+Build the Cargo engine with `cargo build --release` and the Meson engines
+with `meson setup build && meson compile -C build` from their own roots,
+e.g.:
 
 ```bash
-( cd ../typio-engine-basic && cargo build --release )
+cargo build --release --manifest-path ../typio-engine-compose/Cargo.toml
+meson compile -C ../typio-engine-rime/build    # first time: meson setup ../typio-engine-rime/build ../typio-engine-rime
 ```
 
-This produces `../typio-engine-basic/target/release/typio-engine-basic`; the
-manifest declares the `basic` engine identifier exposed to users and
-configuration files.
-
-Point the daemon at that build directory with `--engine-dir` — no copy and no
-install step (see [Run the daemon while iterating](#3-run-the-daemon-while-iterating)):
+Then point the daemon at the directory that contains the manifest (note the
+`/build` suffix for Meson engines):
 
 ```bash
-./build/src/typio -v --engine-dir ../typio-engine-basic
+./target/debug/typio -v --engine-dir ../typio-engine-compose
+./target/debug/typio -v --engine-dir ../typio-engine-rime/build
 ```
 
-Different engine packages may keep their manifest in the repository root or
-generate it into `build`; pass the directory that contains the manifest.
+## Run Tests
 
-## Optional features
-
-| Option | Default | When you need it |
-|---|---|---|
-| `-Denable_systray=true` | `false` | System tray icon |
-| `-Denable_voice=true` | `false` | PipeWire audio capture and voice session infrastructure |
-
-`-Denable_voice=true` does **not** compile any voice engine into the binary.
-Voice engines (Whisper, Sherpa-ONNX, …) are separate engine packages loaded at
-runtime. This option only enables the host-side PipeWire capture and
-voice-session plumbing that those external engines plug into. Without this
-flag, voice engine manifests are rejected at load time with a
-`voice_input capability` error because the host does not advertise the
-required capability.
-
-## Engine discovery
-
-At startup `typio` scans a fixed, ordered list of directories and registers
-the **first** engine of each name it finds. Production builds scan only the
-system engine directory unless a development or test directory is enabled
-explicitly.
-
-| Order | Source | Path |
-|---|---|---|
-| 1 | `-E` / `--engine-dir DIR` | directories passed on the command line; repeatable, in the order given |
-| 2 | `$TYPIO_ENGINE_PATH` | colon-separated list, in listed order |
-| 3 | **System** | compile-time `<prefix>/<datadir>/typio/engines` (typically `/usr/share/typio/engines`) |
-
-In each directory it loads only files named `typio-engine-*.toml`, parses the
-manifest, and registers the declared engine argv with libtypio. The `name`
-field becomes the engine identifier exposed in config and the command-line interface (`basic`,
-`rime`, `sherpa`, …). A sibling `icons/` directory (`<engine-dir>/icons/`,
-freedesktop hicolor layout) is added to the tray's icon search path, so an
-engine can ship its own symbolic icons.
-
-Canonical rules (precedence, naming, icons) live in the
-[Engine Discovery Reference](../reference/engine-discovery.md).
-
-## Run tests
+Run the Cargo suite:
 
 ```bash
-meson test -C build --print-errorlogs
-```
-
-For isolated D-Bus runs (sanitizer and CI-like):
-
-```bash
-dbus-run-session -- meson test -C build --print-errorlogs
-```
-
-## Cargo-only workflow
-
-For Rust-only changes you can build and test `crates/typio-host` directly
-without going through Meson. The crate depends on the same two native
-libraries as the Meson build, so build them first:
-
-```bash
-( cd ../libtypio && cargo build --release )
-( cd ../flux && meson setup build && meson compile -C build )
-```
-
-Then run cargo with the native libraries on the loader path:
-
-```bash
-export LD_LIBRARY_PATH=../libtypio/target/release:../flux/build:${LD_LIBRARY_PATH}
-cargo build -p typio-host
+export LD_LIBRARY_PATH="$PWD/../libtypio/target/release:$PWD/../../flux/build:${LD_LIBRARY_PATH}"
 cargo test -p typio-host
 ```
 
-This is the fastest loop for unit/integration work on the Rust modules.
-The Meson build remains the source of truth for releases and for the
-shipping C daemon until ADR-0035 retires it.
+Run one test:
 
-## Icons in development
+```bash
+cargo test -p typio-host service::tests::hello_reports_protocol_and_capabilities
+```
 
-The system tray reports `IconName` and `IconThemePath` via D-Bus. During
-development `IconThemePath` automatically points to the source tree
-(`data/icons/hicolor/`), so most panels (GNOME, KDE, Waybar, …) will find
-custom icons without installation.
+See [Testing](testing.md) for test ownership rules and common Cargo test
+commands.
 
-If your panel does **not** respect `IconThemePath` and shows a missing-icon
-placeholder, install the icons into your user icon theme:
+## Install
+
+Install the already-built Cargo binary, systemd user service, icons, and
+example configs:
+
+```bash
+cargo build --release -p typio-host --bin typio
+cargo xtask install --prefix /usr/local
+```
+
+Preview the install plan without writing files:
+
+```bash
+cargo xtask install --prefix /usr/local --dry-run
+```
+
+Remove installed files:
+
+```bash
+cargo xtask uninstall --prefix /usr/local
+```
+
+## Icons in Development
+
+The system tray reports `IconName` and `IconThemePath` over D-Bus. During
+development, `IconThemePath` points to `data/icons/hicolor/`, so most panels
+find custom icons without installation.
+
+If the panel ignores `IconThemePath`, install the icons into your user icon
+theme:
 
 ```bash
 mkdir -p ~/.local/share/icons/hicolor/scalable/apps
@@ -278,28 +239,8 @@ cp data/icons/hicolor/scalable/apps/*.svg ~/.local/share/icons/hicolor/scalable/
 gtk-update-icon-cache ~/.local/share/icons/hicolor 2>/dev/null || true
 ```
 
-For system-wide installation use `meson install` (requires `sudo` if your
-prefix is `/usr` or `/usr/local`):
+## See Also
 
-```bash
-meson install -C build
-```
-
-## Meson options
-
-| Option | Default | Meaning |
-|--------|---------|---------|
-| `build_tests` | `true` | Build unit and integration tests |
-| `enable_wayland` | `true` | Enable the Wayland frontend |
-| `enable_systray` | `false` | Enable StatusNotifierItem support (requires libsystemd / sd-bus) |
-| `enable_voice` | `false` | Enable PipeWire audio capture and voice session infrastructure |
-| `enable_asan` | `false` | Enable AddressSanitizer |
-| `enable_ubsan` | `false` | Enable UndefinedBehaviorSanitizer |
-
-## Project layout
-
-For a tour of the documentation structure, see [docs/index.md](../index.md).
-
-## Submitting changes
-
-See the [Pull Request Checklist](../../CONTRIBUTING.md#pull-request-checklist) in `CONTRIBUTING.md`.
+- [Testing](testing.md)
+- [Code Style](code-style.md)
+- [Engine Discovery Reference](../reference/engine-discovery.md)

@@ -32,8 +32,7 @@ use protocols::virtual_keyboard_v1::zwp_virtual_keyboard_manager_v1::ZwpVirtualK
 struct State;
 
 fn main() -> ExitCode {
-    let wayland_display =
-        env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".to_string());
+    let wayland_display = env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".to_string());
     eprintln!("typio-host (Phase 0 spike): WAYLAND_DISPLAY=\"{wayland_display}\"");
 
     let conn = match Connection::connect_to_env() {
@@ -59,10 +58,7 @@ fn main() -> ExitCode {
 
     let im_manager: Result<ZwpInputMethodManagerV2, BindError> = globals.bind(&qh, 1..=1, ());
     match &im_manager {
-        Ok(p) => eprintln!(
-            "OK:   bound zwp_input_method_manager_v2 v{}",
-            p.version()
-        ),
+        Ok(p) => eprintln!("OK:   bound zwp_input_method_manager_v2 v{}", p.version()),
         Err(BindError::NotPresent) => {
             eprintln!("FAIL: compositor does not advertise zwp_input_method_manager_v2");
             eprintln!("      (input-method-v2 is required; check your compositor config)");
@@ -113,14 +109,14 @@ fn print_globals(contents: &GlobalListContents) {
         ),
         ("wl_seat", "seat (required)"),
         ("ext_foreign_toplevel_list_v1", "foreign-toplevel (future)"),
-        ("wp_fractional_scale_manager_v1", "fractional-scale (future)"),
+        (
+            "wp_fractional_scale_manager_v1",
+            "fractional-scale (future)",
+        ),
         ("wp_viewporter", "viewporter (future)"),
     ];
     let list = contents.clone_list();
-    eprintln!(
-        "Global list from compositor ({} advertised):",
-        list.len()
-    );
+    eprintln!("Global list from compositor ({} advertised):", list.len());
     for (iface, why) in interesting {
         let versions: Vec<u32> = list
             .iter()

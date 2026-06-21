@@ -1,9 +1,5 @@
 //! Capability negotiation between the host and engine manifests.
 //!
-//! Replaces the static lookup table in `src/engine_loader.c` (the
-//! `TYPIOD_HOST_CAPABILITIES` array + `typio_host_supports` /
-//! `typio_negotiate_capabilities` helpers).
-//!
 //! The host advertises a static set of capability names it can fulfil for an
 //! engine. An engine's `required` list must be a subset of this set, otherwise
 //! the manifest is rejected. Missing `optional` capabilities are silently
@@ -14,8 +10,7 @@ use std::collections::HashSet;
 /// Capabilities the host can offer to engines.
 ///
 /// Default is the standard keyboard-IM capability set. Voice support adds
-/// `voice_input` and `continuous_voice` (matches the `#ifdef HAVE_VOICE`
-/// block in the C version).
+/// `voice_input` and `continuous_voice`.
 #[derive(Debug, Clone)]
 pub struct HostCapabilities {
     caps: HashSet<String>,
@@ -52,7 +47,6 @@ impl HostCapabilities {
     }
 
     /// Add the voice capability set (`voice_input`, `continuous_voice`).
-    /// Mirrors the `HAVE_VOICE` compile-time flag in the C version.
     pub fn with_voice(mut self) -> Self {
         self.caps.insert("voice_input".to_string());
         self.caps.insert("continuous_voice".to_string());

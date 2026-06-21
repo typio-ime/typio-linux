@@ -17,25 +17,39 @@
 //! ```
 
 use std::ffi::c_void;
-use std::os::raw::{c_char, c_int};
+use std::os::raw::c_char;
 use std::ptr;
 
 use flux_sys::{
-    flux_arena, flux_arena_destroy, flux_arena_init, flux_arena_reset,
-    flux_canvas, flux_canvas_begin, flux_canvas_destroy, flux_canvas_desc,
-    flux_canvas_end, flux_canvas_fill_rrect,
-    flux_color_rgba,
-    flux_device, flux_device_create, flux_device_desc, flux_device_release,
-    flux_device_vk_instance, flux_frame, flux_frame_begin_desc,
-    flux_frame_present, flux_get_last_error, flux_error_info,
-    flux_result, flux_struct_type, flux_surface, flux_surface_begin_frame,
-    flux_surface_create, flux_surface_desc, flux_surface_release,
-    flux_text, flux_text_create, flux_text_desc, flux_text_destroy,
-    flux_text_draw, flux_text_family, flux_text_style,
+    flux_arena, flux_arena_destroy, flux_arena_init, flux_arena_reset, flux_canvas,
+    flux_canvas_begin, flux_canvas_desc, flux_canvas_destroy, flux_canvas_end,
+    flux_canvas_fill_rrect, flux_color_rgba, flux_device, flux_device_create, flux_device_desc,
+    flux_device_release, flux_device_vk_instance, flux_error_info, flux_frame,
+    flux_frame_begin_desc, flux_frame_present, flux_frame_submit, flux_get_last_error, flux_result,
+    flux_struct_type, flux_surface, flux_surface_begin_frame, flux_surface_create,
+    flux_surface_desc, flux_surface_release, flux_text, flux_text_create, flux_text_desc,
+    flux_text_destroy, flux_text_draw, flux_text_family, flux_text_style,
+};
+use wayland_sys::{
+    client::{wl_proxy, wl_proxy_marshal_array},
+    common::wl_argument,
 };
 
 use flux_struct_type as FType;
 use flux_text_family as FontFamily;
+
+/// Frame-acquire timeout for panel rendering (200 ms). Short enough that
+/// a stuck `vkAcquireNextImageKHR` (e.g. popup surface not yet configured
+/// by the compositor) fails fast instead of blocking the main loop past
+/// the watchdog's 3-second stuck threshold.
+const PANEL_FRAME_TIMEOUT_NS: u64 = 200_000_000;
+const PANEL_PADDING: f32 = 8.0;
+const PANEL_ROW_HEIGHT: f32 = 24.0;
+const CANDIDATE_FONT_SIZE: f32 = 16.0;
+const CANDIDATE_ITEM_X_PADDING: f32 = 5.0;
+const CANDIDATE_ITEM_GAP: f32 = 8.0;
+const CANDIDATE_NUMBER_FONT_SIZE: f32 = 11.0;
+const CANDIDATE_NUMBER_GAP: f32 = 4.0;
 
 /// A candidate panel backed by flux on a raw Wayland surface.
 ///
@@ -51,6 +65,7 @@ pub struct FluxPanel {
     arena: flux_arena,
     width: u32,
     height: u32,
+    scale: f32,
     // Keep the raw wl_surface alive for the panel's lifetime.
     _wl_surface: *mut c_void,
 }
@@ -102,9 +117,7 @@ impl FluxPanel {
             c"VK_KHR_surface".as_ptr(),
             c"VK_KHR_wayland_surface".as_ptr(),
         ];
-        let device_exts: [*const c_char; 1] = [
-            c"VK_KHR_swapchain".as_ptr(),
-        ];
+        let device_exts: [*const c_char; 1] = [c"VK_KHR_swapchain".as_ptr()];
         let mut device_desc: flux_device_desc = std::mem::zeroed();
         device_desc.type_ = FType::FLUX_TYPE_DEVICE_DESC;
         device_desc.required_instance_extensions = instance_exts.as_ptr();
@@ -188,8 +201,21 @@ impl FluxPanel {
             arena,
             width,
             height,
+            scale: 1.0,
             _wl_surface: wl_surface,
         })
+    }
+
+    /// Set the HiDPI scale factor for rendering.
+    pub fn set_scale(&mut self, scale: f32) {
+        if (self.scale - scale).abs() < 0.01 {
+            return;
+        }
+        self.scale = scale;
+        unsafe {
+            flux_sys::flux_canvas_set_scale(self.canvas, scale);
+            flux_sys::flux_text_set_scale(self.text, scale);
+        }
     }
 
     /// Draw candidate strings with the selected one highlighted.
@@ -197,7 +223,11 @@ impl FluxPanel {
         unsafe {
             flux_arena_reset(&mut self.arena);
 
-            let frame_desc: flux_frame_begin_desc = std::mem::zeroed();
+            let frame_desc = flux_frame_begin_desc {
+                type_: FType::FLUX_TYPE_FRAME_BEGIN_DESC,
+                next: ptr::null(),
+                timeout_ns: PANEL_FRAME_TIMEOUT_NS,
+            };
             let mut frame: *mut flux_frame = ptr::null_mut();
             let r = flux_surface_begin_frame(self.surface, &frame_desc, &mut frame);
             if !flux_result_is_ok(r) {
@@ -210,62 +240,179 @@ impl FluxPanel {
                 return;
             }
 
-            let row_height: f32 = 24.0;
-            let padding: f32 = 8.0;
-            let font_size: f32 = 16.0;
             let text_color = flux_color_rgba(240, 240, 240, 255);
+            let number_color = flux_color_rgba(145, 145, 152, 255);
             let highlight = flux_color_rgba(56, 84, 160, 255);
 
             let style = flux_text_style {
-                size_px: font_size,
+                size_px: CANDIDATE_FONT_SIZE,
                 weight: 400.0,
                 color: text_color,
                 family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
             };
+            let number_style = flux_text_style {
+                size_px: CANDIDATE_NUMBER_FONT_SIZE,
+                weight: 400.0,
+                color: number_color,
+                family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+            };
+
+            let mut current_x = PANEL_PADDING;
+            let y = PANEL_PADDING;
 
             for (i, candidate) in candidates.iter().enumerate() {
-                let y = padding + i as f32 * row_height;
+                let number = candidate_number_label(i);
+                let number_bytes = number.as_bytes();
+                let number_metrics = flux_sys::flux_text_measure(
+                    self.text,
+                    number_bytes.as_ptr() as *const _,
+                    number_bytes.len(),
+                    &number_style,
+                );
+                let bytes = candidate.as_bytes();
+                let metrics = flux_sys::flux_text_measure(
+                    self.text,
+                    bytes.as_ptr() as *const _,
+                    bytes.len(),
+                    &style,
+                );
+
+                let item_width = CANDIDATE_ITEM_X_PADDING * 2.0
+                    + number_metrics.width
+                    + CANDIDATE_NUMBER_GAP
+                    + metrics.width;
+                let text_top = y + (PANEL_ROW_HEIGHT - metrics.height).max(0.0) / 2.0;
+                let number_top = text_top + metrics.baseline - number_metrics.baseline;
 
                 if i == selected {
                     flux_canvas_fill_rrect(
                         self.canvas,
                         flux_sys::flux_rect {
-                            x: 2.0,
+                            x: current_x,
                             y,
-                            w: self.width as f32 - 4.0,
-                            h: row_height,
+                            w: item_width,
+                            h: PANEL_ROW_HEIGHT,
                         },
                         4.0,
                         highlight,
                     );
                 }
 
-                let bytes = candidate.as_bytes();
                 flux_text_draw(
                     self.text,
                     self.canvas,
                     &mut self.arena,
-                    padding,
-                    y + font_size,
+                    current_x + CANDIDATE_ITEM_X_PADDING,
+                    number_top,
+                    number_bytes.as_ptr() as *const _,
+                    number_bytes.len(),
+                    &number_style,
+                );
+                flux_text_draw(
+                    self.text,
+                    self.canvas,
+                    &mut self.arena,
+                    current_x
+                        + CANDIDATE_ITEM_X_PADDING
+                        + number_metrics.width
+                        + CANDIDATE_NUMBER_GAP,
+                    text_top,
                     bytes.as_ptr() as *const _,
                     bytes.len(),
                     &style,
                 );
+
+                current_x += item_width + CANDIDATE_ITEM_GAP;
             }
 
             flux_canvas_end(self.canvas);
+            let r = flux_frame_submit(frame);
+            if !flux_result_is_ok(r) {
+                return;
+            }
             flux_frame_present(frame);
         }
     }
 
     /// Resize the panel surface.
     pub fn resize(&mut self, width: u32, height: u32) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let changed = self.width != width || self.height != height;
         self.width = width;
         self.height = height;
-        if !self.surface.is_null() {
+        if changed && !self.surface.is_null() {
             unsafe {
                 flux_sys::flux_surface_resize(self.surface, width, height);
             }
+        }
+    }
+
+    /// Ensure the surface is big enough for `candidate_count` rows.
+    /// Only calls `resize` when the computed dimensions differ from the
+    /// current ones, avoiding unnecessary swapchain recreations.
+    pub fn ensure_candidate_size(&mut self, candidates: &[String]) {
+        let mut total_width: f32 = PANEL_PADDING;
+
+        let style = flux_sys::flux_text_style {
+            size_px: CANDIDATE_FONT_SIZE,
+            weight: 400.0,
+            color: unsafe { flux_sys::flux_color_rgba(240, 240, 240, 255) },
+            family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+        };
+        let number_style = flux_sys::flux_text_style {
+            size_px: CANDIDATE_NUMBER_FONT_SIZE,
+            weight: 400.0,
+            color: unsafe { flux_sys::flux_color_rgba(145, 145, 152, 255) },
+            family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+        };
+
+        for (i, candidate) in candidates.iter().enumerate() {
+            let number = candidate_number_label(i);
+            let number_bytes = number.as_bytes();
+            let number_metrics = unsafe {
+                flux_sys::flux_text_measure(
+                    self.text,
+                    number_bytes.as_ptr() as *const _,
+                    number_bytes.len(),
+                    &number_style,
+                )
+            };
+            let bytes = candidate.as_bytes();
+            let metrics = unsafe {
+                flux_sys::flux_text_measure(
+                    self.text,
+                    bytes.as_ptr() as *const _,
+                    bytes.len(),
+                    &style,
+                )
+            };
+            let item_width = CANDIDATE_ITEM_X_PADDING * 2.0
+                + number_metrics.width
+                + CANDIDATE_NUMBER_GAP
+                + metrics.width;
+            total_width += item_width + CANDIDATE_ITEM_GAP;
+        }
+
+        if !candidates.is_empty() {
+            total_width = total_width - CANDIDATE_ITEM_GAP + PANEL_PADDING;
+        } else {
+            total_width += PANEL_PADDING;
+        }
+
+        let desired_width = (total_width as u32).max(10);
+        let desired_height = (PANEL_PADDING * 2.0 + PANEL_ROW_HEIGHT).ceil() as u32;
+
+        let phys_width = (desired_width as f32 * self.scale).ceil() as u32;
+        let phys_height = (desired_height as f32 * self.scale).ceil() as u32;
+        self.resize(phys_width, phys_height);
+    }
+
+    /// Hide the panel by detaching the current Wayland buffer.
+    pub fn hide(&mut self) {
+        unsafe {
+            wl_surface_detach_and_commit(self._wl_surface);
         }
     }
 }
@@ -290,185 +437,35 @@ impl Drop for FluxPanel {
     }
 }
 
+fn candidate_number_label(index: usize) -> String {
+    match index {
+        0..=8 => (index + 1).to_string(),
+        9 => "0".to_string(),
+        _ => (index + 1).to_string(),
+    }
+}
+
 // ── Raw Wayland surface creation via wayland-sys ──────────────────────────
 
-/// Callback context for registry global events.
-struct RegistryCtx {
-    compositor_name: u32,
-    compositor_version: u32,
-}
-
-extern "C" fn registry_global(
-    data: *mut c_void,
-    _registry: *mut c_void,
-    name: u32,
-    interface: *const c_char,
-    version: u32,
-) {
-    let ctx = unsafe { &mut *(data as *mut RegistryCtx) };
-    let iface = unsafe { std::ffi::CStr::from_ptr(interface) };
-    if iface.to_str().unwrap_or("") == "wl_compositor" {
-        ctx.compositor_name = name;
-        ctx.compositor_version = version.min(4);
-    }
-}
-
-/// Create a wl_surface via raw libwayland-client C API.
-///
-/// Uses direct extern "C" FFI to libwayland-client.so (already loaded
-/// by wayland-client). The wl_display pointer must be from the same
-/// connection the input-method frontend uses.
-unsafe fn raw_create_wl_surface(
-    wl_display: *mut c_void,
-) -> Result<*mut c_void, String> {
-    // Get the registry.
-    let registry = raw_get_registry(wl_display);
-    if registry.is_null() {
-        return Err("wl_display_get_registry failed".into());
+unsafe fn wl_surface_detach_and_commit(wl_surface: *mut c_void) {
+    if wl_surface.is_null() {
+        return;
     }
 
-    // Set up the registry listener to find wl_compositor.
-    let mut ctx = RegistryCtx {
-        compositor_name: 0,
-        compositor_version: 0,
-    };
-
-    let listener = WlRegistryListener {
-        global: Some(registry_global),
-        global_remove: None,
-    };
-
-    wl_proxy_add_listener(
-        registry,
-        &listener,
-        &mut ctx as *mut RegistryCtx as *mut c_void,
-    );
-
-    // Roundtrip to receive the global events.
-    wl_display_roundtrip(wl_display);
-
-    if ctx.compositor_name == 0 {
-        return Err("compositor not found in registry".into());
+    let surface = wl_surface as *mut wl_proxy;
+    let mut attach_args = [
+        wl_argument { o: ptr::null() },
+        wl_argument { i: 0 },
+        wl_argument { i: 0 },
+    ];
+    unsafe {
+        wl_proxy_marshal_array(surface, 1, attach_args.as_mut_ptr());
     }
 
-    // Bind the compositor via the exported interface data symbol.
-    let compositor = raw_registry_bind(
-        registry,
-        ctx.compositor_name,
-        &wl_compositor_interface as *const _ as *const c_void,
-        ctx.compositor_version,
-    );
-
-    if compositor.is_null() {
-        return Err("wl_registry_bind for compositor failed".into());
+    let mut commit_args: [wl_argument; 0] = [];
+    unsafe {
+        wl_proxy_marshal_array(surface, 6, commit_args.as_mut_ptr());
     }
-
-    // Create the surface.
-    let surface = raw_create_surface(compositor);
-    if surface.is_null() {
-        return Err("wl_compositor_create_surface failed".into());
-    }
-
-    // Commit the surface + roundtrip so the compositor processes it
-    // before Vulkan queries presentation support.
-    #[link(name = "wayland-client")]
-    extern "C" {
-        fn wl_surface_damage(
-            surface: *mut c_void,
-            x: c_int,
-            y: c_int,
-            width: c_int,
-            height: c_int,
-        );
-    }
-    // We can't commit without a buffer attached, but we can dispatch
-    // pending events so the compositor knows about the surface.
-    wl_display_roundtrip(wl_display);
-
-    Ok(surface)
-}
-
-// Direct FFI to libwayland-client.so. Protocol-level functions like
-// wl_compositor_create_surface are inline in the C headers and NOT
-// exported from the shared library — we reimplement them using the
-// low-level wl_proxy_marshal_constructor.
-#[repr(C)]
-struct WlRegistryListener {
-    global: Option<extern "C" fn(*mut c_void, *mut c_void, u32, *const c_char, u32)>,
-    global_remove: Option<extern "C" fn(*mut c_void, *mut c_void, u32)>,
-}
-
-#[link(name = "wayland-client")]
-extern "C" {
-    fn wl_display_connect(name: *const c_char) -> *mut c_void;
-    fn wl_display_roundtrip(display: *mut c_void) -> c_int;
-    fn wl_proxy_marshal_constructor(
-        proxy: *mut c_void,
-        opcode: u32,
-        interface: *const c_void,
-        ...
-    ) -> *mut c_void;
-    fn wl_proxy_marshal_constructor_versioned(
-        proxy: *mut c_void,
-        opcode: u32,
-        interface: *const c_void,
-        version: u32,
-        ...
-    ) -> *mut c_void;
-    fn wl_proxy_add_listener(
-        proxy: *mut c_void,
-        listener: *const WlRegistryListener,
-        data: *mut c_void,
-    ) -> c_int;
-
-    // Data symbols — interface metadata structs exported by libwayland.
-    static wl_compositor_interface: c_void;
-    static wl_registry_interface: c_void;
-    static wl_surface_interface: c_void;
-}
-
-/// Reimplementation of the inline `wl_display_get_registry`.
-unsafe fn raw_get_registry(display: *mut c_void) -> *mut c_void {
-    wl_proxy_marshal_constructor(
-        display,
-        1, // WL_DISPLAY_GET_REGISTRY opcode
-        &wl_registry_interface as *const _ as *const c_void,
-        ptr::null::<c_void>(),
-    )
-}
-
-/// Reimplementation of the inline `wl_compositor_create_surface`.
-unsafe fn raw_create_surface(compositor: *mut c_void) -> *mut c_void {
-    wl_proxy_marshal_constructor(
-        compositor,
-        0, // WL_COMPOSITOR_CREATE_SURFACE opcode
-        &wl_surface_interface as *const _ as *const c_void,
-        ptr::null::<c_void>(),
-    )
-}
-
-/// Reimplementation of the inline `wl_registry_bind`.
-unsafe fn raw_registry_bind(
-    registry: *mut c_void,
-    name: u32,
-    interface: *const c_void,
-    version: u32,
-) -> *mut c_void {
-    // The bind request signature is "usun": name(uint), interface(string),
-    // version(uint), new_id(created by constructor).
-    // We must pass the interface NAME string (first field of wl_interface).
-    let iface_name = *(interface as *const *const c_char);
-
-    wl_proxy_marshal_constructor_versioned(
-        registry,
-        0, // WL_REGISTRY_BIND opcode
-        interface,
-        version,
-        name,
-        iface_name,
-        version,
-        ptr::null::<c_void>(),
-    )
 }
 
 // ── Vulkan Wayland surface creation ───────────────────────────────────────
@@ -547,6 +544,13 @@ fn flux_last_error_string(function: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn candidate_number_label_matches_selection_keys() {
+        let labels: Vec<_> = (0..10).map(candidate_number_label).collect();
+        assert_eq!(labels, ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]);
+        assert_eq!(candidate_number_label(10), "11");
+    }
 
     #[test]
     fn flux_last_error_string_is_readable() {

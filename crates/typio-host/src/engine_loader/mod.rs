@@ -34,10 +34,8 @@ pub mod manifest;
 
 use std::path::{Path, PathBuf};
 
-use typio::core::engine::{
-    BackendPreference, EngineCapabilities, EngineInfo, EngineType,
-};
 use typio::core::engine::backend::{process::ProcessBackend, EngineBackend};
+use typio::core::engine::{BackendPreference, EngineCapabilities, EngineInfo, EngineType};
 use typio::core::registry::EngineRegistry;
 
 use caps::HostCapabilities;
@@ -75,8 +73,7 @@ impl EngineLoader {
     }
 
     /// Construct a loader with the keyboard-IM caps plus voice caps
-    /// (`voice_input`, `continuous_voice`). Mirrors the `HAVE_VOICE=true`
-    /// meson option in the C version.
+    /// (`voice_input`, `continuous_voice`).
     pub fn with_voice() -> Self {
         Self {
             caps: HostCapabilities::default().with_voice(),
@@ -238,11 +235,7 @@ impl EngineLoader {
         Ok(())
     }
 
-    fn build_engine_info(
-        &self,
-        manifest: &EngineManifest,
-        engine_type: EngineType,
-    ) -> EngineInfo {
+    fn build_engine_info(&self, manifest: &EngineManifest, engine_type: EngineType) -> EngineInfo {
         EngineInfo {
             name: manifest.name.clone(),
             display_name: manifest
@@ -428,7 +421,9 @@ optional = ["prediction"]
 
         let mut loader = EngineLoader::new();
         let mut registry = EngineRegistry::new();
-        loader.load_single(&mut registry, &path).expect("first load");
+        loader
+            .load_single(&mut registry, &path)
+            .expect("first load");
 
         // Second load of the same name → AlreadyExists surfaced as Skip.
         let err = loader.load_single(&mut registry, &path).unwrap_err();
@@ -504,7 +499,11 @@ optional = ["prediction"]
         fs::create_dir(first.path().join("icons")).unwrap();
         fs::create_dir(second.path().join("icons")).unwrap();
         write_manifest(first.path(), "a", &VALID_KEYBOARD_TOML.replace("demo", "a"));
-        write_manifest(second.path(), "b", &VALID_KEYBOARD_TOML.replace("demo", "b"));
+        write_manifest(
+            second.path(),
+            "b",
+            &VALID_KEYBOARD_TOML.replace("demo", "b"),
+        );
 
         let mut loader = EngineLoader::new();
         let mut registry = EngineRegistry::new();

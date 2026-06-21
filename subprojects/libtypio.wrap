@@ -1,7 +1,0 @@
-[wrap-git]
-url = https://github.com/typio-ime/libtypio.git
-revision = v0.4.0
-depth = 1
-
-[provide]
-dependency_names = libtypio, typio-engine-abi

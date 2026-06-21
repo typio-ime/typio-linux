@@ -1,31 +1,42 @@
 [package]
 name = "typio-host"
 version = "0.4.0-dev"
-description = "Typio Wayland input-method host (Rust port in progress)"
+description = "Typio Wayland input-method host"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["wayland", "systray", "voice"]
+wayland = ["dep:wayland-client", "dep:wayland-scanner", "dep:wayland-backend", "dep:xkbcommon", "dep:flux-sys", "dep:wayland-sys"]
+systray = ["dep:zbus", "dep:ab_glyph", "dep:rustybuzz", "dep:fontdb"]
+voice = ["dep:pipewire", "dep:libspa"]
+
 [dependencies]
-wayland-client.workspace = true
-wayland-scanner.workspace = true
-wayland-backend.workspace = true
+wayland-client = { optional = true, version = "0.31" }
+wayland-scanner = { workspace = true, optional = true }
+wayland-backend = { workspace = true, optional = true }
 bitflags.workspace = true
 libtypio.workspace = true
 typio-abi = { workspace = true }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+clap.workspace = true
 inotify.workspace = true
 nix.workspace = true
 calloop.workspace = true
-zbus.workspace = true
+zbus = { workspace = true, optional = true }
 libc.workspace = true
-xkbcommon.workspace = true
-ab_glyph.workspace = true
-flux-sys.workspace = true
-wayland-sys.workspace = true
+xkbcommon = { workspace = true, optional = true }
+ab_glyph = { workspace = true, optional = true }
+flux-sys = { workspace = true, optional = true }
+wayland-sys = { workspace = true, optional = true }
+rustybuzz = { version = "0.20.1", optional = true }
+fontdb = { version = "0.23.0", optional = true }
+pipewire = { version = "0.10.0", optional = true }
+libspa = { version = "0.10.0", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

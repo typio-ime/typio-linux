@@ -109,6 +109,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pure resolution is in [`host_selection_resolve`]; the actual commit
   is one line at the call site once input-context integration lands.
 
+- **Rust Wayland event loop completion (`typio_host::app`).** Phase 8
+  wiring. The Rust event loop now uses the canonical Wayland read
+  sequence (`prepare_read_loop` → `poll` → `read_and_dispatch` or cancel)
+  and multiplexes the Wayland display fd, UDS IPC fd, repeat timer fd,
+  and config watcher fds in one `poll()` call. A `ConfigWatcher` instance
+  watches `core.toml`, `platform.toml`, and the `engines/` subdirectory;
+  when the debounce timer fires the daemon calls
+  `typio_instance_reload_config`, re-syncs the `StateController`, emits a
+  `runtime.changed` IPC notification, and refreshes the tray snapshot.
+
+- **Rust Wayland frontend watchdog (`typio_host::watchdog`).** Port of
+  `src/wayland/watchdog.c`. A background thread samples loop-stage
+  progress at ~1 Hz while armed and kills the process with `SIGKILL` if
+  the heartbeat, stage, and stage timestamp stay unchanged in a
+  non-restful stage for longer than the stuck threshold. Includes unit
+  tests for start/stop, arming/disarming, stall detection, restful-stage
+  exemption, and heartbeat prevention.
+
+  Watchdog stage tracking is wired into `run_with_wayland` so each loop
+  phase (flush, prepare-read, dispatch-pending, poll, read-events,
+  aux-io, panel-update, repeat, config-reload) reports its stage to the
+  watchdog and the end-of-tick heartbeat resets to `Idle`.
+
+- **Rust panel coordinator (`typio_host::panel_coordinator`).** Port of
+  `src/wayland/panel_coordinator.c`. Tracks the single positioned popup
+  surface owner, anchor generation/readiness, caret-rect presence, and
+  pending indicator/voice status UI. Implements the anchor probe
+  (empty preedit + commit), the anchor timeout deadline, and the caret
+  fallback: when a positioned popup times out without a fresh rectangle,
+  the coordinator trusts a previously cached caret rect rather than
+  dropping the UI.
+
+  The coordinator is owned by `InputMethodState`; `focus_in` and
+  `reactivate` reset the anchor generation and send the probe; the
+  `text_input_rectangle` event marks the anchor ready; and the event
+  loop uses the remaining anchor deadline to bound the `poll()` timeout.
+
+- **Retire C Wayland event loop and watchdog.** Deleted
+  `src/wayland/event_loop.c` and `src/wayland/watchdog.c`; the Rust
+  event loop and watchdog are now authoritative. Meson compatibility
+  stubs (`src/wayland/event_loop_stub.c` and
+  `src/wayland/watchdog_stub.c`) keep the legacy C daemon linkable and
+  the component-test suite passing while the bilingual migration
+  finishes.
+
 - **Cargo test suite + headless daemon integration tests.** Added
   `app.rs` pure-helper tests (CLI parsing, engine registration via the
   C ABI, tray snapshot building, signal flags), `input_method.rs`
@@ -461,6 +506,173 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still takes a `*mut TypioInstance` back-pointer for callbacks, which
   needs replacing with a Rust closure/trait object before the Rust host
   can fully avoid constructing `TypioInstance`.
+
+### Removed
+
+- **Legacy C host and Meson scaffold.** The root `src/`, root `tests/`,
+  Meson project files, generated-header template, and subproject wraps are
+  removed. The Rust `typio-host` crate is now the only typio-linux host
+  build, test, and install surface; `cargo xtask install` handles package
+  staging and installation.
+
+### Fixed
+
+- **Auto-repeat for engine-consumed keys (Backspace, etc.).** When an
+  active engine consumed a key — e.g. a pinyin engine handling Backspace
+  to delete the last preedit character — the repeat timer was explicitly
+  stopped and there was no path for repeats to re-enter the engine, so a
+  long press only ever produced one keystroke. The router now records
+  the consumed key in `Engine` repeat mode, arms the timer the same way
+  the forwarded-key path does, and re-dispatches each repeat tick with
+  `is_repeat: true` (previously hardcoded `false`) so the engine can
+  keep deleting/composing one step per interval. The forwarded-key path
+  keeps its existing `Forward` mode behaviour.
+
+- **Compositor repeat-info was ignored.** The grab's `RepeatInfo` event
+  was surfaced as a lifecycle callback that no daemon subscriber ever
+  consumed, so the host always fell back to the X-server defaults
+  (600 ms delay / 30 Hz). The compositor-provided `(rate, delay)` is now
+  stored on `InputMethodState` and consulted when arming the timer via
+  the new `repeat_timer::resolve_repeat_params` helper. A compositor
+  rate of `0` (the protocol signal for "do not repeat") now correctly
+  suppresses auto-repeat entirely.
+
+- **Candidate popup layout and clearing.** The flux-backed candidate
+  popup now centers text with measured glyph metrics, detaches the
+  Wayland buffer when hidden so stale black popup shadows do not remain
+  beside the caret, and renders smaller muted number labels before each
+  candidate.
+
+- **Virtual-keyboard protocol error 0 (`no_keymap`) on first forwarded
+  key.** The grab's `Keymap` event loaded the compositor keymap into
+  local xkbcommon state but never forwarded it to the
+  `zwp_virtual_keyboard_v1`. As soon as the engine declined a key and
+  the host called `forward_key`, the compositor rejected the request
+  with `error 0: 'key' sent before keymap` and tore down the
+  connection. The grab handler now dups the keymap fd and pushes a
+  matching `vk.keymap` request before any `key`/`modifiers` requests
+  can be issued, so the unified grab + vk-keymap resource described in
+  ADR-0003 actually reaches `Ready`.
+
+- **Runaway auto-repeat after a single key press.** The grab's `Key`
+  event handler only queued press events into `pending_key`, so the
+  event-loop driver's release branch — which calls `timer.stop()` and
+  forwards the release to the focused app — was dead code. The repeat
+  timer therefore stayed armed forever and re-sent the last forwarded
+  key on every interval. Release events are now queued alongside
+  presses, so the timer is stopped and releases reach the virtual
+  keyboard as expected.
+
+- **Modifier shortcuts (Ctrl-C, Ctrl-V, …) arrived as bare keys.**
+  The grab's `Modifiers` event updated local xkb state but never called
+  `vk.modifiers`, so the virtual keyboard always reported an empty
+  modifier mask. Forwarded keys reached the focused app without their
+  Ctrl/Alt/Shift context. The handler now mirrors the grab's modifier
+  mask to the vk on every `Modifiers` event (vk keymap is guaranteed to
+  be set by then since the grab sends `Keymap` first).
+
+- **Composition preedit was discarded, leaving only candidates.**
+  `on_composition` built the preedit string from `TypioComposition`
+  segments but stored only `(candidates, selected)` in
+  `PENDING_COMPOSITION` — the preedit was thrown on the floor. To
+  compensate, `drain_composition` then used `candidates.first()` as
+  the preedit, which produced no inline preedit whenever the engine
+  emitted preedit without candidates yet (the common pinyin case
+  after a single keystroke). The slot now stores
+  `(preedit, candidates, selected)` and `drain_composition` flushes
+  the real preedit to the compositor while candidates drive the
+  popup independently.
+
+- **Second segfault on Ctrl+C shutdown.** The first drop-order fix
+  (`panel` before `state`) was necessary but not sufficient:
+  `InputMethodFrontend.conn` (the Wayland `Connection`) was still
+  declared before `panel`, so the display socket was closed before
+  libflux's teardown finished. The full reorder is now `panel` →
+  `state` → `queue` → `conn`, so libflux never touches a closed
+  connection.
+
+- **Duplicate engine registration warning from `.installed.toml`
+  shadow files.** The Meson build of typio-engine-rime generates both
+  `typio-engine-rime.toml` (source paths) and
+  `typio-engine-rime.installed.toml` (install paths) in the same
+  `build/` directory; the loader loaded both and tripped
+  `TypioErrorAlreadyExists`. `is_manifest_filename` now excludes the
+  `.installed.toml` variant.
+
+### Added
+
+- **Ctrl+Shift engine-switch chord.** The pure
+  `chord_should_switch_engine` predicate existed in
+  `keyboard_policy` but was never called from the main loop, so the
+  standard Linux IME switch shortcut did nothing. `KeyboardRouter`
+  now tracks the gesture (`saw_non_modifier`, `already_triggered`)
+  and exposes `take_switch_chord_fired`, which `App::run` drains
+  after every keypress: when the chord fires it cycles the active
+  keyboard (via new `cycle_active_keyboard` helper) and sends
+  `DaemonEvent::StateRefresh` so the tray icon and menu update the
+  same way they do for a tray-click switch. The default binding is
+  Ctrl+Shift (any side, any order).
+
+- **Tray slot never appeared in waybar / KDE / GNOME shell.**
+  `Tray::register` passed `org.kde.StatusNotifierItem-{pid}-1` to the
+  watcher without first requesting that well-known name on the session
+  bus, so the watcher could not resolve the service to our connection
+  and no slot appeared. `register` now calls `request_name` before
+  `RegisterStatusNotifierItem`.
+
+- **Segfault on Ctrl+C shutdown.** Two independent drop-order bugs:
+  (1) `KeyboardRouter::drop` calls `typio_input_context_free` on a
+  pointer that `TypioInstance::drop` already freed, because
+  `App::shutdown` dropped the instance first and left the router
+  dangling. (2) Inside `InputMethodFrontend`, `state` (which owns the
+  popup `wl_surface`) was dropped before `panel` (which holds a raw
+  pointer to that surface for libflux teardown). Both fixed:
+  `App::shutdown` now drops `router` / `frontend` / `state_controller`
+  before the instance, and `InputMethodFrontend`'s struct fields were
+  reordered so `panel` drops first.
+
+### Changed
+
+- **Daemon event channel replaces ad-hoc `AtomicBool` flags.** Cross-thread
+  requests to the main loop (IPC `daemon.stop`, tray menu actions) now flow
+  through a single typed `mpsc::Receiver<DaemonEvent>` drained once per
+  tick, replacing the previous `SHUTDOWN_REQUESTED` / `RESTART_REQUESTED`
+  / `STATE_DIRTY` flag trio. The SIGINT/SIGTERM handler still uses an
+  `AtomicBool` (`SHUTDOWN_FROM_SIGNAL`) because `mpsc::Sender::send` is
+  not async-signal-safe. As a side effect, switching engine / language /
+  voice from the tray menu now correctly refreshes the tray icon,
+  tooltip, menu snapshot, and IPC `runtime.changed` subscribers — the
+  previous code mutated libtypio directly and never propagated the
+  change back to the Rust `StateController`. The exec-restart path in
+  `App::finish` now reads `self.saw_restart` (set during drain) instead
+  of polling `RESTART_REQUESTED`.
+
+- **Build commands in contributor docs no longer wrap every command in
+  a `( cd … && … )` subshell.** `README.md`, `CONTRIBUTING.md`,
+  `docs/dev/setup.md`, `docs/dev/testing.md`, and
+  `docs/how-to/package-for-distribution.md` now run from the
+  `typio-linux` repo root using `cargo --manifest-path ../libtypio/…`
+  and `meson compile -C ../../flux/build`. The setup layout diagram
+  also now shows `flux` as a sibling of `typio/` (its real location),
+  not as a child of it.
+
+- **Wayland input-method source maps in the explanation docs now point
+  at Rust files.** `docs/explanation/wayland-input-method.md`,
+  `focus-controller.md`, and `input-method-session.md` previously
+  listed deleted C paths (`src/wayland/*`, `src/engine/*`, `src/ui/*`).
+  The tables now name the `crates/typio-host/src/*.rs` modules that
+  own each responsibility after the bilingual migration (ADR-0035).
+
+- **Engine setup examples in the docs now reference the real sibling
+  engine repos.** `typio-engine-basic` was renamed to
+  `typio-engine-compose` (commit `22fcca1` in that repo) but
+  `README.md`, `docs/dev/setup.md`, `docs/how-to/troubleshooting.md`,
+  and `docs/how-to/package-for-distribution.md` still told contributors
+  to build it. The docs now point at `typio-engine-compose` (Cargo,
+  manifest in repo root), `typio-engine-rime` (Meson, manifest in
+  `build/`), and `typio-engine-mozc` (Meson, manifest in `build/`),
+  with a table mapping each engine to its build system, manifest
+  path, and language coverage.
 
 ## [0.3.4] - 2026-06-20
 

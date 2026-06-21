@@ -309,12 +309,20 @@ mod tests {
     fn gap_exceeded_returns_none_when_boot_not_ahead() {
         // Equal — no gap.
         assert_eq!(
-            gap_exceeded(Duration::from_secs(1), Duration::from_secs(1), Duration::from_millis(1)),
+            gap_exceeded(
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_millis(1)
+            ),
             None
         );
         // Boot behind — impossible in practice but should not yield gap.
         assert_eq!(
-            gap_exceeded(Duration::from_secs(2), Duration::from_secs(1), Duration::from_millis(1)),
+            gap_exceeded(
+                Duration::from_secs(2),
+                Duration::from_secs(1),
+                Duration::from_millis(1)
+            ),
             None
         );
     }
@@ -364,7 +372,10 @@ mod tests {
         let fired1 = rs.maybe_fire(event);
         let fired2 = rs.maybe_fire(event);
         assert!(fired1.is_some(), "first fire should pass cooldown");
-        assert!(fired2.is_none(), "second fire within cooldown should be suppressed");
+        assert!(
+            fired2.is_none(),
+            "second fire within cooldown should be suppressed"
+        );
     }
 
     #[test]

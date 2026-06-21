@@ -15,11 +15,13 @@ ls /usr/share/typio/engines
 ls /usr/local/share/typio/engines
 ```
 
-The [basic engine](../../typio-engine-basic) is a separate repository: build it
-with `cargo build --release`, then point the daemon at its build directory.
-For development-only engines, start the daemon with `typio --engine-dir DIR`
-(repeatable) or set `TYPIO_ENGINE_PATH=DIR1:DIR2`; no per-user directory is
-scanned by default.
+Engine packages are separate repositories. Build one and point the daemon
+at its manifest directory — for example the [compose
+engine](../../typio-engine-compose) with `cargo build --release`, or the
+[rime engine](../../typio-engine-rime) with
+`meson setup build && meson compile -C build`. For development-only
+engines, start the daemon with `typio --engine-dir DIR` (repeatable) or set
+`TYPIO_ENGINE_PATH=DIR1:DIR2`; no per-user directory is scanned by default.
 
 See the [Engine Discovery Reference](../reference/engine-discovery.md) for the
 full search-path order and naming rules.

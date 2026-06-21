@@ -31,14 +31,15 @@
 use std::io;
 use std::os::fd::{AsFd, AsRawFd};
 
-use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_backend::client::ReadEventsGuard;
-use wayland_client::protocol::{wl_keyboard, wl_registry, wl_seat, wl_surface};
+use wayland_client::globals::{registry_queue_init, GlobalListContents};
 use wayland_client::protocol::wl_compositor::WlCompositor;
+use wayland_client::protocol::{wl_keyboard, wl_registry, wl_seat, wl_surface};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 
 use crate::focus_controller::InputFacts;
 use crate::panel::FluxPanel;
+use crate::panel_coordinator::PanelCoordinator;
 use crate::panel_scheduler::{self, PanelScheduleState};
 use crate::protocols::input_method_v2::zwp_input_method_keyboard_grab_v2::{
     self, ZwpInputMethodKeyboardGrabV2,
@@ -177,6 +178,15 @@ pub struct InputMethodState {
     pub keymap_received_this_epoch: bool,
     /// Panel redraw scheduling state.
     pub panel_schedule_state: PanelScheduleState,
+    /// Panel coordinator: anchor probing, caret fallback, and popup ownership.
+    pub panel_coord: PanelCoordinator,
+    pub buffer_scale: f32,
+    /// Latest compositor-reported repeat info `(rate, delay_ms)` from the
+    /// grab's `repeat_info` event. `None` until the compositor sends it;
+    /// the host falls back to X-server defaults ([`crate::repeat_timer`]
+    /// constants) until then. A rate of `0` is the protocol signal for
+    /// "do not repeat".
+    pub compositor_repeat_info: Option<(i32, i32)>,
 }
 
 impl InputMethodState {
@@ -225,6 +235,36 @@ impl InputMethodState {
         self.panel_schedule_state
     }
 
+    /// Reset the positioned-popup anchor generation. Call on focus_in and
+    /// hard boundaries so the next caret rect belongs to a new generation.
+    pub fn reset_panel_anchor(&mut self) {
+        self.panel_coord.reset_anchor();
+    }
+
+    /// Clear the cached caret-rect flag.
+    pub fn clear_caret_rect(&mut self) {
+        self.panel_coord.clear_caret_rect();
+    }
+
+    /// Send an anchor probe (empty preedit + commit) to force the compositor
+    /// to emit a fresh `text_input_rectangle` for this popup.
+    pub fn probe_anchor(&mut self) {
+        if self.panel_coord.should_probe_anchor() {
+            self.set_preedit_and_flush("", 0);
+            self.panel_coord.record_probe_sent();
+        }
+    }
+
+    /// Mutable access to the panel coordinator.
+    pub fn panel_coord_mut(&mut self) -> &mut PanelCoordinator {
+        &mut self.panel_coord
+    }
+
+    /// Immutable access to the panel coordinator.
+    pub fn panel_coord(&self) -> &PanelCoordinator {
+        &self.panel_coord
+    }
+
     /// Set the panel schedule state.
     pub fn set_panel_schedule_state(&mut self, state: PanelScheduleState) {
         self.panel_schedule_state = state;
@@ -245,6 +285,7 @@ impl InputMethodState {
     /// Create a new keyboard grab from the input-method object.
     pub fn create_keyboard_grab(&mut self, qh: &QueueHandle<Self>) {
         if self.keyboard_grab.is_none() {
+            eprintln!("grab: create");
             self.keyboard_grab = Some(self.input_method.grab_keyboard(qh, ()));
             self.keymap_received_this_epoch = false;
         }
@@ -253,6 +294,7 @@ impl InputMethodState {
     /// Destroy the current keyboard grab object.
     pub fn destroy_keyboard_grab(&mut self) {
         if let Some(grab) = self.keyboard_grab.take() {
+            eprintln!("grab: destroy");
             drop(grab);
             self.keymap_received_this_epoch = false;
         }
@@ -275,7 +317,8 @@ impl InputMethodState {
 
     /// Forward modifier state to the focused app.
     pub fn forward_modifiers(&self, depressed: u32, latched: u32, locked: u32, group: u32) {
-        self.virtual_keyboard.modifiers(depressed, latched, locked, group);
+        self.virtual_keyboard
+            .modifiers(depressed, latched, locked, group);
     }
 
     /// Raw pointer to the popup wl_surface. Use this to create a
@@ -325,7 +368,8 @@ impl InputMethodState {
         if !self.initialized || !self.active {
             return;
         }
-        self.input_method.set_preedit_string(text.to_string(), cursor as i32, cursor as i32);
+        self.input_method
+            .set_preedit_string(text.to_string(), cursor as i32, cursor as i32);
         self.input_method.commit(self.serial);
     }
 
@@ -340,18 +384,22 @@ impl InputMethodState {
     }
 
     /// Load an XKB keymap from a compositor-provided file descriptor.
-    fn load_keymap_from_fd(&mut self, fd: std::os::fd::OwnedFd, size: u32) {
-        use std::io::Read;
+    fn load_keymap_from_fd(&mut self, fd: std::os::fd::OwnedFd, _size: u32) {
+        use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::from(fd);
-        let mut buffer = vec![0u8; size as usize];
-        if file.read_exact(&mut buffer).is_err() {
+        if let Err(e) = file.seek(SeekFrom::Start(0)) {
+            eprintln!("keymap: FAILED to seek to start: {e}");
             return;
         }
-        // xkb_keymap_new_from_buffer expects a C string-like buffer;
-        // the keymap text is null-terminated in practice.
-        let keymap_string = String::from_utf8_lossy(&buffer)
-            .trim_end_matches('\0')
-            .to_string();
+
+        let mut buffer = Vec::new();
+        if let Err(e) = file.read_to_end(&mut buffer) {
+            eprintln!("keymap: FAILED to read keymap fd: {e}");
+            return;
+        }
+
+        let mut keymap_string = String::from_utf8_lossy(&buffer).into_owned();
+        keymap_string = keymap_string.trim_matches('\0').to_string();
 
         let keymap = xkbcommon::xkb::Keymap::new_from_string(
             &self.xkb_context,
@@ -360,19 +408,22 @@ impl InputMethodState {
             xkbcommon::xkb::KEYMAP_COMPILE_NO_FLAGS,
         );
 
-        if let Some(keymap) = keymap {
-            let mut xkb_state = xkbcommon::xkb::State::new(&keymap);
-            // Apply current modifier state.
-            xkb_state.update_mask(
-                self.mods_depressed,
-                self.mods_latched,
-                self.mods_locked,
-                0, // depressed_layout
-                0, // latched_layout
-                0, // locked_layout
-            );
-            self.xkb_keymap = Some(keymap);
-            self.xkb_state = Some(xkb_state);
+        match keymap {
+            Some(km) => {
+                let mut xkb_state = xkbcommon::xkb::State::new(&km);
+                xkb_state.update_mask(
+                    self.mods_depressed,
+                    self.mods_latched,
+                    self.mods_locked,
+                    0,
+                    0,
+                    0,
+                );
+                self.xkb_keymap = Some(km);
+                self.xkb_state = Some(xkb_state);
+                eprintln!("keymap: XKB state ready");
+            }
+            None => eprintln!("keymap: xkb_keymap_new_from_string FAILED"),
         }
     }
 }
@@ -381,10 +432,20 @@ impl InputMethodState {
 /// and state. The caller drives the event loop via [`Self::dispatch`]
 /// or [`Self::run`].
 pub struct InputMethodFrontend {
-    conn: Connection,
-    queue: EventQueue<InputMethodState>,
-    state: InputMethodState,
+    // Drop order matters here. Rust drops fields in declaration order, so
+    // the panel MUST be declared before the Wayland connection: the panel
+    // owns Vulkan resources that reference the wl_surface, and libflux's
+    // teardown still makes Wayland protocol calls. If `conn` or `state`
+    // is dropped first, libflux hits a closed connection or freed proxy
+    // and segfaults. Order:
+    //   1. panel     — releases Vulkan surface/canvas/text/arena
+    //   2. state     — frees wl_surface / vk / grab proxies
+    //   3. queue     — releases event queue
+    //   4. conn      — closes the display socket last
     panel: Option<FluxPanel>,
+    state: InputMethodState,
+    queue: EventQueue<InputMethodState>,
+    conn: Connection,
 }
 
 impl InputMethodFrontend {
@@ -410,8 +471,7 @@ impl InputMethodFrontend {
         callback: Option<LifecycleCallback>,
         _create_panel: bool,
     ) -> Result<Self, ConnectError> {
-        let conn =
-            Connection::connect_to_env().map_err(ConnectError::ConnectionFailed)?;
+        let conn = Connection::connect_to_env().map_err(ConnectError::ConnectionFailed)?;
         let (globals, queue) =
             registry_queue_init::<InputMethodState>(&conn).map_err(ConnectError::RegistryFailed)?;
         let qh = queue.handle();
@@ -420,21 +480,18 @@ impl InputMethodFrontend {
             .bind(&qh, 1..=9, ())
             .map_err(|e| ConnectError::BindFailed("wl_seat", format!("{e:?}")))?;
 
-        let im_manager: ZwpInputMethodManagerV2 = globals
-            .bind(&qh, 1..=1, ())
-            .map_err(|e| {
-                ConnectError::BindFailed("zwp_input_method_manager_v2", format!("{e:?}"))
-            })?;
+        let im_manager: ZwpInputMethodManagerV2 = globals.bind(&qh, 1..=1, ()).map_err(|e| {
+            ConnectError::BindFailed("zwp_input_method_manager_v2", format!("{e:?}"))
+        })?;
 
-        let _vk_manager: ZwpVirtualKeyboardManagerV1 = globals
-            .bind(&qh, 1..=1, ())
-            .map_err(|e| {
+        let _vk_manager: ZwpVirtualKeyboardManagerV1 =
+            globals.bind(&qh, 1..=1, ()).map_err(|e| {
                 ConnectError::BindFailed("zwp_virtual_keyboard_manager_v1", format!("{e:?}"))
             })?;
 
         // Bind wl_compositor (for creating panel surfaces).
         let compositor: WlCompositor = globals
-            .bind(&qh, 1..=4, ())
+            .bind(&qh, 1..=6, ())
             .map_err(|e| ConnectError::BindFailed("wl_compositor", format!("{e:?}")))?;
 
         // Create a wl_surface for the panel popup.
@@ -442,8 +499,12 @@ impl InputMethodFrontend {
 
         let input_method = im_manager.get_input_method(&seat, &qh, ());
 
-        // Create the keyboard grab eagerly so the first focus tick can use it.
-        let keyboard_grab = Some(input_method.grab_keyboard(&qh, ()));
+        // Keyboard grab is created lazily by the focus controller when an
+        // input context is focused, not eagerly here.  An eager grab would
+        // capture the keypress used to launch the daemon (e.g. Enter in a
+        // terminal) and forward it back to the terminal via the virtual
+        // keyboard.
+        let keyboard_grab: Option<ZwpInputMethodKeyboardGrabV2> = None;
 
         // Create the virtual keyboard for forwarding unhandled keys.
         let virtual_keyboard = _vk_manager.create_virtual_keyboard(&seat, &qh, ());
@@ -481,6 +542,9 @@ impl InputMethodFrontend {
             input_context: None,
             keymap_received_this_epoch: false,
             panel_schedule_state: PanelScheduleState::default(),
+            panel_coord: PanelCoordinator::new(),
+            buffer_scale: 1.0,
+            compositor_repeat_info: None,
         };
 
         Ok(Self {
@@ -584,10 +648,32 @@ impl InputMethodFrontend {
             .map_err(|e| io::Error::other(format!("flush: {e}")))
     }
 
-    /// Prepare a read from the Wayland socket. Returns `None` when there
-    /// are already events queued that should be dispatched first.
-    pub fn prepare_read(&self) -> Option<ReadEventsGuard> {
-        self.queue.prepare_read()
+    /// Prepare a read from the Wayland socket, dispatching any already-queued
+    /// events first. Mirrors `wl_display_prepare_read` + `dispatch_pending` in
+    /// the C event loop.
+    pub fn prepare_read_loop(&mut self) -> io::Result<ReadEventsGuard> {
+        loop {
+            match self.queue.prepare_read() {
+                Some(guard) => return Ok(guard),
+                None => {
+                    self.queue
+                        .dispatch_pending(&mut self.state)
+                        .map_err(|e| io::Error::other(format!("dispatch: {e}")))?;
+                }
+            }
+        }
+    }
+
+    /// Read events from the Wayland socket and dispatch any pending events
+    /// that arrive. Consumes the read guard returned by `prepare_read_loop`.
+    pub fn read_and_dispatch(&mut self, guard: ReadEventsGuard) -> io::Result<()> {
+        guard
+            .read()
+            .map_err(|e| io::Error::other(format!("read: {e}")))?;
+        self.queue
+            .dispatch_pending(&mut self.state)
+            .map_err(|e| io::Error::other(format!("dispatch: {e}")))?;
+        Ok(())
     }
 
     /// Blocking event loop. Runs until the connection drops.
@@ -609,8 +695,11 @@ impl InputMethodFrontend {
 
             if let Some(read_guard) = self.queue.prepare_read() {
                 let fd = self.fd();
-                let mut pollfd =
-                    libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+                let mut pollfd = libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
                 let rc = unsafe { libc::poll(&mut pollfd, 1, -1) };
                 if rc < 0 {
                     let e = io::Error::last_os_error();
@@ -750,6 +839,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for InputMethodState {
         use zwp_input_method_v2::Event;
         match event {
             Event::Activate => {
+                eprintln!("input_method: Activate");
                 state.active = true;
                 state.facts.im_activate_seen = true;
                 state.pending = SessionState {
@@ -759,6 +849,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for InputMethodState {
                 state.fire(LifecycleEvent::Activated);
             }
             Event::Deactivate => {
+                eprintln!("input_method: Deactivate");
                 state.active = false;
                 state.facts.im_deactivate_seen = true;
                 state.pending.active = false;
@@ -846,13 +937,18 @@ impl Dispatch<WlCompositor, ()> for InputMethodState {
 
 impl Dispatch<wl_surface::WlSurface, ()> for InputMethodState {
     fn event(
-        _state: &mut Self,
-        _proxy: &wl_surface::WlSurface,
-        _event: <wl_surface::WlSurface as Proxy>::Event,
+        state: &mut Self,
+        proxy: &wl_surface::WlSurface,
+        event: <wl_surface::WlSurface as Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
+        use wayland_client::protocol::wl_surface::Event;
+        if let Event::PreferredBufferScale { factor } = event {
+            state.buffer_scale = factor as f32;
+            proxy.set_buffer_scale(factor);
+        }
     }
 }
 
@@ -865,8 +961,15 @@ impl Dispatch<ZwpInputPopupSurfaceV2, ()> for InputMethodState {
         _conn: &Connection,
         _qh: &QueueHandle<Self>,
     ) {
-        let zwp_input_popup_surface_v2::Event::TextInputRectangle { x, y, width, height } = event;
+        let zwp_input_popup_surface_v2::Event::TextInputRectangle {
+            x,
+            y,
+            width,
+            height,
+        } = event;
         state.text_input_rect = Some((x, y, width, height));
+        state.panel_coord.note_caret_rect();
+        state.panel_coord.mark_anchor_ready();
     }
 }
 
@@ -882,6 +985,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
         use zwp_input_method_keyboard_grab_v2::Event;
         match event {
             Event::Keymap { format, fd, size } => {
+                eprintln!("grab: Keymap event received, format={format:?} size={size}");
                 state.keymap_received_this_epoch = true;
                 let fmt_raw: u32 = match &format {
                     wayland_client::WEnum::Value(v) => *v as u32,
@@ -890,9 +994,24 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
                 if fmt_raw != 1 {
                     return;
                 }
+                // Forward the keymap to the virtual keyboard before any
+                // `key`/`modifiers` requests. The compositor rejects those
+                // with protocol error 0 (no_keymap) if the vk has no keymap.
+                // `load_keymap_from_fd` consumes the fd, so dup it first.
+                // The wayland backend dups the fd again when serializing the
+                // request, so it is safe to drop `vk_fd` right after the call.
+                match fd.try_clone() {
+                    Ok(vk_fd) => state.virtual_keyboard.keymap(fmt_raw, vk_fd.as_fd(), size),
+                    Err(e) => eprintln!("input_method: dup keymap fd for vk failed: {e}"),
+                }
                 state.load_keymap_from_fd(fd, size);
             }
-            Event::Key { time, key, state: key_state, serial: _ } => {
+            Event::Key {
+                time,
+                key,
+                state: key_state,
+                serial: _,
+            } => {
                 let raw_state: u32 = match &key_state {
                     wayland_client::WEnum::Value(v) => *v as u32,
                     wayland_client::WEnum::Unknown(u) => *u,
@@ -909,12 +1028,14 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
                     xs.update_key(kc, key_direction);
                 }
 
-                let keysym: u32 = state.xkb_state.as_ref().map_or(0, |s| {
-                    s.key_get_one_sym(kc).into()
-                });
-                let unicode = state.xkb_state.as_ref().map_or(String::new(), |s| {
-                    s.key_get_utf8(kc)
-                });
+                let keysym: u32 = state
+                    .xkb_state
+                    .as_ref()
+                    .map_or(0, |s| s.key_get_one_sym(kc).into());
+                let unicode = state
+                    .xkb_state
+                    .as_ref()
+                    .map_or(String::new(), |s| s.key_get_utf8(kc));
 
                 state.fire(LifecycleEvent::Key(DecodedKeyEvent {
                     keycode: key,
@@ -925,9 +1046,11 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
                     time,
                 }));
 
-                // On key press, queue for the engine. The event-loop
-                // driver processes pending_key after dispatch.
-                if raw_state == 1 && state.active {
+                // Queue for the event-loop driver. Press events go to the
+                // engine; release events are forwarded to the focused app
+                // and stop the repeat timer. Without queueing releases,
+                // the timer fires forever after a single press.
+                if state.active {
                     state.pending_key = Some(DecodedKeyEvent {
                         keycode: key,
                         xkb_keycode,
@@ -949,17 +1072,21 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
                 state.mods_latched = mods_latched;
                 state.mods_locked = mods_locked;
                 if let Some(ref mut xs) = state.xkb_state {
-                    xs.update_mask(
-                        mods_depressed,
-                        mods_latched,
-                        mods_locked,
-                        0,
-                        0,
-                        group,
-                    );
+                    xs.update_mask(mods_depressed, mods_latched, mods_locked, 0, 0, group);
                 }
+                // Mirror the grab's modifier state to the virtual keyboard
+                // so the focused app sees Ctrl/Alt/Shift held when a
+                // forwarded key arrives. Without this, Ctrl-C arrives as a
+                // bare 'c'. The grab always delivers Keymap before the
+                // first Modifiers, so vk keymap is already set by this
+                // point (vk.modifiers requires a keymap or the compositor
+                // rejects it with protocol error 0).
+                state
+                    .virtual_keyboard
+                    .modifiers(mods_depressed, mods_latched, mods_locked, group);
             }
             Event::RepeatInfo { rate, delay } => {
+                state.compositor_repeat_info = Some((rate, delay));
                 state.fire(LifecycleEvent::RepeatInfo { rate, delay });
             }
         }
@@ -972,10 +1099,7 @@ mod tests {
 
     #[test]
     fn connect_error_display_is_human_readable() {
-        let e = ConnectError::BindFailed(
-            "zwp_input_method_manager_v2",
-            "NotPresent".to_string(),
-        );
+        let e = ConnectError::BindFailed("zwp_input_method_manager_v2", "NotPresent".to_string());
         let s = format!("{e}");
         assert!(s.contains("zwp_input_method_manager_v2"));
     }

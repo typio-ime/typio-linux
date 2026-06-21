@@ -65,7 +65,10 @@ use typio_host::ipc::protocol::{self, methods, PROTOCOL_VERSION};
 use typio_host::uds_server::{RequestOutcome, SubscriptionUpdate, UdsServer};
 
 fn main() -> ExitCode {
-    eprintln!("typio-daemon-stub: starting (v{})", env!("CARGO_PKG_VERSION"));
+    eprintln!(
+        "typio-daemon-stub: starting (v{})",
+        env!("CARGO_PKG_VERSION")
+    );
 
     let socket_override = parse_socket_override();
     let engine_dirs_override = parse_engine_dirs_override();
@@ -120,7 +123,10 @@ fn main() -> ExitCode {
 
     // 2. UDS server bind.
     let socket_path = socket_override.unwrap_or_else(protocol::socket_path);
-    eprintln!("typio-daemon-stub: binding UDS at {}", socket_path.display());
+    eprintln!(
+        "typio-daemon-stub: binding UDS at {}",
+        socket_path.display()
+    );
     let mut server = match UdsServer::bind(&socket_path) {
         Ok(s) => s,
         Err(e) => {
@@ -142,7 +148,13 @@ fn main() -> ExitCode {
                 );
             }
         };
-        let response = dispatch(&req, &keyboards, &voices, &engine_infos, &socket_path_for_handler);
+        let response = dispatch(
+            &req,
+            &keyboards,
+            &voices,
+            &engine_infos,
+            &socket_path_for_handler,
+        );
         let subscription = if req.method == methods::EVENTS_SUBSCRIBE {
             Some(SubscriptionUpdate::Wildcard)
         } else {
@@ -215,11 +227,13 @@ fn parse_engine_dirs_override() -> Option<String> {
 /// The stub serves this snapshot; it does not consult the live registry
 /// per-call. A real daemon queries live state to pick up dynamic
 /// language changes (ADR-0034).
-fn build_engine_info_snapshot(
-    registry: &EngineRegistry,
-) -> HashMap<String, EngineInfoSnapshot> {
+fn build_engine_info_snapshot(registry: &EngineRegistry) -> HashMap<String, EngineInfoSnapshot> {
     let mut out = HashMap::new();
-    for name in registry.list_keyboards().into_iter().chain(registry.list_voices()) {
+    for name in registry
+        .list_keyboards()
+        .into_iter()
+        .chain(registry.list_voices())
+    {
         if let Some(info) = registry.engine_info(name) {
             out.insert(
                 name.to_string(),

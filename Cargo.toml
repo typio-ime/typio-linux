@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/typio-host"]
+members = ["crates/typio-host", "crates/xtask"]
 
 [workspace.package]
 edition = "2021"
@@ -15,9 +15,8 @@ rust-version = "1.85"
 #   - typio's two critical protocols (input-method-v2 and
 #     virtual-keyboard-v1) are not shipped there anyway (as of 0.32.13
 #     only input-method-v1 is)
-#   - the C side already ships all needed XMLs in protocols/ and generates
-#     C bindings from them with the wayland-scanner C tool; doing the
-#     same in Rust keeps a single source of truth for protocol XMLs
+#   - this repo ships all needed XMLs in protocols/; generating Rust
+#     bindings from them keeps a single source of truth for protocol XMLs
 #   - avoids splitting protocols across "from crate" vs "from local XML"
 #
 # bitflags + wayland-backend are direct deps because the code emitted by
@@ -41,10 +40,9 @@ flux-sys = { path = "../../flux/crates/flux-sys" }
 wayland-sys = "0.31"
 
 # The framework library — sibling checkout at ../libtypio.
-# Production builds should resolve via PKG_CONFIG_PATH / published crate;
-# the path dep here is the dev-workflow default.
 libtypio = { path = "../libtypio" }
 typio-abi = { path = "../libtypio/crates/abi" }
+clap = { version = "4", features = ["derive"] }
 
 [profile.release]
 opt-level = 3

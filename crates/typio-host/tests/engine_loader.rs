@@ -38,7 +38,10 @@ fn workspace_root() -> PathBuf {
 fn all_real_manifests_parse_and_validate() {
     let mut checked = 0;
     for (engine_dir, manifest_name) in REAL_MANIFESTS {
-        let path = workspace_root().join(engine_dir).join("build").join(manifest_name);
+        let path = workspace_root()
+            .join(engine_dir)
+            .join("build")
+            .join(manifest_name);
         if !path.exists() {
             eprintln!(
                 "skipping {engine_dir}: build artifact {} not present",
@@ -80,16 +83,20 @@ fn all_real_manifests_register_into_libtypio() {
     let mut loader = EngineLoader::new();
     // All engine repos ship `voice` type only for whisper; voice caps are
     // required for that one. Add them so the manifest isn't refused.
-    loader.set_capabilities(
-        typio_host::engine_loader::Capabilities::default().with_voice(),
-    );
+    loader.set_capabilities(typio_host::engine_loader::Capabilities::default().with_voice());
 
     let mut registry = typio::core::registry::EngineRegistry::new();
 
     for (engine_dir, manifest_name) in REAL_MANIFESTS {
-        let path = workspace_root().join(engine_dir).join("build").join(manifest_name);
+        let path = workspace_root()
+            .join(engine_dir)
+            .join("build")
+            .join(manifest_name);
         if !path.exists() {
-            eprintln!("skipping {engine_dir}: build artifact {} not present", path.display());
+            eprintln!(
+                "skipping {engine_dir}: build artifact {} not present",
+                path.display()
+            );
             continue;
         }
         loader

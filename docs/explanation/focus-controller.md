@@ -110,7 +110,7 @@ stateDiagram-v2
     BROKEN --> ABSENT : destroy / rebuild
 ```
 
-The grab resource state merges the keyboard grab object presence with the virtual-keyboard keymap readiness from `src/wayland/keyboard/bridge.c`. This is one resource with one state, not a phase plus a separate vk state machine.
+The grab resource state merges the keyboard grab object presence with the virtual-keyboard keymap readiness tracked in `crates/typio-host/src/input_method.rs` (`keymap_received_this_epoch`, set by the grab `Keymap` handler once the keymap has been mirrored to the `zwp_virtual_keyboard_v1`). This is one resource with one state, not a phase plus a separate vk state machine.
 
 **Readiness rules** (the single source of truth for grab readiness):
 
@@ -198,10 +198,10 @@ A future liveness probe may be added as a new fact source feeding into `reduce()
 
 | Module | Responsibility |
 |--------|---------------|
-| `src/engine/focus_controller.{c,h}` | `reduce`, `diff`, data structures. Pure, testable without frontend or Wayland. |
-| `src/wayland/focus_effects.c` | `observe` (reads frontend fields) and `apply` (mutates frontend/Wayland state). Effectful, tied to `TypioWlFrontend`. |
-| `src/wayland/event_loop.c` | Per-tick driver: records facts, calls reduce/observe/diff/apply in order. |
-| `src/wayland/keyboard/bridge.c` | Virtual-keyboard state machine (`ABSENT → NEEDS_KEYMAP → READY → BROKEN`). The focus controller reads this state but does not own the transitions. |
+| `crates/typio-host/src/focus_controller.rs` | `reduce`, `diff`, data structures. Pure, testable without frontend or Wayland. |
+| `crates/typio-host/src/session_glue.rs` | `observe` (reads frontend fields) and `apply` (mutates frontend/Wayland state). Effectful, tied to `InputMethodFrontend`. |
+| `crates/typio-host/src/app.rs` (`FocusDriver::tick`) | Per-tick driver: records facts, calls reduce/observe/diff/apply in order. |
+| `crates/typio-host/src/input_method.rs` | Virtual-keyboard keymap/modifier handoff and readiness gating. The focus controller reads the `keymap_received_this_epoch` flag but does not own the transitions. |
 
 ## See Also
 

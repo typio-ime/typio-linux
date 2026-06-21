@@ -367,7 +367,10 @@ mod tests {
         assert!(matches!(Message::parse(req).unwrap(), Message::Request(_)));
         // Response (success) → has id + result.
         let resp = r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#;
-        assert!(matches!(Message::parse(resp).unwrap(), Message::Response(_)));
+        assert!(matches!(
+            Message::parse(resp).unwrap(),
+            Message::Response(_)
+        ));
         // Notification → has method, no id.
         let notif = r#"{"jsonrpc":"2.0","method":"engine.changed","params":{}}"#;
         assert!(matches!(

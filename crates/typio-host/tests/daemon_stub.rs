@@ -77,8 +77,7 @@ fn spawn_stub() -> (DaemonGuard, PathBuf) {
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-    let stderr_log = std::fs::read_to_string(xdg.join("daemon-stub.stderr"))
-        .unwrap_or_default();
+    let stderr_log = std::fs::read_to_string(xdg.join("daemon-stub.stderr")).unwrap_or_default();
     panic!(
         "stub did not bind socket within 5s at {}\n--- stub stderr ---\n{stderr_log}",
         socket.display()
@@ -116,8 +115,7 @@ fn hello_returns_protocol_v3_handshake() {
         Err(e) => {
             // Diagnostic: dump stub stderr so we can see why bind failed.
             let xdg = socket.parent().unwrap().parent().unwrap();
-            let log = std::fs::read_to_string(xdg.join("daemon-stub.stderr"))
-                .unwrap_or_default();
+            let log = std::fs::read_to_string(xdg.join("daemon-stub.stderr")).unwrap_or_default();
             panic!(
                 "connect {}: {e}\n--- stub stderr ---\n{log}",
                 socket.display()
@@ -173,18 +171,16 @@ fn unknown_method_returns_method_not_found() {
 fn known_but_unimplemented_method_returns_structured_error() {
     let (_guard, socket) = spawn_stub();
     let mut stream = UnixStream::connect(&socket).unwrap();
-    send_request(
-        &mut stream,
-        5,
-        "config.get",
-        json!({"key": "voice.engine"}),
-    );
+    send_request(&mut stream, 5, "config.get", json!({"key": "voice.engine"}));
     let resp = recv_response(&mut stream);
     assert_eq!(resp["error"]["code"], -32603);
     // Error message should mention the method name so users can tell
     // what they tried.
     let msg = resp["error"]["message"].as_str().unwrap();
-    assert!(msg.contains("config.get"), "error message should name the method: {msg}");
+    assert!(
+        msg.contains("config.get"),
+        "error message should name the method: {msg}"
+    );
 }
 
 #[test]

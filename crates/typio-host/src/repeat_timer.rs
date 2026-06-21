@@ -62,8 +62,32 @@ const REPEAT_SUPPRESSING_MODIFIERS: Modifiers =
     Modifiers(Modifiers::CTRL.0 | Modifiers::ALT.0 | Modifiers::SUPER.0);
 
 /// Default initial delay before auto-repeat begins (matches X server
-/// default; users override via compositor-configured `repeat_delay`).
+/// default; used until the compositor sends a `repeat_info` event).
 pub const DEFAULT_DELAY: Duration = Duration::from_millis(600);
+
+/// Default repeat rate in keys/sec, matching the X server default.
+pub const DEFAULT_RATE: u32 = 30;
+
+/// Resolve the auto-repeat delay and interval from the compositor's
+/// `repeat_info` event (if any).
+///
+/// The input-method-v2 `repeat_info` event carries `(rate, delay)` where
+/// `rate` is keys/sec and `delay` is milliseconds. A `rate` of `0` is the
+/// protocol signal for "do not repeat"; this function returns `None` in
+/// that case so the caller can skip arming the timer entirely. When the
+/// compositor has not sent any `repeat_info` (`info == None`) the X-server
+/// defaults ([`DEFAULT_DELAY`] + [`DEFAULT_RATE`]) are used.
+pub fn resolve_repeat_params(compositor_info: Option<(i32, i32)>) -> Option<(Duration, Duration)> {
+    match compositor_info {
+        Some((rate, delay)) if rate > 0 => {
+            let d = Duration::from_millis(delay.max(0) as u64);
+            let i = RepeatTimer::interval_from_rate(rate as u32);
+            Some((d, i))
+        }
+        Some(_) => None,
+        None => Some((DEFAULT_DELAY, RepeatTimer::interval_from_rate(DEFAULT_RATE))),
+    }
+}
 
 /// A keyboard-repeat timer.
 ///
@@ -81,9 +105,12 @@ pub struct RepeatTimer {
 impl RepeatTimer {
     /// Construct a disarmed timer.
     pub fn new() -> io::Result<Self> {
-        let timer = TimerFd::new(ClockId::CLOCK_MONOTONIC, TimerFlags::empty())
-            .map_err(nix_to_io)?;
-        Ok(Self { timer, armed: false })
+        let timer =
+            TimerFd::new(ClockId::CLOCK_MONOTONIC, TimerFlags::TFD_NONBLOCK).map_err(nix_to_io)?;
+        Ok(Self {
+            timer,
+            armed: false,
+        })
     }
 
     /// The timer file descriptor. Add to your event loop with read interest.
@@ -177,9 +204,9 @@ mod tests {
         assert!(should_repeat_for_modifiers(Modifiers::SHIFT));
         assert!(should_repeat_for_modifiers(Modifiers::CAPSLOCK));
         assert!(should_repeat_for_modifiers(Modifiers::NUMLOCK));
-        assert!(should_repeat_for_modifiers(
-            Modifiers(Modifiers::SHIFT.0 | Modifiers::CAPSLOCK.0)
-        ));
+        assert!(should_repeat_for_modifiers(Modifiers(
+            Modifiers::SHIFT.0 | Modifiers::CAPSLOCK.0
+        )));
     }
 
     #[test]
@@ -188,12 +215,12 @@ mod tests {
         assert!(!should_repeat_for_modifiers(Modifiers::ALT));
         assert!(!should_repeat_for_modifiers(Modifiers::SUPER));
         // Any combination that includes a suppressor still suppresses.
-        assert!(!should_repeat_for_modifiers(
-            Modifiers(Modifiers::SHIFT.0 | Modifiers::CTRL.0)
-        ));
-        assert!(!should_repeat_for_modifiers(
-            Modifiers(Modifiers::CTRL.0 | Modifiers::ALT.0 | Modifiers::SUPER.0)
-        ));
+        assert!(!should_repeat_for_modifiers(Modifiers(
+            Modifiers::SHIFT.0 | Modifiers::CTRL.0
+        )));
+        assert!(!should_repeat_for_modifiers(Modifiers(
+            Modifiers::CTRL.0 | Modifiers::ALT.0 | Modifiers::SUPER.0
+        )));
     }
 
     #[test]
@@ -238,5 +265,33 @@ mod tests {
             RepeatTimer::interval_from_rate(0),
             Duration::from_millis(1000 / 30)
         );
+    }
+
+    #[test]
+    fn resolve_repeat_params_defaults_when_no_compositor_info() {
+        let (delay, interval) = resolve_repeat_params(None).expect("default params");
+        assert_eq!(delay, DEFAULT_DELAY);
+        assert_eq!(interval, RepeatTimer::interval_from_rate(DEFAULT_RATE));
+    }
+
+    #[test]
+    fn resolve_repeat_params_uses_compositor_info_when_present() {
+        let (delay, interval) =
+            resolve_repeat_params(Some((25, 500))).expect("compositor-provided params");
+        assert_eq!(delay, Duration::from_millis(500));
+        assert_eq!(interval, RepeatTimer::interval_from_rate(25));
+    }
+
+    #[test]
+    fn resolve_repeat_params_returns_none_when_rate_is_zero() {
+        // rate == 0 is the protocol signal for "do not repeat".
+        assert!(resolve_repeat_params(Some((0, 500))).is_none());
+    }
+
+    #[test]
+    fn resolve_repeat_params_clamps_negative_delay() {
+        let (delay, _) =
+            resolve_repeat_params(Some((30, -10))).expect("clamped-negative-delay params");
+        assert_eq!(delay, Duration::ZERO);
     }
 }

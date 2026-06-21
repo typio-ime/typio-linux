@@ -82,9 +82,7 @@ pub mod virtual_keyboard_v1 {
 
     pub mod __interfaces {
         use wayland_client::protocol::__interfaces::*;
-        wayland_scanner::generate_interfaces!(
-            "../../protocols/virtual-keyboard-unstable-v1.xml"
-        );
+        wayland_scanner::generate_interfaces!("../../protocols/virtual-keyboard-unstable-v1.xml");
     }
     use self::__interfaces::*;
 
@@ -99,15 +97,11 @@ pub mod foreign_toplevel_v1 {
 
     pub mod __interfaces {
         use wayland_client::protocol::__interfaces::*;
-        wayland_scanner::generate_interfaces!(
-            "../../protocols/ext-foreign-toplevel-list-v1.xml"
-        );
+        wayland_scanner::generate_interfaces!("../../protocols/ext-foreign-toplevel-list-v1.xml");
     }
     use self::__interfaces::*;
 
-    wayland_scanner::generate_client_code!(
-        "../../protocols/ext-foreign-toplevel-list-v1.xml"
-    );
+    wayland_scanner::generate_client_code!("../../protocols/ext-foreign-toplevel-list-v1.xml");
 }
 
 pub mod fractional_scale_v1 {

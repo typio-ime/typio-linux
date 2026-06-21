@@ -1,7 +1,5 @@
 //! Engine directory resolution (ADR-0025).
 //!
-//! Replaces `typio_engine_dirs_build` in `src/engine_loader.c`.
-//!
 //! ## Precedence (highest first)
 //!
 //! 1. CLI-specified directories (`--engine-dir DIR`, repeatable) — passed
@@ -15,12 +13,8 @@
 //!
 //! ## Compile-time system directory
 //!
-//! The C version bakes the system engine directory into
-//! `typio_build_config.h` at meson configure time, expanded from
-//! `<prefix>/<datadir>/typio/engines`. The Rust port gets the same value
-//! via the `TYPIO_ENGINE_DIR` environment variable at build time, with a
-//! sensible default for `cargo run` from a source checkout. Distros that
-//! need a different system path set it via
+//! The default expands to `<prefix>/<datadir>/typio/engines` for the standard
+//! `/usr/local` prefix. Distros that need a different system path set it via
 //! `TYPIO_ENGINE_DIR=/usr/share/typio/engines cargo build`.
 
 use std::path::{Path, PathBuf};
@@ -28,8 +22,7 @@ use std::path::{Path, PathBuf};
 /// The compile-time system engine directory.
 ///
 /// Override at build time with `TYPIO_ENGINE_DIR=...`. The default
-/// matches the meson `typio_build_config.h.in` default for a `/usr/local`
-/// prefix.
+/// matches a `/usr/local` prefix.
 pub const SYSTEM_ENGINE_DIR: &str = match option_env!("TYPIO_ENGINE_DIR") {
     Some(s) => s,
     None => "/usr/local/share/typio/engines",
@@ -79,9 +72,7 @@ where
 /// Locate the manifest file for a named engine across an ordered list of
 /// search directories, returning the path of the first match.
 ///
-/// Mirrors the body of `typio_engine_loader_reload` in the C version that
-/// scans `engine_dirs` for `typio-engine-<name>.toml`. Returns `None` if
-/// no directory contains a matching file.
+/// Returns `None` if no directory contains a matching file.
 pub fn find_manifest_for<'a, I>(engine_dirs: I, name: &str) -> Option<PathBuf>
 where
     I: IntoIterator<Item = &'a Path>,
@@ -199,10 +190,7 @@ mod tests {
 
         let dirs = [dir_a.as_path(), dir_b.as_path()];
         let found = find_manifest_for(dirs.iter().copied(), "rime");
-        assert_eq!(
-            found,
-            Some(dir_b.join("typio-engine-rime.toml"))
-        );
+        assert_eq!(found, Some(dir_b.join("typio-engine-rime.toml")));
     }
 
     #[test]

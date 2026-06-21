@@ -111,9 +111,15 @@ fn version_flag_is_headless() {
         .arg("--version")
         .output()
         .expect("spawn typio --version");
-    assert!(output.status.success(), "typio --version failed: {output:?}");
+    assert!(
+        output.status.success(),
+        "typio --version failed: {output:?}"
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains(env!("CARGO_PKG_VERSION")), "stdout: {stdout}");
+    assert!(
+        stdout.contains(env!("CARGO_PKG_VERSION")),
+        "stdout: {stdout}"
+    );
 }
 
 #[test]
@@ -142,7 +148,9 @@ fn daemon_starts_and_stops_cleanly_headless() {
     let result = &hello["result"];
     assert_eq!(result["protocolVersion"], 3);
     assert!(result["daemonVersion"].is_string());
-    let caps = result["capabilities"].as_array().expect("capabilities array");
+    let caps = result["capabilities"]
+        .as_array()
+        .expect("capabilities array");
     assert!(caps.iter().any(|v| v == "engine"));
     assert!(caps.iter().any(|v| v == "daemon"));
 
@@ -165,4 +173,3 @@ fn daemon_starts_and_stops_cleanly_headless() {
     };
     assert!(exit_status.success(), "typio exited with {exit_status}");
 }
-

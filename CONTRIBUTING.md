@@ -6,22 +6,23 @@ Follow [Developer Setup](docs/dev/setup.md) for dependencies and the
 libtypio checkout, then:
 
 ```bash
-meson setup build
-ninja -C build
-meson test -C build --print-errorlogs
+cargo build --release --manifest-path ../libtypio/Cargo.toml
+meson compile -C ../../flux/build    # first time: meson setup ../../flux/build ../../flux
+export LD_LIBRARY_PATH="$PWD/../libtypio/target/release:$PWD/../../flux/build:${LD_LIBRARY_PATH}"
+cargo build --release -p typio-host --bin typio
+cargo test -p typio-host
 ```
 
-Before sending a change, run the suite under sanitizers as described in
-[Testing](docs/dev/testing.md). CI enforces `-Dwerror=true`, ASan, and
-UBSan, so a warning or a leak will fail the pull request.
+Before sending a change, run the relevant suites described in
+[Testing](docs/dev/testing.md). CI builds the shipping Rust daemon and runs
+the Cargo test suite against pinned sibling `libtypio` and `flux` checkouts.
 
 ## libtypio version
 
 CI builds against the libtypio commit pinned by `LIBTYPIO_PINNED_REF` in
 `.github/workflows/ci.yml`. If your change needs newer libtypio API, bump
-the pin in its own commit and check that the `meson.build` version floor
-still matches. The canary job tracks libtypio `main`; its failures are
-informational and never block a pull request.
+the pin in its own commit. The canary job tracks libtypio `main`; its
+failures are informational and never block a pull request.
 
 ## Changes that need more than code
 

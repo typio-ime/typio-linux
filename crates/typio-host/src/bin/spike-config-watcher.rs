@@ -41,9 +41,7 @@ fn main() -> ExitCode {
         }
     };
     eprintln!("typio-host Phase 2 spike: watching {config_dir:?}");
-    eprintln!(
-        "(write to {config_dir:?}/core.toml or platform.toml to fire a reload)"
-    );
+    eprintln!("(write to {config_dir:?}/core.toml or platform.toml to fire a reload)");
 
     let watcher = match ConfigWatcher::with_debounce(&config_dir, Duration::from_millis(100)) {
         Ok(w) => w,
@@ -64,10 +62,20 @@ fn main() -> ExitCode {
 
     // SAFETY: both fds are owned by the leaked ConfigWatcher which outlives
     // the process. calloop borrows them via BorrowedFd and never closes.
-    let inotify_source =
-        unsafe { Generic::new(BorrowedFd::borrow_raw(inotify_fd), Interest::READ, Mode::Level) };
-    let timer_source =
-        unsafe { Generic::new(BorrowedFd::borrow_raw(timer_fd), Interest::READ, Mode::Level) };
+    let inotify_source = unsafe {
+        Generic::new(
+            BorrowedFd::borrow_raw(inotify_fd),
+            Interest::READ,
+            Mode::Level,
+        )
+    };
+    let timer_source = unsafe {
+        Generic::new(
+            BorrowedFd::borrow_raw(timer_fd),
+            Interest::READ,
+            Mode::Level,
+        )
+    };
 
     let mut event_loop: EventLoop<LoopData> = match EventLoop::try_new() {
         Ok(el) => el,
