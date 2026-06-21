@@ -1489,7 +1489,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.4] — 2026-05-29
 
 ### Fixed
-- Stop swallowing genuine keystrokes after a keyboard-grab rebuild. The startup stale-key guard suppressed every press within two Wayland dispatch epochs of a grab rebuild; on the reactivation path (which terminals and tmux trigger frequently) this had nothing legitimate to suppress and ate the user's first real keystroke. Stale presses are now dropped by the grab-generation fence instead, and the startup guard only bounds orphan-release cleanup.
+
+- **First indicator banner no longer trips the watchdog at daemon
+  startup.** `ensure_banner_size` and `ensure_candidate_size` shared
+  an asymmetric grow-only policy: the swapchain width was quantised
+  to 64 px and never shrunk (ADR-0013), but the height was exact-
+  matched against `phys_height`. The pre-allocated 256×64 swapchain
+  from `InputMethodFrontend::connect` covered a 40 px banner on the
+  width axis (cropped via `wp_viewport`) but triggered a height
+  resize from 64 → 40 px on the very first banner. `flux_surface_resize`
+  does `vkDeviceWaitIdle` + swapchain recreate, which blocks on the
+  compositor's swapchain-image release; on a fresh daemon the
+  compositor has nothing to release yet, and the wait pushed the
+  panel-flush stage past the 3 s watchdog, killing the process.
+  Height is now quantised to 32 px and grow-only, matching the width
+  path; the shared resize+viewport-crop logic lives in a single
+  `FluxPanel::apply_grow_only_size` helper so the two callers cannot
+  drift apart again.
+
 
 ## [0.0.3] — 2026-05-29
 

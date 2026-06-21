@@ -53,6 +53,16 @@ const PANEL_FRAME_TIMEOUT_NS: u64 = 200_000_000;
 /// `flux_surface_resize` (and its `vkDeviceWaitIdle` + WSI roundtrips)
 /// is never called again during steady-state paging.
 const SURFACE_WIDTH_QUANTUM: u32 = 64;
+/// Height quantum (same grow-only logic as width). Banner and
+/// candidate rows are both ~40 px at scale 1; a 32 px quantum rounds
+/// the first request up to 64 px, matching the pre-allocation in
+/// `InputMethodFrontend::connect` and so avoiding a first-render
+/// `flux_surface_resize` (which blocks the loop on the compositor's
+/// swapchain release and trips the 3 s watchdog on the very first
+/// indicator banner). Without this, height was exact-matched while
+/// width was grow-only — a quiet asymmetry that made every panel
+/// flush in a new process pay a full swapchain recreate.
+const SURFACE_HEIGHT_QUANTUM: u32 = 32;
 const PANEL_PADDING: f32 = 8.0;
 const PANEL_ROW_HEIGHT: f32 = 24.0;
 const CANDIDATE_FONT_SIZE: f32 = 16.0;
@@ -469,24 +479,48 @@ impl FluxPanel {
         let content_w_logical = desired_width as i32;
         let content_h_logical = desired_height as i32;
 
+        self.apply_grow_only_size(phys_width, phys_height, content_w_logical, content_h_logical);
+    }
+
+    /// Grow-only swapchain sizing shared by the candidate and banner
+    /// paths (ADR-0013, extended to height). Both axes are quantised
+    /// up and never shrink, so any content change that stays inside
+    /// the current quantum reuses the existing swapchain and only
+    /// re-issues a `wp_viewport` crop. This keeps `flux_surface_resize`
+    /// — and its `vkDeviceWaitIdle` + WSI roundtrip — out of the
+    /// steady-state render path, including the first indicator banner
+    /// of every fresh daemon (where the watchdog is unforgiving).
+    ///
+    /// Falls back to exact-size `resize()` when the compositor lacks
+    /// `wp_viewporter`; that path rebuilds the swapchain on every
+    /// change, which ADR-0013 documented as the watchdog-killing case.
+    fn apply_grow_only_size(
+        &mut self,
+        phys_width: u32,
+        phys_height: u32,
+        content_w_logical: i32,
+        content_h_logical: i32,
+    ) {
         if let Some(viewport) = self.viewport.as_ref() {
-            // Grow-only: round the physical width up to the next quantum
-            // and never shrink. Sub-quantum changes reuse the buffer.
-            let quantised_phys_w = phys_width.div_ceil(SURFACE_WIDTH_QUANTUM) * SURFACE_WIDTH_QUANTUM;
+            let quantised_phys_w =
+                phys_width.div_ceil(SURFACE_WIDTH_QUANTUM) * SURFACE_WIDTH_QUANTUM;
+            let quantised_phys_h =
+                phys_height.div_ceil(SURFACE_HEIGHT_QUANTUM) * SURFACE_HEIGHT_QUANTUM;
             let target_phys_w = self.width.max(quantised_phys_w);
-            if target_phys_w != self.width || phys_height != self.height {
+            let target_phys_h = self.height.max(quantised_phys_h);
+            if target_phys_w != self.width || target_phys_h != self.height {
                 self.width = target_phys_w;
-                self.height = phys_height;
+                self.height = target_phys_h;
                 if !self.surface.is_null() {
                     unsafe {
-                        flux_sys::flux_surface_resize(self.surface, target_phys_w, phys_height);
+                        flux_sys::flux_surface_resize(self.surface, target_phys_w, target_phys_h);
                     }
                 }
             }
             // Always re-issue the crop so the compositor shows the exact
-            // content rect regardless of buffer width. Cheap: two protocol
+            // content rect regardless of buffer size. Cheap: two protocol
             // requests, applied at the next commit (i.e. the present in
-            // draw_candidates or the detach in hide).
+            // draw_candidates / draw_status_banner or the detach in hide).
             if content_w_logical != self.content_w_logical
                 || content_h_logical != self.content_h_logical
             {
@@ -613,30 +647,7 @@ impl FluxPanel {
         let content_w_logical = desired_width as i32;
         let content_h_logical = desired_height as i32;
 
-        if let Some(viewport) = self.viewport.as_ref() {
-            let quantised_phys_w =
-                phys_width.div_ceil(SURFACE_WIDTH_QUANTUM) * SURFACE_WIDTH_QUANTUM;
-            let target_phys_w = self.width.max(quantised_phys_w);
-            if target_phys_w != self.width || phys_height != self.height {
-                self.width = target_phys_w;
-                self.height = phys_height;
-                if !self.surface.is_null() {
-                    unsafe {
-                        flux_sys::flux_surface_resize(self.surface, target_phys_w, phys_height);
-                    }
-                }
-            }
-            if content_w_logical != self.content_w_logical
-                || content_h_logical != self.content_h_logical
-            {
-                viewport.set_source(0.0, 0.0, content_w_logical as f64, content_h_logical as f64);
-                viewport.set_destination(content_w_logical, content_h_logical);
-                self.content_w_logical = content_w_logical;
-                self.content_h_logical = content_h_logical;
-            }
-        } else {
-            self.resize(phys_width, phys_height);
-        }
+        self.apply_grow_only_size(phys_width, phys_height, content_w_logical, content_h_logical);
     }
 }
 
