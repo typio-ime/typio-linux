@@ -469,7 +469,17 @@ impl InputMethodFrontend {
         let display_ptr = frontend.raw_display_ptr();
         let surface_ptr = frontend.state.popup_surface_raw_ptr();
         let viewport = frontend.state.panel_viewport.clone();
-        match unsafe { FluxPanel::new_from_surface(display_ptr, surface_ptr, viewport, 1, 1) } {
+        // Allocate the initial swapchain at a size that covers a typical
+        // banner or a small candidate row, so the first render does not
+        // need to call `flux_surface_resize` (which blocks on
+        // `vkDeviceWaitIdle`). 256x64 physical maps to 256x64 logical at
+        // scale 1x — enough for a `<badge> · <engine> · <mode>` banner
+        // (~100x40) or a short candidate row. The grow-only / viewport
+        // crop path in `ensure_*_size` takes over for larger content; the
+        // difference is that the first expensive resize now happens during
+        // actual user interaction, not on the first automatic indicator
+        // trigger where the watchdog is unforgiving.
+        match unsafe { FluxPanel::new_from_surface(display_ptr, surface_ptr, viewport, 256, 64) } {
             Ok(panel) => frontend.panel = Some(panel),
             Err(e) => eprintln!("WARN: FluxPanel creation failed: {e}"),
         }
@@ -1104,6 +1114,12 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
                 // engine; release events are forwarded to the focused app
                 // and stop the repeat timer. Without queueing releases,
                 // the timer fires forever after a single press.
+                //
+                // When the text field is deactivated (state.active == false)
+                // the grab may still be retained as a soft pause. Forward
+                // the key directly to the virtual keyboard so shortcuts and
+                // regular keys still reach the focused application instead
+                // of being silently swallowed by the retained grab.
                 if state.active {
                     state.pending_key = Some(DecodedKeyEvent {
                         keycode: key,
@@ -1113,6 +1129,8 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
                         state: raw_state,
                         time,
                     });
+                } else {
+                    state.forward_key(time, key, raw_state);
                 }
             }
             Event::Modifiers {

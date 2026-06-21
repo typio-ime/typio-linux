@@ -517,6 +517,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Keyboard shortcuts swallowed during soft-pause.** When the
+  keyboard grab was retained across a `deactivate` (soft pause) but no
+  text field was active (`state.active == false`), key events from the
+  grab were silently dropped — never queued for the engine and never
+  forwarded to the virtual keyboard. This made application shortcuts
+  (Ctrl+S, Alt+Tab-like chords handled by apps, etc.) stop working
+  after defocusing a text field while the daemon held the grab. The
+  grab's `Key` event handler now forwards keys directly to the virtual
+  keyboard when the text input is not active, so unhandled keys reach
+  the focused application throughout the grab's lifetime.
+
 - **Tray icon never showed the active language badge at startup.** The
   daemon boot path activated only the first keyboard engine
   (`typio_registry_set_active_keyboard`) and never called
