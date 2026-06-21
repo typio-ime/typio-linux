@@ -22,7 +22,10 @@ use std::ffi::{c_char, c_void, CStr};
 use std::process::ExitCode;
 use std::sync::Mutex;
 
-use typio_abi::{TypioEventType, TypioKeyEvent, TypioResult};
+use typio_abi::{
+    TypioComposition, TypioCompositionCallback, TypioEventType,
+    TypioKeyEvent, TypioResult,
+};
 
 use typio_host::engine_loader::manifest::EngineManifest;
 use typio_host::input_method::{InputMethodFrontend, LifecycleEvent};
@@ -35,6 +38,8 @@ use typio_host::uds_server::{RequestOutcome, UdsServer};
 // ── Engine commit callback ────────────────────────────────────────────────
 
 static COMMITTED_TEXT: Mutex<Option<String>> = Mutex::new(None);
+static COMPOSITION_CANDIDATES: Mutex<Option<(Vec<String>, usize)>> = Mutex::new(None);
+static COMPOSITION_PREEDIT: Mutex<Option<String>> = Mutex::new(None);
 
 extern "C" fn on_commit(
     _ctx: *mut typio_abi::TypioInputContext,
@@ -49,6 +54,55 @@ extern "C" fn on_commit(
         .into_owned();
     if let Ok(mut slot) = COMMITTED_TEXT.lock() {
         *slot = Some(s);
+    }
+}
+
+extern "C" fn on_composition(
+    _ctx: *mut typio_abi::TypioInputContext,
+    comp: *const TypioComposition,
+    _user_data: *mut c_void,
+) {
+    if comp.is_null() {
+        return;
+    }
+    let comp = unsafe { &*comp };
+
+    // Extract candidates.
+    let mut candidates = Vec::new();
+    if !comp.candidates.is_null() && comp.candidate_count > 0 {
+        for i in 0..comp.candidate_count {
+            let c = unsafe { &*comp.candidates.add(i) };
+            if !c.text.is_null() {
+                let text = unsafe { CStr::from_ptr(c.text) }
+                    .to_string_lossy()
+                    .into_owned();
+                candidates.push(text);
+            }
+        }
+    }
+
+    // Extract preedit (first segment for simplicity).
+    let mut preedit = String::new();
+    if !comp.segments.is_null() && comp.segment_count > 0 {
+        for i in 0..comp.segment_count {
+            let seg = unsafe { &*comp.segments.add(i) };
+            if !seg.text.is_null() {
+                preedit.push_str(&unsafe { CStr::from_ptr(seg.text) }.to_string_lossy());
+            }
+        }
+    }
+
+    let selected = comp.selected.max(0) as usize;
+
+    if let Ok(mut slot) = COMPOSITION_CANDIDATES.lock() {
+        *slot = Some((candidates, selected));
+    }
+    if let Ok(mut slot) = COMPOSITION_PREEDIT.lock() {
+        if preedit.is_empty() {
+            *slot = None;
+        } else {
+            *slot = Some(preedit);
+        }
     }
 }
 
@@ -192,8 +246,13 @@ fn main() -> ExitCode {
         Some(on_commit),
         std::ptr::null_mut(),
     );
+    typio::input_context::typio_input_context_set_composition_callback(
+        ctx,
+        Some(on_composition as TypioCompositionCallback),
+        std::ptr::null_mut(),
+    );
     typio::input_context::typio_input_context_focus_in(ctx);
-    eprintln!("OK: input context ready");
+    eprintln!("OK: input context ready (commit + composition callbacks)");
 
     // ── 3. Wayland connection ─────────────────────────────────────────────
     let callback = Box::new(|_event: LifecycleEvent| {
@@ -335,6 +394,27 @@ fn main() -> ExitCode {
             } else {
                 // Key release — forward to app.
                 frontend.state().forward_key(key.time, key.keycode, 0);
+            }
+        }
+
+        // Drain composition updates → panel + preedit.
+        if let Ok(mut slot) = COMPOSITION_CANDIDATES.lock() {
+            if let Some((candidates, selected)) = slot.take() {
+                if candidates.is_empty() {
+                    // Clear preedit when composition ends.
+                    frontend.state_mut().clear_preedit_and_flush();
+                } else {
+                    // Update preedit text.
+                    let preedit_text = COMPOSITION_PREEDIT.lock()
+                        .ok()
+                        .and_then(|s| s.clone());
+                    if let Some(ref pt) = preedit_text {
+                        let cursor = pt.len() as u32;
+                        frontend.state_mut().set_preedit_and_flush(pt, cursor);
+                    }
+                }
+                // Draw candidates on the panel.
+                panel.draw_candidates(&candidates, selected);
             }
         }
 
