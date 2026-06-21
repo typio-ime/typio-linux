@@ -75,12 +75,21 @@ impl FluxPanel {
             return Err("cannot create wl_surface".into());
         }
 
-        // 2. Create Vulkan device with Wayland surface extension.
-        let wayland_ext = c"VK_KHR_wayland_surface".as_ptr() as *const c_char;
+        // 2. Create Vulkan device with Wayland surface + swapchain extensions.
+        let instance_exts: [*const c_char; 2] = [
+            c"VK_KHR_surface".as_ptr(),
+            c"VK_KHR_wayland_surface".as_ptr(),
+        ];
+        let device_exts: [*const c_char; 1] = [
+            c"VK_KHR_swapchain".as_ptr(),
+        ];
         let mut device_desc: flux_device_desc = std::mem::zeroed();
         device_desc.type_ = FType::FLUX_TYPE_DEVICE_DESC;
-        device_desc.required_instance_extensions = &wayland_ext;
-        device_desc.required_instance_extension_count = 1;
+        device_desc.required_instance_extensions = instance_exts.as_ptr();
+        device_desc.required_instance_extension_count = instance_exts.len() as u32;
+        device_desc.required_device_extensions = device_exts.as_ptr();
+        device_desc.required_device_extension_count = device_exts.len() as u32;
+        device_desc.frames_in_flight = 2;
 
         let mut device: *mut flux_device = ptr::null_mut();
         let r = flux_device_create(&device_desc, &mut device);
