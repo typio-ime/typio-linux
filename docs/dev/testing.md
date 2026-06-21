@@ -16,6 +16,26 @@ export LD_LIBRARY_PATH=/absolute/path/to/libtypio/target/release:${LD_LIBRARY_PA
 meson test -C build --print-errorlogs
 ```
 
+## Rust tests (cargo)
+
+The Rust port lives in `crates/typio-host` and has an independent cargo test
+suite. It still links the native `libtypio` and `flux` libraries at runtime,
+so the dynamic linker must be able to find them:
+
+```bash
+# Build or refresh the sibling dependencies first.
+( cd ../libtypio && cargo build --release )
+( cd ../flux && meson setup build && meson compile -C build )
+
+export LD_LIBRARY_PATH=../libtypio/target/release:../flux/build:${LD_LIBRARY_PATH}
+cargo test -p typio-host
+```
+
+If `cargo test` reports an undefined `flux_*` symbol, cargo is linking a
+stale or system `libflux` instead of the in-tree one. Make sure `../flux/build`
+contains `libflux.so` and that `LD_LIBRARY_PATH` points there before cargo
+invocations.
+
 Run with an isolated D-Bus session when validating status-bus, tray, or CI-like behavior:
 
 ```bash

@@ -239,6 +239,29 @@ For isolated D-Bus runs (sanitizer and CI-like):
 dbus-run-session -- meson test -C build --print-errorlogs
 ```
 
+## Cargo-only workflow
+
+For Rust-only changes you can build and test `crates/typio-host` directly
+without going through Meson. The crate depends on the same two native
+libraries as the Meson build, so build them first:
+
+```bash
+( cd ../libtypio && cargo build --release )
+( cd ../flux && meson setup build && meson compile -C build )
+```
+
+Then run cargo with the native libraries on the loader path:
+
+```bash
+export LD_LIBRARY_PATH=../libtypio/target/release:../flux/build:${LD_LIBRARY_PATH}
+cargo build -p typio-host
+cargo test -p typio-host
+```
+
+This is the fastest loop for unit/integration work on the Rust modules.
+The Meson build remains the source of truth for releases and for the
+shipping C daemon until ADR-0035 retires it.
+
 ## Icons in development
 
 The system tray reports `IconName` and `IconThemePath` via D-Bus. During

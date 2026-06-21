@@ -109,6 +109,48 @@ jobs:
   # Early warning for upstream drift: build against libtypio main HEAD.
   # Allowed to fail — a red canary means the next pin bump needs host
   # changes, not that this commit is broken.
+  cargo-test:
+    name: Cargo test suite
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build pkg-config \
+            libwayland-dev wayland-protocols libxkbcommon-dev \
+            libsystemd-dev libpipewire-0.3-dev \
+            libfreetype6-dev libharfbuzz-dev libfontconfig-dev \
+            libvulkan-dev glslang-tools
+
+      - name: Clone libtypio (pinned)
+        run: |
+          git clone --depth 1 --branch ${{ env.LIBTYPIO_PINNED_REF }} \
+            https://github.com/${{ github.repository_owner }}/libtypio.git \
+            ${{ github.workspace }}/../libtypio
+
+      - name: Build libtypio
+        run: cargo build --release --manifest-path ${{ github.workspace }}/../libtypio/Cargo.toml
+
+      - name: Clone flux (pinned)
+        run: |
+          git clone --depth 1 --branch v0.1.0 \
+            https://github.com/${{ github.repository_owner }}/flux.git \
+            ${{ github.workspace }}/../../flux
+
+      - name: Build flux
+        run: |
+          meson setup ${{ github.workspace }}/../../flux/build \
+            --prefix="$HOME/.local"
+          meson compile -C ${{ github.workspace }}/../../flux/build
+
+      - name: Cargo test
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/../libtypio/target/release:${{ github.workspace }}/../../flux/build
+        run: cargo test -p typio-host
+
   canary-libtypio-head:
     name: Canary — libtypio main HEAD
     runs-on: ubuntu-24.04

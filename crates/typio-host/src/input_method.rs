@@ -32,10 +32,14 @@ use std::io;
 use std::os::fd::{AsFd, AsRawFd};
 
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_backend::client::ReadEventsGuard;
 use wayland_client::protocol::{wl_keyboard, wl_registry, wl_seat, wl_surface};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 
+use crate::focus_controller::InputFacts;
+use crate::panel::FluxPanel;
+use crate::panel_scheduler::{self, PanelScheduleState};
 use crate::protocols::input_method_v2::zwp_input_method_keyboard_grab_v2::{
     self, ZwpInputMethodKeyboardGrabV2,
 };
@@ -49,7 +53,7 @@ use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_v1::{self, ZwpVi
 pub type LifecycleCallback = Box<dyn FnMut(LifecycleEvent) + Send>;
 
 /// A decoded key event with xkbcommon-resolved keysym.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedKeyEvent {
     /// Raw keycode from the compositor (evdev scancode).
     pub keycode: u32,
@@ -63,6 +67,25 @@ pub struct DecodedKeyEvent {
     pub state: u32,
     /// Timestamp in milliseconds (from the compositor).
     pub time: u32,
+}
+
+/// Pending/current text-state carried across the input-method `done` boundary.
+#[derive(Debug, Clone, Default)]
+pub struct SessionState {
+    /// The compositor says this text field is active.
+    pub active: bool,
+    /// Surrounding text from the focused application.
+    pub surrounding_text: Option<String>,
+    /// Cursor position in characters.
+    pub cursor: u32,
+    /// Anchor position in characters.
+    pub anchor: u32,
+    /// Content hint from the focused application.
+    pub content_hint: u32,
+    /// Content purpose from the focused application.
+    pub content_purpose: u32,
+    /// `text_change_cause` from the focused application.
+    pub text_change_cause: u32,
 }
 
 /// Lifecycle events the frontend surfaces to the caller.
@@ -99,8 +122,9 @@ pub struct InputMethodState {
     #[allow(dead_code)]
     seat: wl_seat::WlSeat,
     input_method: ZwpInputMethodV2,
-    #[allow(dead_code)]
-    keyboard_grab: ZwpInputMethodKeyboardGrabV2,
+    /// Keyboard grab object; recreated by the focus controller on hard
+    /// boundaries and retained during a soft pause.
+    keyboard_grab: Option<ZwpInputMethodKeyboardGrabV2>,
     /// Virtual keyboard for forwarding unhandled keys to the focused app.
     virtual_keyboard: ZwpVirtualKeyboardV1,
     /// Compositor proxy (for creating panel surfaces later).
@@ -139,6 +163,20 @@ pub struct InputMethodState {
     pub pending_key: Option<DecodedKeyEvent>,
     /// Pending text to commit to the compositor on the next flush.
     pub pending_commit: Option<String>,
+    /// Raw input facts recorded this tick for the focus controller.
+    pub facts: InputFacts,
+    /// Set when the compositor declares the input method unavailable.
+    stopped: bool,
+    /// Pending text state accumulated since the previous `done`.
+    pending: SessionState,
+    /// Text state committed by the latest `done`.
+    current: SessionState,
+    /// Optional libtypio input context used to apply surrounding text.
+    input_context: Option<*mut typio::TypioInputContext>,
+    /// True once a keymap event has been received for the current grab epoch.
+    pub keymap_received_this_epoch: bool,
+    /// Panel redraw scheduling state.
+    pub panel_schedule_state: PanelScheduleState,
 }
 
 impl InputMethodState {
@@ -150,6 +188,74 @@ impl InputMethodState {
     /// True iff the compositor has activated us.
     pub fn is_active(&self) -> bool {
         self.active
+    }
+
+    /// Mutable access to the raw input facts for this tick.
+    pub fn facts_mut(&mut self) -> &mut InputFacts {
+        &mut self.facts
+    }
+
+    /// Take the recorded facts so the focus controller can consume them.
+    pub fn take_facts(&mut self) -> InputFacts {
+        std::mem::take(&mut self.facts)
+    }
+
+    /// True if the compositor declared the input method unavailable.
+    pub fn stopped(&self) -> bool {
+        self.stopped
+    }
+
+    /// Provide the libtypio input context used to apply surrounding text.
+    pub fn set_input_context(&mut self, ctx: *mut typio::TypioInputContext) {
+        self.input_context = if ctx.is_null() { None } else { Some(ctx) };
+    }
+
+    /// Current text-state snapshot committed by the latest `done`.
+    pub fn current_session(&self) -> &SessionState {
+        &self.current
+    }
+
+    /// Mark the candidate panel dirty so the event loop flushes it.
+    pub fn mark_panel_dirty(&mut self) {
+        self.panel_schedule_state = panel_scheduler::mark_dirty(self.panel_schedule_state);
+    }
+
+    /// Current panel schedule state.
+    pub fn panel_schedule_state(&self) -> PanelScheduleState {
+        self.panel_schedule_state
+    }
+
+    /// Set the panel schedule state.
+    pub fn set_panel_schedule_state(&mut self, state: PanelScheduleState) {
+        self.panel_schedule_state = state;
+    }
+
+    /// Clear candidate panel state (focus lost / composition discarded).
+    pub fn clear_panel_state(&mut self) {
+        self.candidates.clear();
+        self.selected_candidate = 0;
+        self.panel_schedule_state = panel_scheduler::cancel();
+    }
+
+    /// Whether a keyboard grab object currently exists.
+    pub fn keyboard_grab_present(&self) -> bool {
+        self.keyboard_grab.is_some()
+    }
+
+    /// Create a new keyboard grab from the input-method object.
+    pub fn create_keyboard_grab(&mut self, qh: &QueueHandle<Self>) {
+        if self.keyboard_grab.is_none() {
+            self.keyboard_grab = Some(self.input_method.grab_keyboard(qh, ()));
+            self.keymap_received_this_epoch = false;
+        }
+    }
+
+    /// Destroy the current keyboard grab object.
+    pub fn destroy_keyboard_grab(&mut self) {
+        if let Some(grab) = self.keyboard_grab.take() {
+            drop(grab);
+            self.keymap_received_this_epoch = false;
+        }
     }
 
     /// Commit pending state to the compositor. Silently dropped before
@@ -278,12 +384,32 @@ pub struct InputMethodFrontend {
     conn: Connection,
     queue: EventQueue<InputMethodState>,
     state: InputMethodState,
+    panel: Option<FluxPanel>,
 }
 
 impl InputMethodFrontend {
     /// Connect to the Wayland display, bind globals, create the
-    /// input-method object.
+    /// input-method object, and attempt to create the GPU panel.
     pub fn connect(callback: Option<LifecycleCallback>) -> Result<Self, ConnectError> {
+        let mut frontend = Self::connect_internal(callback, true)?;
+
+        let display_ptr = frontend.raw_display_ptr();
+        let surface_ptr = frontend.state.popup_surface_raw_ptr();
+        match unsafe { FluxPanel::new_from_surface(display_ptr, surface_ptr, 1, 1) } {
+            Ok(panel) => frontend.panel = Some(panel),
+            Err(e) => eprintln!("WARN: FluxPanel creation failed: {e}"),
+        }
+
+        Ok(frontend)
+    }
+
+    /// Shared connection setup. When `create_panel` is false the GPU panel is
+    /// not created; this keeps unit tests that only exercise the protocol
+    /// state machine from crashing in environments without a Vulkan surface.
+    fn connect_internal(
+        callback: Option<LifecycleCallback>,
+        _create_panel: bool,
+    ) -> Result<Self, ConnectError> {
         let conn =
             Connection::connect_to_env().map_err(ConnectError::ConnectionFailed)?;
         let (globals, queue) =
@@ -316,8 +442,8 @@ impl InputMethodFrontend {
 
         let input_method = im_manager.get_input_method(&seat, &qh, ());
 
-        // Create the keyboard grab.
-        let keyboard_grab = input_method.grab_keyboard(&qh, ());
+        // Create the keyboard grab eagerly so the first focus tick can use it.
+        let keyboard_grab = Some(input_method.grab_keyboard(&qh, ()));
 
         // Create the virtual keyboard for forwarding unhandled keys.
         let virtual_keyboard = _vk_manager.create_virtual_keyboard(&seat, &qh, ());
@@ -348,13 +474,26 @@ impl InputMethodFrontend {
             mods_locked: 0,
             pending_key: None,
             pending_commit: None,
+            facts: InputFacts::default(),
+            stopped: false,
+            pending: SessionState::default(),
+            current: SessionState::default(),
+            input_context: None,
+            keymap_received_this_epoch: false,
+            panel_schedule_state: PanelScheduleState::default(),
         };
 
         Ok(Self {
             conn,
             queue,
             state,
+            panel: None,
         })
+    }
+
+    #[cfg(test)]
+    fn connect_test() -> Result<Self, ConnectError> {
+        Self::connect_internal(None, false)
     }
 
     /// Immutable access to the state (serial, active flag, etc.).
@@ -365,6 +504,42 @@ impl InputMethodFrontend {
     /// Mutable access to the state.
     pub fn state_mut(&mut self) -> &mut InputMethodState {
         &mut self.state
+    }
+
+    /// Mutable access to the candidate panel, if one was created.
+    pub fn panel_mut(&mut self) -> Option<&mut FluxPanel> {
+        self.panel.as_mut()
+    }
+
+    /// Provide the libtypio input context used to apply surrounding text.
+    pub fn set_input_context(&mut self, ctx: *mut typio::TypioInputContext) {
+        self.state.set_input_context(ctx);
+    }
+
+    /// True if the compositor declared the input method unavailable.
+    pub fn stopped(&self) -> bool {
+        self.state.stopped()
+    }
+
+    /// Whether a keyboard grab object currently exists.
+    pub fn keyboard_grab_present(&self) -> bool {
+        self.state.keyboard_grab_present()
+    }
+
+    /// Create a new keyboard grab object.
+    pub fn create_keyboard_grab(&mut self) {
+        let qh = self.queue.handle();
+        self.state.create_keyboard_grab(&qh);
+    }
+
+    /// Destroy the current keyboard grab object.
+    pub fn destroy_keyboard_grab(&mut self) {
+        self.state.destroy_keyboard_grab();
+    }
+
+    /// True if the first keymap for the current grab epoch has arrived.
+    pub fn keymap_received_this_epoch(&self) -> bool {
+        self.state.keymap_received_this_epoch
     }
 
     /// The Wayland connection's file descriptor for external event loops.
@@ -400,6 +575,19 @@ impl InputMethodFrontend {
             .dispatch_pending(&mut self.state)
             .map_err(|e| io::Error::other(format!("dispatch: {e}")))?;
         Ok(())
+    }
+
+    /// Flush pending Wayland requests to the compositor.
+    pub fn flush(&self) -> io::Result<()> {
+        self.conn
+            .flush()
+            .map_err(|e| io::Error::other(format!("flush: {e}")))
+    }
+
+    /// Prepare a read from the Wayland socket. Returns `None` when there
+    /// are already events queued that should be dispatched first.
+    pub fn prepare_read(&self) -> Option<ReadEventsGuard> {
+        self.queue.prepare_read()
     }
 
     /// Blocking event loop. Runs until the connection drops.
@@ -530,6 +718,26 @@ impl Dispatch<ZwpVirtualKeyboardManagerV1, ()> for InputMethodState {
     }
 }
 
+impl InputMethodState {
+    /// Apply the pending `done` batch to the current session state and, if a
+    /// libtypio input context is wired, forward surrounding text to it.
+    fn apply_pending_to_current(&mut self) {
+        self.current = self.pending.clone();
+        if let Some(ctx) = self.input_context {
+            if let Some(ref text) = self.current.surrounding_text {
+                if let Ok(c_text) = std::ffi::CString::new(text.as_str()) {
+                    typio::input_context::typio_input_context_set_surrounding(
+                        ctx,
+                        c_text.as_ptr(),
+                        self.current.cursor as i32,
+                        self.current.anchor as i32,
+                    );
+                }
+            }
+        }
+    }
+}
+
 impl Dispatch<ZwpInputMethodV2, ()> for InputMethodState {
     fn event(
         state: &mut Self,
@@ -543,10 +751,17 @@ impl Dispatch<ZwpInputMethodV2, ()> for InputMethodState {
         match event {
             Event::Activate => {
                 state.active = true;
+                state.facts.im_activate_seen = true;
+                state.pending = SessionState {
+                    active: true,
+                    ..SessionState::default()
+                };
                 state.fire(LifecycleEvent::Activated);
             }
             Event::Deactivate => {
                 state.active = false;
+                state.facts.im_deactivate_seen = true;
+                state.pending.active = false;
                 state.fire(LifecycleEvent::Deactivated);
             }
             Event::SurroundingText {
@@ -554,29 +769,51 @@ impl Dispatch<ZwpInputMethodV2, ()> for InputMethodState {
                 cursor,
                 anchor,
             } => {
+                state.pending.surrounding_text = Some(text);
+                state.pending.cursor = cursor;
+                state.pending.anchor = anchor;
                 state.fire(LifecycleEvent::SurroundingText {
-                    text,
+                    text: state.pending.surrounding_text.clone().unwrap_or_default(),
                     cursor,
                     anchor,
                 });
             }
-            Event::TextChangeCause { .. } => {
-                // Informational; recorded in the C version's focus_facts.
+            Event::TextChangeCause { cause } => {
+                state.pending.text_change_cause = u32::from(cause);
             }
             Event::ContentType { hint, purpose } => {
+                let hint_raw: u32 = match &hint {
+                    wayland_client::WEnum::Value(v) => (*v).into(),
+                    wayland_client::WEnum::Unknown(u) => *u,
+                };
+                let purpose_raw: u32 = match &purpose {
+                    wayland_client::WEnum::Value(v) => (*v).into(),
+                    wayland_client::WEnum::Unknown(u) => *u,
+                };
+                state.pending.content_hint = hint_raw;
+                state.pending.content_purpose = purpose_raw;
                 state.fire(LifecycleEvent::ContentType {
-                    hint: format!("{hint:?}").len() as u32,
-                    purpose: format!("{purpose:?}").len() as u32,
+                    hint: hint_raw,
+                    purpose: purpose_raw,
                 });
             }
             Event::Done => {
                 state.serial = state.serial.wrapping_add(1);
                 state.initialized = true;
+                state.facts.im_done_had_activate = state.facts.im_activate_seen;
+                state.facts.im_done_had_deactivate = state.facts.im_deactivate_seen;
+                state.facts.im_done_serial = state.serial;
+                state.apply_pending_to_current();
+                // Clear per-event facts; the batch facts survive until the
+                // focus controller consumes them at the end of the tick.
+                state.facts.im_activate_seen = false;
+                state.facts.im_deactivate_seen = false;
                 state.fire(LifecycleEvent::Done {
                     serial: state.serial,
                 });
             }
             Event::Unavailable => {
+                state.stopped = true;
                 state.fire(LifecycleEvent::Unavailable);
             }
         }
@@ -645,6 +882,7 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
         use zwp_input_method_keyboard_grab_v2::Event;
         match event {
             Event::Keymap { format, fd, size } => {
+                state.keymap_received_this_epoch = true;
                 let fmt_raw: u32 = match &format {
                     wayland_client::WEnum::Value(v) => *v as u32,
                     wayland_client::WEnum::Unknown(u) => *u,
@@ -746,5 +984,51 @@ mod tests {
     fn lifecycle_event_is_debug() {
         assert!(format!("{:?}", LifecycleEvent::Activated).contains("Activated"));
         assert!(format!("{:?}", LifecycleEvent::Done { serial: 42 }).contains("42"));
+    }
+
+    #[test]
+    fn state_helpers_round_trip() {
+        let Ok(mut frontend) = InputMethodFrontend::connect_test() else {
+            eprintln!("skipping input_method state-helper test: no Wayland display");
+            return;
+        };
+
+        let state = frontend.state_mut();
+        assert_eq!(state.serial(), 0);
+        assert!(!state.is_active());
+        assert!(!state.stopped());
+
+        state.set_candidates(vec!["alpha".to_string(), "beta".to_string()], 1);
+        assert_eq!(state.candidates, vec!["alpha", "beta"]);
+        assert_eq!(state.selected_candidate, 1);
+
+        state.mark_panel_dirty();
+        assert_eq!(state.panel_schedule_state, PanelScheduleState::Dirty);
+
+        state.clear_panel_state();
+        assert!(state.candidates.is_empty());
+        assert_eq!(state.selected_candidate, 0);
+        assert_eq!(state.panel_schedule_state, PanelScheduleState::Idle);
+
+        state.facts.im_done_serial = 7;
+        let facts = state.take_facts();
+        assert_eq!(facts.im_done_serial, 7);
+        assert_eq!(state.facts.im_done_serial, 0);
+
+        let key = DecodedKeyEvent {
+            keycode: 30,
+            xkb_keycode: 38,
+            keysym: 0x0061,
+            unicode: "a".to_string(),
+            state: 1,
+            time: 123,
+        };
+        state.pending_key = Some(key.clone());
+        assert_eq!(state.take_pending_key(), Some(key));
+        assert!(state.take_pending_key().is_none());
+
+        state.pending_commit = Some("hello".to_string());
+        assert_eq!(state.take_pending_commit(), Some("hello".to_string()));
+        assert!(state.take_pending_commit().is_none());
     }
 }
