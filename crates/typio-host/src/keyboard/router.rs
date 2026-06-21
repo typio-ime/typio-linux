@@ -167,6 +167,13 @@ pub struct KeyboardRouter {
     /// Set when a chord completes during `dispatch_key`. The main loop
     /// drains this and cycles the active keyboard engine.
     shortcut_fired: bool,
+    /// Modifiers whose most recent press was forwarded to the engine
+    /// rather than swallowed by chord suppression. Used to forward
+    /// releases symmetrically so the engine never observes an unpaired
+    /// modifier release (which could spuriously toggle state, e.g. a
+    /// Rime schema switch on a Shift release whose press was consumed
+    /// by the Ctrl+Shift switch chord).
+    engine_tracked_mods: Modifiers,
 }
 
 /// Default engine-switch chord: Ctrl+Shift, the standard Linux IME
@@ -211,6 +218,7 @@ impl KeyboardRouter {
             shortcut_saw_non_modifier: false,
             shortcut_already_triggered: false,
             shortcut_fired: false,
+            engine_tracked_mods: Modifiers::NONE,
         })
     }
 
@@ -270,6 +278,7 @@ impl KeyboardRouter {
         self.repeat_key = None;
         self.repeat_mode = RepeatMode::Forward;
         self.physical_modifiers = Modifiers::NONE;
+        self.engine_tracked_mods = Modifiers::NONE;
     }
 
     /// Scrub the current key generation and reset all per-key tracking.
@@ -287,6 +296,7 @@ impl KeyboardRouter {
         self.shortcut_saw_non_modifier = false;
         self.shortcut_already_triggered = false;
         self.shortcut_fired = false;
+        self.engine_tracked_mods = Modifiers::NONE;
     }
 
     /// True iff the configured engine-switch chord (Ctrl+Shift by
@@ -322,11 +332,21 @@ impl KeyboardRouter {
         // Update physical modifier tracking.
         let bit = modifier_bit_for_keysym(key.keysym);
         let is_modifier_key = bit != Modifiers::NONE;
+        // Whether to suppress this modifier's release from the engine.
+        // A release is only forwarded when the matching press was also
+        // forwarded; chord-suppressed presses get chord-suppressed
+        // releases so the engine never sees an unpaired event that
+        // could spuriously toggle state (e.g. Rime schema switch).
+        let mut suppress_engine_release = false;
         if is_modifier_key {
             if state == WL_KEYBOARD_KEY_STATE_PRESSED {
                 self.physical_modifiers = Modifiers(self.physical_modifiers.0 | bit.0);
             } else {
+                if (self.engine_tracked_mods.0 & bit.0) == 0 {
+                    suppress_engine_release = true;
+                }
                 self.physical_modifiers = Modifiers(self.physical_modifiers.0 & !bit.0);
+                self.engine_tracked_mods = Modifiers(self.engine_tracked_mods.0 & !bit.0);
                 // Releasing any chord modifier ends the current gesture.
                 self.shortcut_saw_non_modifier = false;
                 self.shortcut_already_triggered = false;
@@ -352,7 +372,10 @@ impl KeyboardRouter {
             self.shortcut_fired = true;
             // The chord supersedes the engine: don't forward the
             // modifier presses to it either, or rime/compose may react
-            // (e.g. compose-key chords).
+            // (e.g. compose-key chords). This modifier's press never
+            // reached the engine, so drop it from the tracked set;
+            // its release will be suppressed to match.
+            self.engine_tracked_mods = Modifiers(self.engine_tracked_mods.0 & !bit.0);
             return true;
         }
 
@@ -361,10 +384,26 @@ impl KeyboardRouter {
         }
 
         if key.state != 1 {
-            // Release events are never consumed; caller forwards them.
-            return false;
+            // Release: forward to the engine so engines that need
+            // release events (e.g. Rime schema switching on a lone
+            // Shift release) can complete gesture detection — unless
+            // the matching press was chord-suppressed.
+            if suppress_engine_release {
+                return false;
+            }
+            let consumed = self.process_key_engine(key, xkb_mods_depressed, false);
+            eprintln!(
+                "router: keysym=0x{:x} unicode={:?} release consumed={}",
+                key.keysym, key.unicode, consumed
+            );
+            return consumed;
         }
 
+        // Press: record the modifier as engine-tracked before
+        // forwarding so its later release can be paired.
+        if is_modifier_key {
+            self.engine_tracked_mods = Modifiers(self.engine_tracked_mods.0 | bit.0);
+        }
         let consumed = self.process_key_engine(key, xkb_mods_depressed, false);
         eprintln!(
             "router: keysym=0x{:x} unicode={:?} consumed={}",
@@ -399,7 +438,11 @@ impl KeyboardRouter {
 
         let event = TypioKeyEvent {
             struct_size: std::mem::size_of::<TypioKeyEvent>(),
-            type_: TypioEventType::TypioEventKeyPress,
+            type_: if key.state == 1 {
+                TypioEventType::TypioEventKeyPress
+            } else {
+                TypioEventType::TypioEventKeyRelease
+            },
             keycode: key.keycode,
             keysym: key.keysym,
             modifiers: effective.0,
@@ -513,6 +556,7 @@ mod tests {
                 shortcut_saw_non_modifier: false,
                 shortcut_already_triggered: false,
                 shortcut_fired: false,
+                engine_tracked_mods: Modifiers::NONE,
             }
         }
     }

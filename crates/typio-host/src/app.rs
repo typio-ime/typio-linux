@@ -719,7 +719,21 @@ impl App {
                             arm_repeat(timer, compositor_info, mods);
                         }
                     } else {
-                        state.forward_key(key.time, key.keycode, key.state);
+                        // Forward release events to the engine so
+                        // engines that need them (e.g. Rime schema
+                        // switching on a lone Shift release) can
+                        // complete gesture detection. Modifier state
+                        // is mirrored separately via the Modifiers
+                        // grab event, so not forwarding a consumed
+                        // release here does not leave a stuck modifier
+                        // in the focused app.
+                        let consumed = router.dispatch_key(&key, mods);
+                        if consumed {
+                            router.drain_commit(state);
+                            router.drain_composition(state);
+                        } else {
+                            state.forward_key(key.time, key.keycode, key.state);
+                        }
                         router.on_release(&key);
                         let _ = timer.stop();
                     }

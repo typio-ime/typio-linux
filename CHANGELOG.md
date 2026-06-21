@@ -1408,7 +1408,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.0.5] — 2026-05-30
 
 ### Fixed
-- Eliminate candidate popup navigation lag that appeared after extended sessions. The popup now remains responsive during up/down/pageup/pagedown navigation regardless of session duration or compositor state (post-lock/suspend, DPMS events). Three complementary fixes: reduced acquire timeout from 32ms to 2ms, deferred panel flush when retry is pending, and persistent glyph upload context to reduce per-glyph overhead. (ADR-0015)
+
+- **Key releases now reach the engine (Rime schema switching on Shift,
+  etc.).** The keyboard router only ever forwarded key presses to
+  `typio_input_context_process_key`; release events were hard-stopped
+  in both the main loop (`app.rs` only dispatched when `key.state == 1`)
+  and the router (`dispatch_key` early-returned for releases), and the
+  ABI event type was hardcoded to `TypioEventKeyPress`. Engines that
+  detect a lone-modifier gesture on release — most notably Rime's
+  `ascii_composer.switch_key.Shift_L/Shift_R` used for schema/ASCII
+  toggling — could never complete the gesture. The router now forwards
+  releases with `TypioEventKeyRelease`, and the main loop follows the
+  same consume/forward contract as presses (drain on consume, otherwise
+  forward to the virtual keyboard). The Ctrl+Shift engine-switch chord
+  already suppresses its modifier presses from the engine; the matching
+  releases are now suppressed symmetrically via a new
+  `engine_tracked_mods` bitfield so the engine never observes an
+  unpaired release.
+
 
 ## [0.0.4] — 2026-05-29
 
