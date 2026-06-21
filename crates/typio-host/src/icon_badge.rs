@@ -83,6 +83,20 @@ fn blend(buf: &mut [u8], idx: usize, r: u8, g: u8, b: u8, a: f32) {
 }
 
 /// Rasterise the shaped run into one `size`×`size` ARGB32 pixmap.
+///
+/// Layout strategy:
+/// 1. Shape the text and lay it out at the font's unit scale
+///    (`1 em == upem px`), measuring the combined glyph-bbox in font units.
+/// 2. Compute a scale-to-fit factor so that bbox just fills the canvas
+///    minus a 1px halo on every side (room for the dark outline).
+/// 3. Re-layout at that scale, shift-centre the resulting bbox, and draw
+///    an 8-direction 1px dark outline followed by the foreground.
+///
+/// The scale-to-fit fixes the long-standing issue that fixed-factor
+/// layouts (`px = size * 0.82`) rendered Latin badges ("EN") at ~60% of
+/// the canvas while CJK badges ("中") already filled it — different
+/// scripts have very different glyph-box/em ratios, and the only way to
+/// get a uniform visual size is to measure the real bbox.
 fn render_one(
     ab_font: &FontRef,
     rb_face: &RbFace,
@@ -111,41 +125,69 @@ fn render_one(
     if upem <= 0.0 {
         return None;
     }
-    // Leave a margin; px is the em size in pixels.
-    let px = size as f32 * 0.82;
-    let sf = px / upem;
-    let scale = PxScale::from(px);
-
-    // Total advance (font units → px) to centre the run horizontally.
-    let total_adv: f32 = positions.iter().map(|p| p.x_advance as f32).sum::<f32>() * sf;
-    let mut pen_x = (size as f32 - total_adv) / 2.0;
-    let baseline = size as f32 * 0.78;
 
     let r = ((fg_rgb >> 16) & 0xFF) as u8;
     let g = ((fg_rgb >> 8) & 0xFF) as u8;
     let b = (fg_rgb & 0xFF) as u8;
 
-    let mut argb = vec![0u8; dim * dim * 4];
-    let mut any_coverage = false;
+    // ── Pass 1: measure at unit scale (1 em = upem px) so we get the
+    //    natural glyph bbox in font units, independent of any pixel scale.
+    let unit_scale = PxScale::from(upem);
+    let mut measure_bbox: Option<ab_glyph::Rect> = None;
+    let mut pen_x_units = 0.0_f32;
+    for (info, pos) in infos.iter().zip(positions.iter()) {
+        let gx = pen_x_units + pos.x_offset as f32;
+        let gy = -pos.y_offset as f32;
+        pen_x_units += pos.x_advance as f32;
+        let glyph = Glyph {
+            id: GlyphId(info.glyph_id as u16),
+            scale: unit_scale,
+            position: ab_glyph::point(gx, gy),
+        };
+        let Some(outline) = ab_font.outline_glyph(glyph) else {
+            continue;
+        };
+        let bb = outline.px_bounds();
+        measure_bbox = Some(match measure_bbox {
+            Some(mut acc) => {
+                acc.min.x = acc.min.x.min(bb.min.x);
+                acc.min.y = acc.min.y.min(bb.min.y);
+                acc.max.x = acc.max.x.max(bb.max.x);
+                acc.max.y = acc.max.y.max(bb.max.y);
+                acc
+            }
+            None => bb,
+        });
+    }
 
-    // Outline offsets (thin dark halo) then the foreground pass on top.
-    let passes: [(i32, i32, u8, u8, u8); 9] = [
-        (-1, -1, 0, 0, 0),
-        (0, -1, 0, 0, 0),
-        (1, -1, 0, 0, 0),
-        (-1, 0, 0, 0, 0),
-        (1, 0, 0, 0, 0),
-        (-1, 1, 0, 0, 0),
-        (0, 1, 0, 0, 0),
-        (1, 1, 0, 0, 0),
-        (0, 0, r, g, b), // foreground, drawn last
-    ];
+    let mbbox = measure_bbox?;
+    let mbbox_w = mbbox.max.x - mbbox.min.x;
+    let mbbox_h = mbbox.max.y - mbbox.min.y;
+    if mbbox_w < 1.0 || mbbox_h < 1.0 {
+        return None;
+    }
 
+    // ── Scale-to-fit: pick the largest scale whose bbox fits in the canvas
+    //    minus a halo on each side. The halo gives the dark outline room to
+    //    draw its neighbours without clipping at the canvas edge and without
+    //    visually merging with adjacent UI; 1px is the sweet spot between
+    //    "badge fills the pixmap" and "badge has breathing room".
+    let halo = 1.0_f32;
+    let target = (size as f32 - 2.0 * halo).max(8.0);
+    let fit_factor = (target / mbbox_w).min(target / mbbox_h);
+    let px = fit_factor * upem;
+    let sf = fit_factor;
+    let scale = PxScale::from(px);
+
+    // ── Pass 2: build outlines at the chosen scale and recompute the
+    //    combined bbox so we can shift-centre it precisely.
+    let mut outlines: Vec<ab_glyph::OutlinedGlyph> = Vec::new();
+    let mut bbox: Option<ab_glyph::Rect> = None;
+    let mut pen_x = 0.0_f32;
     for (info, pos) in infos.iter().zip(positions.iter()) {
         let gx = pen_x + pos.x_offset as f32 * sf;
-        let gy = baseline - pos.y_offset as f32 * sf;
+        let gy = -pos.y_offset as f32 * sf;
         pen_x += pos.x_advance as f32 * sf;
-
         let glyph = Glyph {
             id: GlyphId(info.glyph_id as u16),
             scale,
@@ -154,14 +196,81 @@ fn render_one(
         let Some(outline) = ab_font.outline_glyph(glyph) else {
             continue;
         };
+        let bb = outline.px_bounds();
+        bbox = Some(match bbox {
+            Some(mut acc) => {
+                acc.min.x = acc.min.x.min(bb.min.x);
+                acc.min.y = acc.min.y.min(bb.min.y);
+                acc.max.x = acc.max.x.max(bb.max.x);
+                acc.max.y = acc.max.y.max(bb.max.y);
+                acc
+            }
+            None => bb,
+        });
+        outlines.push(outline);
+    }
+
+    let bbox = bbox?;
+    let bbox_w = bbox.max.x - bbox.min.x;
+    let bbox_h = bbox.max.y - bbox.min.y;
+    if bbox_w < 1.0 || bbox_h < 1.0 || outlines.is_empty() {
+        return None;
+    }
+
+    let shift_x = (size as f32 - bbox_w) / 2.0 - bbox.min.x;
+    let shift_y = (size as f32 - bbox_h) / 2.0 - bbox.min.y;
+
+    let mut argb = vec![0u8; dim * dim * 4];
+    let mut any_coverage = false;
+
+    // Outline strategy:
+    // * 24px and up — 8-direction 1px halo. Glyphs are large enough that
+    //   the diagonal neighbours don't close up counter-forms (the inside
+    //   of 中 / あ / EN stays open).
+    // * Below 24px — 4-direction 1px halo plus a second 4-direction pass
+    //   at ±2px. That thickens the dark fringe without adding diagonal
+    //   coverage that would fill in the middle of dense CJK glyphs.
+    // Foreground is drawn last so the white sits on top of the dark halo
+    // along the glyph edge.
+    let outline_passes_large: [(i32, i32, u8, u8, u8); 9] = [
+        (-1, -1, 0, 0, 0),
+        (0, -1, 0, 0, 0),
+        (1, -1, 0, 0, 0),
+        (-1, 0, 0, 0, 0),
+        (1, 0, 0, 0, 0),
+        (-1, 1, 0, 0, 0),
+        (0, 1, 0, 0, 0),
+        (1, 1, 0, 0, 0),
+        (0, 0, r, g, b),
+    ];
+    let outline_passes_small: [(i32, i32, u8, u8, u8); 9] = [
+        (-1, 0, 0, 0, 0),
+        (1, 0, 0, 0, 0),
+        (0, -1, 0, 0, 0),
+        (0, 1, 0, 0, 0),
+        (-2, 0, 0, 0, 0),
+        (2, 0, 0, 0, 0),
+        (0, -2, 0, 0, 0),
+        (0, 2, 0, 0, 0),
+        (0, 0, r, g, b),
+    ];
+    let passes: &[(i32, i32, u8, u8, u8)] = if size >= 24 {
+        &outline_passes_large
+    } else {
+        &outline_passes_small
+    };
+
+    for outline in &outlines {
         let bounds = outline.px_bounds();
-        for &(ox, oy, pr, pg, pb) in &passes {
+        let min_x = bounds.min.x + shift_x;
+        let min_y = bounds.min.y + shift_y;
+        for &(ox, oy, pr, pg, pb) in passes {
             outline.draw(|x, y, coverage| {
                 if coverage <= 0.0 {
                     return;
                 }
-                let px_x = bounds.min.x as i32 + x as i32 + ox;
-                let px_y = bounds.min.y as i32 + y as i32 + oy;
+                let px_x = min_x as i32 + x as i32 + ox;
+                let px_y = min_y as i32 + y as i32 + oy;
                 if px_x < 0 || px_y < 0 || px_x >= size_i || px_y >= size_i {
                     return;
                 }
@@ -260,5 +369,38 @@ mod tests {
         }
         assert_eq!(out.len(), 1);
         assert!(has_coverage(&out[0]));
+    }
+
+    /// Debug aid: dump a badge as a PAM file under /tmp/badge_dbg/ for visual
+    /// inspection of pixel sharpness / centering. Ignored by default; invoke
+    /// with `cargo test -p typio-host --lib icon_badge::tests::dump_for_inspection -- --nocapture --ignored`.
+    #[test]
+    #[ignore]
+    fn dump_for_inspection() {
+        let _ = std::fs::create_dir("/tmp/badge_dbg");
+        for text in ["中", "EN", "あ", "Рус"] {
+            for &size in [16u32, 22, 24, 32, 64].iter() {
+                let out = render(text, &[size], 0xFFFFFF);
+                if out.is_empty() {
+                    continue;
+                }
+                let p = &out[0];
+                let path = format!("/tmp/badge_dbg/{text}_{size}.pam");
+                if let Ok(mut f) = std::fs::File::create(&path) {
+                    use std::io::Write;
+                    let _ = write!(
+                        f,
+                        "P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n",
+                        p.width, p.height
+                    );
+                    let _ = f.write_all(&p.argb);
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "dumped {path} ({}x{})",
+                        p.width, p.height
+                    );
+                }
+            }
+        }
     }
 }

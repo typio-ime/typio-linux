@@ -528,6 +528,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keyboard when the text input is not active, so unhandled keys reach
   the focused application throughout the grab's lifetime.
 
+- **Tray badge rendering was clipped, off-centre, and visually muddy.**
+  `icon_badge::render_one` used a fixed `px = size*0.82` font scale and
+  `baseline = size*0.78` heuristic tuned for Latin glyphs. CJK glyphs
+  (中 / あ) routinely overshoot the font's em box, so the heuristic
+  pushed them past the bottom of the 16/22/24px pixmaps and the lower
+  strokes were silently cropped. The 8-pass diagonal dark halo then
+  collapsed the counter-form (the middle of "中" filled in), leaving
+  an unreadable blob. The rasteriser now measures the combined pixel
+  bbox of the shaped glyph run, picks the largest scale factor whose
+  bbox fits inside the canvas minus a 1px outline halo on every side,
+  and shift-centres the bbox both horizontally and vertically. The
+  halo uses 8-direction 1px offsets for sizes >= 24 (where counter-
+  forms stay open) and a 4-direction 1px-plus-2px-thickened halo
+  below 24 (so fine strokes stay distinct). Net effect: 中 / EN / あ
+  render completely, centred, and legible at every SNI pixmap size.
+
 - **Tray icon never showed the active language badge at startup.** The
   daemon boot path activated only the first keyboard engine
   (`typio_registry_set_active_keyboard`) and never called
