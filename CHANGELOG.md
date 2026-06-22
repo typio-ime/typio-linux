@@ -28,6 +28,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Engine registration switched to libtypio's native Rust API.**
+  `App::init` now drives engine discovery through `EngineLoader::load_dir`
+  + `TypioInstance::registry_rust_mut` (the mutable Rust accessor added
+  to libtypio's Unreleased section), instead of the C ABI
+  `typio_registry_register_engine_process` path. EngineLoader is the
+  only registration path exercised by the daemon now — capability
+  negotiation, language propagation, and `ProcessBackend` construction
+  happen in one place. `LoadDirReport::registered` now carries
+  `Vec<RegisteredEngine>` (name + type) instead of a bare count so the
+  host can keep its "registered N keyboard(s), M voice(s)" log line
+  without re-scanning manifests.
+
+- **`app/mod.rs` split further: `app/cli.rs` + `app/signals.rs`.** The
+  1004-line daemon file drops to 780 lines by extracting two cohesive
+  concerns: CLI parsing (`Cli` + `AppOptions` + the `From<Cli>` impl)
+  and signal plumbing (the `SHUTDOWN_FROM_SIGNAL` flag,
+  `MODE_CALLBACK_TX` OnceLock, `signal_handler`, `mode_changed_trampoline`,
+  and `install_signal_handlers`). `app/mod.rs` now owns lifecycle only.
+
 - **`app.rs` split into `app/` directory (2096 → 1004 lines + 3
   submodules).** The monolithic daemon file is now `app/mod.rs` (App
   struct + init + lifecycle) + `app/event_loop.rs` (the per-tick
@@ -77,6 +96,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the rare flush path, eliminating an allocation per Idle tick.
 
 ### Removed
+
+- **C-ABI `register_engine_process` deleted from `app/mod.rs`.** The
+  function duplicated `EngineLoader::load_single`'s responsibility
+  (manifest → C-ABI `typio_registry_register_engine_process`) but
+  existed only because libtypio's `EngineRegistry` was not reachable
+  from external Rust callers — `TypioRegistry::inner` is `pub(crate)`.
+  With libtypio's new `TypioInstance::registry_rust_mut()` accessor,
+  the host now drives registration through the Rust API and the C-ABI
+  shim is dead. Its `register_engine_process_round_trip` test was a
+  C-ABI smoke test that the EngineLoader integration tests already
+  cover more thoroughly.
 
 - **`pw_capture` module deleted (292 lines, never wired).** The
   PipeWire audio-capture port was declared in `lib.rs` but had no

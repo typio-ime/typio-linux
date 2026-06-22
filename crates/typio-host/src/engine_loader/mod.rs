@@ -133,7 +133,7 @@ impl EngineLoader {
                 continue;
             }
             match self.load_single(registry, &path) {
-                Ok(()) => report.registered += 1,
+                Ok(info) => report.registered.push(info),
                 Err(LoadError::Skipped(reason)) => report.skipped.push((path, reason)),
                 Err(other) => report.failed.push((path, other)),
             }
@@ -171,7 +171,7 @@ impl EngineLoader {
         &mut self,
         registry: &mut EngineRegistry,
         path: &Path,
-    ) -> Result<(), LoadError> {
+    ) -> Result<RegisteredEngine, LoadError> {
         let manifest = EngineManifest::read_from(path).map_err(LoadError::from)?;
 
         if !manifest.has_required_fields() {
@@ -232,7 +232,10 @@ impl EngineLoader {
             }
         }
 
-        Ok(())
+        Ok(RegisteredEngine {
+            name: manifest.name,
+            engine_type,
+        })
     }
 
     fn build_engine_info(&self, manifest: &EngineManifest, engine_type: EngineType) -> EngineInfo {
@@ -255,6 +258,17 @@ impl EngineLoader {
             backend_preference: BackendPreference::FfiPreferred,
         }
     }
+}
+
+/// A successfully registered engine, returned by [`EngineLoader::load_single`]
+/// and collected into [`LoadDirReport::registered`].
+#[derive(Debug, Clone)]
+pub struct RegisteredEngine {
+    /// Engine name (the manifest's `name` field under which it was
+    /// registered with `EngineRegistry`).
+    pub name: String,
+    /// Keyboard or voice.
+    pub engine_type: EngineType,
 }
 
 /// Why a load call did not result in a registration, even though the manifest
@@ -317,8 +331,8 @@ impl std::error::Error for LoadError {}
 /// Per-directory summary returned by [`EngineLoader::load_dir`].
 #[derive(Debug, Default)]
 pub struct LoadDirReport {
-    /// Count of engines successfully registered.
-    pub registered: usize,
+    /// Engines successfully registered, with name + type.
+    pub registered: Vec<RegisteredEngine>,
     /// Manifests located but deliberately skipped, with reason.
     pub skipped: Vec<(PathBuf, SkipReason)>,
     /// Manifests that failed to load (parse error, registry error, etc.).
@@ -459,7 +473,9 @@ optional = ["prediction"]
         let mut registry = EngineRegistry::new();
         let report = loader.load_dir(&mut registry, temp.path());
 
-        assert_eq!(report.registered, 1, "one engine registered");
+        assert_eq!(report.registered.len(), 1, "one engine registered");
+        assert_eq!(report.registered[0].name, "demo");
+        assert_eq!(report.registered[0].engine_type, EngineType::Keyboard);
         assert_eq!(report.skipped.len(), 1, "badproto skipped");
         assert_eq!(report.failed.len(), 1, "broken failed to parse");
         // The manifest's `name` field is "demo" (from VALID_KEYBOARD_TOML).
@@ -487,7 +503,7 @@ optional = ["prediction"]
         let mut loader = EngineLoader::new();
         let mut registry = EngineRegistry::new();
         let report = loader.load_dir(&mut registry, Path::new("/nonexistent/typio/engines"));
-        assert_eq!(report.registered, 0);
+        assert!(report.registered.is_empty());
         assert!(report.skipped.is_empty());
         assert!(report.failed.is_empty());
     }

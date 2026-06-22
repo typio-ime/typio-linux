@@ -169,7 +169,7 @@ languages = ["und"]
     let mut registry = typio::core::registry::EngineRegistry::new();
     let report = loader.load_dir(&mut registry, dir);
 
-    assert_eq!(report.registered, 1);
+    assert_eq!(report.registered.len(), 1);
     assert!(report.skipped.is_empty());
     assert!(report.failed.is_empty());
     assert_eq!(registry.list_keyboards(), vec!["fixture"]);

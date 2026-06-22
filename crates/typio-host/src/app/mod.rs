@@ -4,29 +4,29 @@
 //! wires engine loading, signal handling, restart-on-exec, and the eventual
 //! Wayland frontend / tray / IPC surfaces.
 
+mod cli;
 mod event_loop;
 mod indicator;
+mod signals;
 mod tray;
 
 #[cfg(feature = "systray")]
 use tray::{build_tray_snapshot, install_tray_action_handler, update_tray_from_controller};
 
 use std::cell::RefCell;
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{c_char, CString};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use clap::Parser;
 use typio::c_api::registry as c_registry;
 use typio::instance::TypioInstance;
-use typio::TypioResult;
-use typio_abi::TypioEngineInfo;
+
+use cli::Cli;
+pub use cli::AppOptions;
 
 use crate::config_watcher::ConfigWatcher;
-use crate::engine_loader::manifest::EngineManifest;
 use crate::engine_loader::resolve_engine_dirs;
 use crate::indicator::{Indicator, IndicatorConfig};
 use crate::ipc::protocol;
@@ -49,61 +49,6 @@ use crate::keyboard::router::KeyboardRouter;
 #[cfg(feature = "wayland")]
 use crate::repeat_timer::{self, RepeatTimer};
 
-/// Command-line options for the typio daemon.
-#[derive(Parser, Debug, Clone)]
-#[command(name = "typio", version, about = "Typio Wayland input-method daemon")]
-struct Cli {
-    /// Configuration directory.
-    #[arg(short, long)]
-    config: Option<PathBuf>,
-    /// Data directory.
-    #[arg(short, long)]
-    data: Option<PathBuf>,
-    /// Engine directory (repeatable; highest precedence).
-    #[arg(short = 'E', long)]
-    engine_dir: Vec<PathBuf>,
-    /// Unix-domain control socket path.
-    #[arg(long)]
-    socket: Option<PathBuf>,
-    /// Increase logging verbosity (-v debug, -vv trace).
-    #[arg(short, long, action = clap::ArgAction::Count)]
-    verbose: u8,
-}
-
-/// Runtime options after CLI parsing and directory resolution.
-#[derive(Debug, Clone)]
-pub struct AppOptions {
-    pub config_dir: Option<String>,
-    pub data_dir: Option<String>,
-    pub engine_dirs: Vec<String>,
-    pub socket_path: Option<PathBuf>,
-    pub verbosity: u8,
-}
-
-impl From<Cli> for AppOptions {
-    fn from(cli: Cli) -> Self {
-        Self {
-            config_dir: cli.config.map(|p| p.to_string_lossy().into_owned()),
-            data_dir: cli.data.map(|p| p.to_string_lossy().into_owned()),
-            engine_dirs: cli
-                .engine_dir
-                .into_iter()
-                .map(|p| p.to_string_lossy().into_owned())
-                .collect(),
-            socket_path: cli.socket,
-            verbosity: cli.verbose,
-        }
-    }
-}
-
-/// Async-signal-safe shutdown flag.
-///
-/// Only the SIGINT/SIGTERM handler writes this. The main loop translates
-/// it into a daemon exit on the next tick. Non-signal paths
-/// (`DaemonEvent::Shutdown` via the event channel) must NOT touch this
-/// flag — keeping it signal-only preserves async-signal-safety.
-static SHUTDOWN_FROM_SIGNAL: AtomicBool = AtomicBool::new(false);
-
 /// Cross-thread events delivered to the main loop.
 ///
 /// Senders live in:
@@ -125,55 +70,6 @@ enum DaemonEvent {
     /// libtypio state changed (engine / language / voice switch from
     /// the tray). Re-sync `StateController`, IPC bus, and tray surface.
     StateRefresh,
-}
-
-extern "C" fn signal_handler(_sig: libc::c_int) {
-    SHUTDOWN_FROM_SIGNAL.store(true, Ordering::SeqCst);
-}
-
-/// Process-global sender for the mode-changed callback. Stored in a
-/// `OnceLock` because the C ABI callback holds a raw `user_data` pointer
-/// that must be valid for the instance's lifetime, and there is only one
-/// daemon per process. The `Mutex` makes `&Sender` safely shareable
-/// across the engine communication thread (where out-of-process engine
-/// responses fire the callback) and the main loop thread.
-static MODE_CALLBACK_TX: OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<DaemonEvent>>> =
-    OnceLock::new();
-
-/// C trampoline for `TypioKeyboardModeChangedCallback`. Fires when an
-/// engine reports a **deliberate** mode change (e.g. rime switching schema
-/// or toggling 中/A). Marshals to the main loop via `DaemonEvent::StateRefresh`;
-/// the main loop then reads the fresh mode from
-/// `typio_instance_get_last_keyboard_mode` and triggers the indicator's
-/// no-gate deliberate-change path.
-///
-/// The first parameter uses the **opaque** `typio_abi::TypioInstance`
-/// (not `typio::instance::TypioInstance`) to match the callback typedef
-/// exactly. The actual pointer is to the real struct; we never dereference
-/// it here, so the opacity is harmless.
-extern "C" fn mode_changed_trampoline(
-    _instance: *mut typio_abi::TypioInstance,
-    _mode: *const typio_abi::TypioKeyboardEngineMode,
-    _user_data: *mut c_void,
-) {
-    if let Some(mutex) = MODE_CALLBACK_TX.get() {
-        if let Ok(tx) = mutex.lock() {
-            let _ = tx.send(DaemonEvent::StateRefresh);
-        }
-    }
-}
-
-fn install_signal_handlers() {
-    unsafe {
-        libc::signal(
-            libc::SIGINT,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-        libc::signal(
-            libc::SIGTERM,
-            signal_handler as *const () as libc::sighandler_t,
-        );
-    }
 }
 
 /// The running daemon.
@@ -324,13 +220,18 @@ impl App {
             }
         }
 
-        // Register engines from the resolved directories via the C ABI.
+        // Register engines from the resolved directories via libtypio's
+        // native Rust API (ADR-0035). EngineLoader handles manifest
+        // discovery, parsing, capability negotiation, and ProcessBackend
+        // registration in one pass — bypassing the C ABI used by the
+        // legacy `typio_registry_register_engine_process` path.
         let raw = instance.as_mut() as *mut TypioInstance;
         let registry = typio::instance::typio_instance_get_registry(raw);
         if registry.is_null() {
             return Err("engine registry not available".to_string());
         }
 
+        let mut loader = crate::engine_loader::EngineLoader::with_voice();
         let mut registered_keyboards: Vec<String> = Vec::new();
         let mut registered_voices: Vec<String> = Vec::new();
         for dir in &engine_dirs {
@@ -338,31 +239,31 @@ impl App {
             if !dir_path.is_dir() {
                 continue;
             }
-            let entries = match std::fs::read_dir(dir_path) {
-                Ok(e) => e,
-                Err(_) => continue,
+            // SAFETY: `raw` is a valid, initialised `*mut TypioInstance`;
+            // `registry_rust_mut` borrows `&mut instance` exclusively for
+            // the duration of the call. The C-ABI `registry` pointer
+            // borrowed above is not dereferenced in this block.
+            let Some(reg) = instance.registry_rust_mut() else {
+                continue;
             };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-                    continue;
-                };
-                if !crate::engine_loader::manifest::is_manifest_filename(name) {
-                    continue;
+            let report = loader.load_dir(reg, dir_path);
+            for info in report.registered {
+                eprintln!(
+                    "OK:   registered engine '{}' from {}/",
+                    info.name,
+                    dir_path.display()
+                );
+                if info.engine_type == typio::core::engine::EngineType::Voice {
+                    registered_voices.push(info.name);
+                } else {
+                    registered_keyboards.push(info.name);
                 }
-                let manifest = match EngineManifest::read_from(&path) {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-                if let Some((engine_name, engine_type)) =
-                    register_engine_process(registry, &manifest, &path)
-                {
-                    if engine_type == "voice" {
-                        registered_voices.push(engine_name);
-                    } else {
-                        registered_keyboards.push(engine_name);
-                    }
-                }
+            }
+            for (path, reason) in &report.skipped {
+                eprintln!("WARN: skipped {}: {reason:?}", path.display());
+            }
+            for (path, err) in &report.failed {
+                eprintln!("WARN: failed to load {}: {err}", path.display());
             }
         }
 
@@ -401,17 +302,17 @@ impl App {
 
         // Wire the mode-changed callback so engine-internal mode switches
         // (rime schema changes, 中/A toggle, etc.) reach the indicator.
-        // The trampoline stores its sender in `MODE_CALLBACK_TX` so the
-        // callback (which fires on the engine-comm thread for out-of-process
-        // engines like rime) can safely reach the main loop. Without this,
-        // only Ctrl+Shift engine switches trigger the indicator — rime's
-        // own mode/schema switches are silent.
-        let _ = MODE_CALLBACK_TX.set(std::sync::Mutex::new(self.event_tx.clone()));
+        // The trampoline's sender lives in `signals::MODE_CALLBACK_TX` so
+        // the callback (which fires on the engine-comm thread for
+        // out-of-process engines like rime) can safely reach the main
+        // loop. Without this, only Ctrl+Shift engine switches trigger
+        // the indicator — rime's own mode/schema switches are silent.
+        signals::set_mode_callback_tx(self.event_tx.clone());
         {
             let raw = self.instance.as_ref().unwrap().as_ref() as *const TypioInstance as *mut TypioInstance;
             typio::instance::typio_instance_set_keyboard_mode_changed_callback(
                 raw,
-                mode_changed_trampoline as _,
+                signals::mode_changed_trampoline as _,
                 std::ptr::null_mut(),
             );
         }
@@ -501,7 +402,7 @@ impl App {
             return 1;
         }
 
-        install_signal_handlers();
+        signals::install_signal_handlers();
 
         let socket_path = self
             .options
@@ -680,7 +581,7 @@ impl App {
     /// - `StateRefresh` triggers a controller + tray + IPC re-sync via
     ///   [`Self::refresh_state_surfaces`].
     fn drain_events(&mut self) -> bool {
-        let mut should_exit = SHUTDOWN_FROM_SIGNAL.swap(false, Ordering::Relaxed);
+        let mut should_exit = signals::take_shutdown_requested();
         let mut state_refresh = false;
 
         if let Some(rx) = self.event_rx.as_ref() {
@@ -784,128 +685,22 @@ fn arm_repeat(timer: &mut RepeatTimer, compositor_info: Option<(i32, i32)>, mods
 }
 
 
-/// Register one engine from a manifest via the C ABI.
-/// Returns `(name, engine_type)` on success.
-fn register_engine_process(
-    registry: *mut typio::c_api::registry::TypioRegistry,
-    manifest: &EngineManifest,
-    path: &std::path::Path,
-) -> Option<(String, String)> {
-    let c_name = CString::new(manifest.name.as_str()).ok()?;
-    let c_display =
-        CString::new(manifest.display_name.as_deref().unwrap_or(&manifest.name)).ok()?;
-    let c_desc = CString::new(manifest.description.as_deref().unwrap_or("")).ok()?;
-    let c_author = CString::new(manifest.author.as_deref().unwrap_or("")).ok()?;
-    let c_icon = manifest
-        .icon
-        .as_ref()
-        .and_then(|s| CString::new(s.as_str()).ok());
-    let c_lang = CString::new(manifest.primary_language()).ok()?;
-
-    let argv_strings: Vec<CString> = manifest
-        .argv(path)
-        .ok()?
-        .into_iter()
-        .filter_map(|s| CString::new(s).ok())
-        .collect();
-    if argv_strings.is_empty() {
-        return None;
-    }
-    let argv_ptrs: Vec<*const c_char> = argv_strings
-        .iter()
-        .map(|s| s.as_ptr())
-        .chain(std::iter::once(std::ptr::null()))
-        .collect();
-
-    let info = TypioEngineInfo {
-        name: c_name.as_ptr(),
-        display_name: c_display.as_ptr(),
-        description: c_desc.as_ptr(),
-        author: c_author.as_ptr(),
-        icon: c_icon
-            .as_ref()
-            .map(|s| s.as_ptr())
-            .unwrap_or(std::ptr::null()),
-        language: c_lang.as_ptr(),
-        type_: if manifest.engine_type == "voice" {
-            typio_abi::TypioEngineType::TypioEngineTypeVoice
-        } else {
-            typio_abi::TypioEngineType::TypioEngineTypeKeyboard
-        },
-        required_capabilities: std::ptr::null(),
-        optional_capabilities: std::ptr::null(),
-    };
-
-    let result =
-        c_registry::typio_registry_register_engine_process(registry, &info, argv_ptrs.as_ptr());
-
-    if result == TypioResult::TypioOk {
-        eprintln!(
-            "OK:   registered engine '{}' ({}) from {}",
-            manifest.name,
-            manifest.engine_type,
-            path.display()
-        );
-        let name = manifest.name.clone();
-        let engine_type = manifest.engine_type.clone();
-        Some((name, engine_type))
-    } else {
-        eprintln!(
-            "WARN: failed to register engine '{}' from {} (result={result:?})",
-            manifest.name,
-            path.display()
-        );
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
     use std::sync::Mutex;
 
     /// Serialises tests that touch the shared signal flags so they do not
     /// race with each other when `cargo test` runs them in parallel.
     static SIGNAL_FLAG_LOCK: Mutex<()> = Mutex::new(());
 
-    fn fixture_manifest() -> EngineManifest {
-        EngineManifest {
-            name: "fixture".to_string(),
-            engine_type: "keyboard".to_string(),
-            protocol: "typio-engine-protocol".to_string(),
-            command: Some("/bin/true".to_string()),
-            display_name: Some("Fixture".to_string()),
-            description: Some("test fixture".to_string()),
-            author: Some("test".to_string()),
-            icon: Some("fixture-icon".to_string()),
-            language: None,
-            languages: Some(vec!["und".to_string()]),
-            arg: None,
-            args: None,
-            required: None,
-            optional: None,
-        }
-    }
-
-    #[test]
-    fn cli_parses_into_app_options() {
-        let cli = Cli::parse_from([
-            "typio", "-c", "/cfg", "--socket", "/sock", "-E", "/e1", "-E", "/e2", "-vv",
-        ]);
-        let opts: AppOptions = cli.into();
-        assert_eq!(opts.config_dir, Some("/cfg".to_string()));
-        assert_eq!(opts.data_dir, None);
-        assert_eq!(opts.engine_dirs, vec!["/e1".to_string(), "/e2".to_string()]);
-        assert_eq!(opts.socket_path, Some(PathBuf::from("/sock")));
-        assert_eq!(opts.verbosity, 2);
-    }
-
     #[test]
     fn daemon_events_drive_drain_results() {
         let _guard = SIGNAL_FLAG_LOCK.lock().unwrap();
 
         // Reset the signal flag so prior tests don't leak.
-        SHUTDOWN_FROM_SIGNAL.store(false, Ordering::SeqCst);
+        signals::reset_shutdown_flag();
 
         // Build a minimal App with just the event channel wired. Other
         // fields are empty; drain_events does not touch them unless an
@@ -964,41 +759,10 @@ mod tests {
 
         // Signal flag still drives exit (async-signal-safe path).
         app.saw_restart = false;
-        SHUTDOWN_FROM_SIGNAL.store(true, Ordering::SeqCst);
+        signals::SHUTDOWN_FROM_SIGNAL.store(true, Ordering::SeqCst);
         assert!(app.drain_events());
         assert!(!app.saw_restart); // signal path is Shutdown-only
 
-        SHUTDOWN_FROM_SIGNAL.store(false, Ordering::SeqCst);
-    }
-
-    #[test]
-    fn register_engine_process_round_trip() {
-        let inst = typio::instance::typio_instance_new();
-        assert!(!inst.is_null());
-        assert_eq!(
-            typio::instance::typio_instance_init(inst),
-            typio::TypioResult::TypioOk
-        );
-
-        let reg = typio::instance::typio_instance_get_registry(inst);
-        assert!(!reg.is_null());
-
-        let manifest = fixture_manifest();
-        let result = register_engine_process(reg, &manifest, std::path::Path::new("/tmp"));
-        assert_eq!(
-            result,
-            Some(("fixture".to_string(), "keyboard".to_string()))
-        );
-
-        let snapshot = build_tray_snapshot(inst).expect("tray snapshot should build");
-        assert_eq!(snapshot.keyboards.len(), 1);
-        assert_eq!(snapshot.keyboards[0].name, "fixture");
-        assert_eq!(
-            snapshot.keyboards[0].display_name,
-            Some("Fixture".to_string())
-        );
-        assert_eq!(snapshot.voices.len(), 0);
-
-        typio::instance::typio_instance_free(inst);
+        signals::reset_shutdown_flag();
     }
 }
