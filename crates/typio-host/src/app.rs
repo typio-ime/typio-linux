@@ -230,6 +230,11 @@ pub struct App {
 }
 
 impl App {
+    /// CLI verbosity selected at startup.
+    pub fn verbosity(&self) -> u8 {
+        self.options.verbosity
+    }
+
     /// Parse CLI args and create an uninitialized app shell.
     pub fn from_env() -> Result<Self, String> {
         // `parse()` handles --help and --version by printing and exiting with
@@ -757,9 +762,19 @@ impl App {
             if fds[0].revents & libc::POLLIN != 0 {
                 let frontend = self.frontend.as_mut().unwrap();
                 if let Some(guard) = read_guard {
+                    let timing_enabled =
+                        tracing::enabled!(target: "typio.wayland.io", tracing::Level::DEBUG);
+                    let started = timing_enabled.then(Instant::now);
                     if let Err(e) = frontend.read_and_dispatch(guard) {
                         eprintln!("Wayland read error: {e}");
                         return 1;
+                    }
+                    if let Some(started) = started {
+                        tracing::debug!(
+                            target: "typio.wayland.io",
+                            elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                            "read_and_dispatch"
+                        );
                     }
                 }
             } else if fds[0].revents & (libc::POLLERR | libc::POLLHUP) != 0 {
@@ -815,6 +830,13 @@ impl App {
                 router.drain_composition(state);
 
                 let pending_keys = state.take_pending_keys();
+                if !pending_keys.is_empty() {
+                    tracing::debug!(
+                        target: "typio.input.queue",
+                        pending_key_count = pending_keys.len(),
+                        "drain pending keys"
+                    );
+                }
                 for key in pending_keys {
                     // Snapshot the values we need before any mutable borrows
                     // below — both are cheap `Copy` reads.
@@ -910,23 +932,39 @@ impl App {
 
                 let frontend = self.frontend.as_mut().unwrap();
                 let router = self.router.as_mut().unwrap();
-                let (schedule_state, candidates, selected) = {
+                let (schedule_state, candidates, selected, composition_seq) = {
                     let state = frontend.state();
                     (
                         state.panel_schedule_state,
                         state.candidates.clone(),
                         state.selected_candidate,
+                        state.composition_seq,
                     )
                 };
                 let has_session = router.is_focused();
                 let has_context = !router.ctx().is_null();
                 let context_focused = router.is_focused();
-                if panel_scheduler::should_flush(
+                let should_flush = panel_scheduler::should_flush(
                     schedule_state,
                     has_session,
                     has_context,
                     context_focused,
-                ) {
+                );
+                if schedule_state != panel_scheduler::PanelScheduleState::Idle {
+                    tracing::debug!(
+                        target: "typio.panel.scheduler",
+                        schedule_state = ?schedule_state,
+                        should_flush,
+                        composition_seq,
+                        candidate_count = candidates.len(),
+                        selected,
+                        has_session,
+                        has_context,
+                        context_focused,
+                        "panel scheduler tick"
+                    );
+                }
+                if should_flush {
                     let scale = frontend.state().buffer_scale;
                     let owner = frontend.state().panel_coord().visible_owner();
                     // Manage surface ownership before the mutable panel
@@ -967,7 +1005,13 @@ impl App {
                         } else {
                             panel.ensure_candidate_size(&candidates);
                             heartbeat();
-                            panel.draw_candidates(&candidates, selected, &heartbeat, &enter_present);
+                            panel.draw_candidates(
+                                &candidates,
+                                selected,
+                                composition_seq,
+                                &heartbeat,
+                                &enter_present,
+                            );
                         }
                         PanelUpdateResult::Done
                     } else {
@@ -1776,11 +1820,7 @@ impl<'a> LabelSources for RegistryLabelSources<'a> {
 }
 
 #[cfg(feature = "wayland")]
-fn arm_repeat(
-    timer: &mut RepeatTimer,
-    compositor_info: Option<(i32, i32)>,
-    mods_depressed: u32,
-) {
+fn arm_repeat(timer: &mut RepeatTimer, compositor_info: Option<(i32, i32)>, mods_depressed: u32) {
     if !repeat_timer::should_repeat_for_modifiers(repeat_timer::Modifiers(mods_depressed)) {
         let _ = timer.stop();
         return;

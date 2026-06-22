@@ -38,6 +38,8 @@ xkbcommon = "0.9"
 ab_glyph = "0.2"
 flux-sys = { path = "../../flux/crates/flux-sys" }
 wayland-sys = "0.31"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # The framework library — sibling checkout at ../libtypio.
 libtypio = { path = "../libtypio" }

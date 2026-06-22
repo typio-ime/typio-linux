@@ -245,6 +245,8 @@ impl KeyboardRouter {
     pub fn drain_composition(&self, frontend: &mut InputMethodState) {
         if let Ok(mut slot) = PENDING_COMPOSITION.lock() {
             if let Some((preedit, candidates, selected)) = slot.take() {
+                let preedit_len = preedit.len();
+                let candidate_count = candidates.len();
                 // Preedit is the source of truth for what shows inline in
                 // the focused text field. Candidates drive the popup. Either
                 // can change independently of the other: an empty preedit
@@ -258,8 +260,16 @@ impl KeyboardRouter {
                     let cursor = preedit.len() as u32;
                     frontend.set_preedit_and_flush(&preedit, cursor);
                 }
-                frontend.set_candidates(candidates, selected);
+                let composition_seq = frontend.set_candidates(candidates, selected);
                 frontend.mark_panel_dirty();
+                tracing::debug!(
+                    target: "typio.engine.composition",
+                    composition_seq,
+                    preedit_len,
+                    candidate_count,
+                    selected,
+                    "composition update"
+                );
             }
         }
     }
@@ -437,15 +447,35 @@ impl KeyboardRouter {
             base_keysym: key.keysym,
         };
 
-        let started = std::time::Instant::now();
-        let consumed =
-            typio::input_context::typio_input_context_process_key(self.ctx, &event);
-        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-        if elapsed_ms > 5.0 {
-            eprintln!(
-                "engine: process_key took {elapsed_ms:.1} ms (keysym=0x{:x}, repeat={is_repeat})",
-                key.keysym
-            );
+        let timing_enabled = tracing::enabled!(target: "typio.engine.key", tracing::Level::TRACE)
+            || tracing::enabled!(target: "typio.engine.key", tracing::Level::INFO);
+        let started = timing_enabled.then(std::time::Instant::now);
+        let consumed = typio::input_context::typio_input_context_process_key(self.ctx, &event);
+        if let Some(started) = started {
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            if elapsed_ms > 5.0 {
+                tracing::info!(
+                    target: "typio.engine.key",
+                    elapsed_ms,
+                    keysym = key.keysym,
+                    keycode = key.keycode,
+                    pressed = key.state == 1,
+                    is_repeat,
+                    consumed,
+                    "slow process_key"
+                );
+            } else {
+                tracing::trace!(
+                    target: "typio.engine.key",
+                    elapsed_ms,
+                    keysym = key.keysym,
+                    keycode = key.keycode,
+                    pressed = key.state == 1,
+                    is_repeat,
+                    consumed,
+                    "process_key"
+                );
+            }
         }
         consumed
     }

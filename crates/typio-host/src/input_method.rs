@@ -47,10 +47,10 @@ use crate::protocols::input_method_v2::zwp_input_method_keyboard_grab_v2::{
 use crate::protocols::input_method_v2::zwp_input_method_manager_v2::ZwpInputMethodManagerV2;
 use crate::protocols::input_method_v2::zwp_input_method_v2::{self, ZwpInputMethodV2};
 use crate::protocols::input_method_v2::zwp_input_popup_surface_v2::{self, ZwpInputPopupSurfaceV2};
-use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
-use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1};
 use crate::protocols::viewporter::wp_viewport::WpViewport;
 use crate::protocols::viewporter::wp_viewporter::WpViewporter;
+use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
+use crate::protocols::virtual_keyboard_v1::zwp_virtual_keyboard_v1::{self, ZwpVirtualKeyboardV1};
 
 /// Callback type for input-method lifecycle events.
 pub type LifecycleCallback = Box<dyn FnMut(LifecycleEvent) + Send>;
@@ -155,6 +155,8 @@ pub struct InputMethodState {
     pub candidates: Vec<String>,
     /// Index of the highlighted candidate.
     pub selected_candidate: usize,
+    /// Monotonic sequence for engine composition/candidate updates.
+    pub composition_seq: u64,
     serial: u32,
     active: bool,
     initialized: bool,
@@ -353,9 +355,11 @@ impl InputMethodState {
     }
 
     /// Set the current candidate list + selected index for the panel.
-    pub fn set_candidates(&mut self, candidates: Vec<String>, selected: usize) {
+    pub fn set_candidates(&mut self, candidates: Vec<String>, selected: usize) -> u64 {
+        self.composition_seq = self.composition_seq.wrapping_add(1);
         self.candidates = candidates;
         self.selected_candidate = selected;
+        self.composition_seq
     }
 
     /// Take all pending key events for processing by the event loop.
@@ -603,6 +607,7 @@ impl InputMethodFrontend {
             text_input_rect: None,
             candidates: Vec::new(),
             selected_candidate: 0,
+            composition_seq: 0,
             serial: 0,
             active: false,
             initialized: false,
@@ -1287,7 +1292,10 @@ mod tests {
         // dispatch batch, leaving the repeat timer armed forever.
         state.pending_keys.push(press.clone());
         state.pending_keys.push(release.clone());
-        assert_eq!(state.take_pending_keys(), vec![press.clone(), release.clone()]);
+        assert_eq!(
+            state.take_pending_keys(),
+            vec![press.clone(), release.clone()]
+        );
         assert!(state.take_pending_keys().is_empty());
 
         state.pending_commit = Some("hello".to_string());

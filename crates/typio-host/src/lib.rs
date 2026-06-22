@@ -23,6 +23,7 @@ pub mod backoff;
 pub mod boundary;
 pub mod candidate_guard;
 pub mod config_watcher;
+pub mod diagnostics;
 pub mod engine_loader;
 pub mod focus_controller;
 pub mod health;

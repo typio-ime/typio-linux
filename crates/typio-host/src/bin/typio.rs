@@ -6,6 +6,7 @@
 use std::process::ExitCode;
 
 use typio_host::app::App;
+use typio_host::diagnostics;
 
 fn main() -> ExitCode {
     let mut app = match App::from_env() {
@@ -15,6 +16,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    diagnostics::init_logging(app.verbosity());
 
     if let Err(e) = app.init() {
         eprintln!("typio: init failed: {e}");

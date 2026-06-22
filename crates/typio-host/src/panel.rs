@@ -19,6 +19,7 @@
 use std::ffi::c_void;
 use std::os::raw::c_char;
 use std::ptr;
+use std::time::{Duration, Instant};
 
 use flux_sys::{
     flux_arena, flux_arena_destroy, flux_arena_init, flux_arena_reset, flux_canvas,
@@ -114,6 +115,38 @@ const BANNER_FONT_SIZE: f32 = 15.0;
 /// `1.3` is the typical line-height factor flux applies for default fonts.
 const BANNER_ROW_HEIGHT: f32 = BANNER_PADDING * 2.0 + BANNER_FONT_SIZE * 1.3;
 
+const PANEL_TIMING_TARGET: &str = "typio.panel.timing";
+const PANEL_TIMING_SLOW_THRESHOLD: Duration = Duration::from_millis(12);
+
+fn ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TextStatsSnapshot {
+    glyph_count: u64,
+    glyph_cap: u64,
+    glyph_hits: u64,
+    glyph_misses: u64,
+    glyph_evictions: u64,
+    atlas_clears: u64,
+}
+
+unsafe fn text_stats_snapshot(text: *mut flux_text) -> TextStatsSnapshot {
+    let mut stats: flux_sys::flux_text_stats = unsafe { std::mem::zeroed() };
+    unsafe {
+        flux_sys::flux_text_get_stats(text, &mut stats);
+    }
+    TextStatsSnapshot {
+        glyph_count: stats.glyph_count as u64,
+        glyph_cap: stats.glyph_cap as u64,
+        glyph_hits: stats.glyph_hits,
+        glyph_misses: stats.glyph_misses,
+        glyph_evictions: stats.glyph_evictions,
+        atlas_clears: stats.atlas_clears,
+    }
+}
+
 // ── Pipeline-cache persistence ────────────────────────────────────────
 //
 // flux's new pipeline-cache API (Skia PersistentCache model) lets the
@@ -172,11 +205,7 @@ unsafe extern "C" fn pipeline_cache_load(
     }
 }
 
-unsafe extern "C" fn pipeline_cache_save(
-    userdata: *mut c_void,
-    data: *const c_void,
-    size: usize,
-) {
+unsafe extern "C" fn pipeline_cache_save(userdata: *mut c_void, data: *const c_void, size: usize) {
     if userdata.is_null() || data.is_null() || size == 0 {
         return;
     }
@@ -197,7 +226,9 @@ unsafe extern "C" fn pipeline_cache_save(
 
 fn free_cache_path(p: *mut c_char) {
     if !p.is_null() {
-        unsafe { let _ = std::ffi::CString::from_raw(p); }
+        unsafe {
+            let _ = std::ffi::CString::from_raw(p);
+        }
     }
 }
 
@@ -227,6 +258,8 @@ pub struct FluxPanel {
     /// visible size actually changes, not on every redraw.
     content_w_logical: i32,
     content_h_logical: i32,
+    last_candidate_size_duration: Duration,
+    last_candidate_size_resized: bool,
     // Keep the raw wl_surface alive for the panel's lifetime.
     _wl_surface: *mut c_void,
     /// Heap-allocated C string for the pipeline-cache path. Owned by
@@ -270,9 +303,7 @@ impl FluxPanel {
         width: u32,
         height: u32,
     ) -> Result<Self, String> {
-        unsafe {
-            Self::new_inner_unsafe(wl_display_ptr, wl_surface_ptr, viewport, width, height)
-        }
+        unsafe { Self::new_inner_unsafe(wl_display_ptr, wl_surface_ptr, viewport, width, height) }
     }
 
     unsafe fn new_inner_unsafe(
@@ -402,6 +433,8 @@ impl FluxPanel {
             viewport,
             content_w_logical: 0,
             content_h_logical: 0,
+            last_candidate_size_duration: Duration::ZERO,
+            last_candidate_size_resized: false,
             _wl_surface: wl_surface,
             pipeline_cache_path: cache_path_c,
         })
@@ -446,9 +479,48 @@ impl FluxPanel {
         &mut self,
         candidates: &[String],
         selected: usize,
+        composition_seq: u64,
         heartbeat: &dyn Fn(),
         before_present: &dyn Fn(),
     ) {
+        let timing_trace_enabled =
+            tracing::enabled!(target: PANEL_TIMING_TARGET, tracing::Level::TRACE);
+        let timing_info_enabled =
+            tracing::enabled!(target: PANEL_TIMING_TARGET, tracing::Level::INFO);
+        let timing_enabled = timing_trace_enabled || timing_info_enabled;
+        let total_start = timing_enabled.then(Instant::now);
+        let frame_id = if timing_enabled {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static FRAME_ID: AtomicU64 = AtomicU64::new(1);
+            Some(FRAME_ID.fetch_add(1, Ordering::Relaxed))
+        } else {
+            None
+        };
+        let stats_before = if timing_enabled {
+            Some(unsafe { text_stats_snapshot(self.text) })
+        } else {
+            None
+        };
+        let mut begin_frame_duration = Duration::ZERO;
+        let mut canvas_begin_duration = Duration::ZERO;
+        let mut measure_duration = Duration::ZERO;
+        let mut draw_duration = Duration::ZERO;
+        let mut submit_duration = Duration::ZERO;
+        let mut present_duration = Duration::ZERO;
+
+        macro_rules! timed {
+            ($slot:ident, $expr:expr) => {{
+                if timing_enabled {
+                    let start = Instant::now();
+                    let value = $expr;
+                    $slot += start.elapsed();
+                    value
+                } else {
+                    $expr
+                }
+            }};
+        }
+
         heartbeat();
         unsafe {
             flux_arena_reset(&mut self.arena);
@@ -460,14 +532,20 @@ impl FluxPanel {
                 timeout_ns: PANEL_FRAME_TIMEOUT_NS,
             };
             let mut frame: *mut flux_frame = ptr::null_mut();
-            let r = flux_surface_begin_frame(self.surface, &frame_desc, &mut frame);
+            let r = timed!(
+                begin_frame_duration,
+                flux_surface_begin_frame(self.surface, &frame_desc, &mut frame)
+            );
             heartbeat();
             if !flux_result_is_ok(r) {
                 return;
             }
 
             let bg = flux_color_rgba(28, 28, 32, 255);
-            let r = flux_canvas_begin(self.canvas, frame, &bg);
+            let r = timed!(
+                canvas_begin_duration,
+                flux_canvas_begin(self.canvas, frame, &bg)
+            );
             heartbeat();
             if !flux_result_is_ok(r) {
                 return;
@@ -496,18 +574,24 @@ impl FluxPanel {
             for (i, candidate) in candidates.iter().enumerate() {
                 let number = candidate_number_label(i);
                 let number_bytes = number.as_bytes();
-                let number_metrics = flux_sys::flux_text_measure(
-                    self.text,
-                    number_bytes.as_ptr() as *const _,
-                    number_bytes.len(),
-                    &number_style,
+                let number_metrics = timed!(
+                    measure_duration,
+                    flux_sys::flux_text_measure(
+                        self.text,
+                        number_bytes.as_ptr() as *const _,
+                        number_bytes.len(),
+                        &number_style,
+                    )
                 );
                 let bytes = candidate.as_bytes();
-                let metrics = flux_sys::flux_text_measure(
-                    self.text,
-                    bytes.as_ptr() as *const _,
-                    bytes.len(),
-                    &style,
+                let metrics = timed!(
+                    measure_duration,
+                    flux_sys::flux_text_measure(
+                        self.text,
+                        bytes.as_ptr() as *const _,
+                        bytes.len(),
+                        &style,
+                    )
                 );
 
                 let item_width = CANDIDATE_ITEM_X_PADDING * 2.0
@@ -518,41 +602,50 @@ impl FluxPanel {
                 let number_top = text_top + metrics.baseline - number_metrics.baseline;
 
                 if i == selected {
-                    flux_canvas_fill_rrect(
-                        self.canvas,
-                        flux_sys::flux_rect {
-                            x: current_x,
-                            y,
-                            w: item_width,
-                            h: PANEL_ROW_HEIGHT,
-                        },
-                        4.0,
-                        highlight,
+                    timed!(
+                        draw_duration,
+                        flux_canvas_fill_rrect(
+                            self.canvas,
+                            flux_sys::flux_rect {
+                                x: current_x,
+                                y,
+                                w: item_width,
+                                h: PANEL_ROW_HEIGHT,
+                            },
+                            4.0,
+                            highlight,
+                        )
                     );
                 }
 
-                flux_text_draw(
-                    self.text,
-                    self.canvas,
-                    &mut self.arena,
-                    current_x + CANDIDATE_ITEM_X_PADDING,
-                    number_top,
-                    number_bytes.as_ptr() as *const _,
-                    number_bytes.len(),
-                    &number_style,
+                timed!(
+                    draw_duration,
+                    flux_text_draw(
+                        self.text,
+                        self.canvas,
+                        &mut self.arena,
+                        current_x + CANDIDATE_ITEM_X_PADDING,
+                        number_top,
+                        number_bytes.as_ptr() as *const _,
+                        number_bytes.len(),
+                        &number_style,
+                    )
                 );
-                flux_text_draw(
-                    self.text,
-                    self.canvas,
-                    &mut self.arena,
-                    current_x
-                        + CANDIDATE_ITEM_X_PADDING
-                        + number_metrics.width
-                        + CANDIDATE_NUMBER_GAP,
-                    text_top,
-                    bytes.as_ptr() as *const _,
-                    bytes.len(),
-                    &style,
+                timed!(
+                    draw_duration,
+                    flux_text_draw(
+                        self.text,
+                        self.canvas,
+                        &mut self.arena,
+                        current_x
+                            + CANDIDATE_ITEM_X_PADDING
+                            + number_metrics.width
+                            + CANDIDATE_NUMBER_GAP,
+                        text_top,
+                        bytes.as_ptr() as *const _,
+                        bytes.len(),
+                        &style,
+                    )
                 );
 
                 current_x += item_width + CANDIDATE_ITEM_GAP;
@@ -561,15 +654,68 @@ impl FluxPanel {
 
             flux_canvas_end(self.canvas);
             heartbeat();
-            let r = flux_frame_submit(frame);
+            let r = timed!(submit_duration, flux_frame_submit(frame));
             heartbeat();
             if !flux_result_is_ok(r) {
                 return;
             }
             before_present();
-            flux_frame_present(frame);
+            timed!(present_duration, flux_frame_present(frame));
             heartbeat();
             self.log_text_stats();
+        }
+        if let Some(total_start) = total_start {
+            let total_duration = total_start.elapsed();
+            let slow = total_duration >= PANEL_TIMING_SLOW_THRESHOLD;
+            if slow || timing_trace_enabled {
+                let stats_after = unsafe { text_stats_snapshot(self.text) };
+                let stats_before = stats_before.unwrap_or_default();
+                macro_rules! emit_panel_timing {
+                    ($level:ident) => {
+                        tracing::$level!(
+                            target: PANEL_TIMING_TARGET,
+                            frame_id = frame_id.unwrap_or(0),
+                            composition_seq,
+                            candidate_count = candidates.len(),
+                            selected,
+                            slow,
+                            slow_threshold_ms = ms(PANEL_TIMING_SLOW_THRESHOLD),
+                            total_ms = ms(total_duration),
+                            size_ms = ms(self.last_candidate_size_duration),
+                            resized = self.last_candidate_size_resized,
+                            begin_ms = ms(begin_frame_duration),
+                            canvas_ms = ms(canvas_begin_duration),
+                            measure_ms = ms(measure_duration),
+                            draw_ms = ms(draw_duration),
+                            submit_ms = ms(submit_duration),
+                            present_ms = ms(present_duration),
+                            glyph_count = stats_after.glyph_count,
+                            glyph_cap = stats_after.glyph_cap,
+                            glyph_hits_delta = stats_after
+                                .glyph_hits
+                                .saturating_sub(stats_before.glyph_hits),
+                            glyph_misses_delta = stats_after
+                                .glyph_misses
+                                .saturating_sub(stats_before.glyph_misses),
+                            glyph_evictions_delta = stats_after
+                                .glyph_evictions
+                                .saturating_sub(stats_before.glyph_evictions),
+                            atlas_clears_delta = stats_after
+                                .atlas_clears
+                                .saturating_sub(stats_before.atlas_clears),
+                            surface_width = self.width,
+                            surface_height = self.height,
+                            has_viewport = self.viewport.is_some(),
+                            "panel frame"
+                        );
+                    };
+                }
+                if slow {
+                    emit_panel_timing!(info);
+                } else {
+                    emit_panel_timing!(trace);
+                }
+            }
         }
     }
 
@@ -583,16 +729,26 @@ impl FluxPanel {
         static LAST_CLEARS: AtomicU64 = AtomicU64::new(0);
         let n = FRAME.fetch_add(1, Ordering::Relaxed);
         let mut stats: flux_sys::flux_text_stats = unsafe { std::mem::zeroed() };
-        unsafe { flux_sys::flux_text_get_stats(self.text, &mut stats); }
+        unsafe {
+            flux_sys::flux_text_get_stats(self.text, &mut stats);
+        }
         let clears = stats.atlas_clears;
         let last = LAST_CLEARS.load(Ordering::Relaxed);
         if clears != last || n % 120 == 0 {
             LAST_CLEARS.store(clears, Ordering::Relaxed);
-            eprintln!(
-                "flux-text: glyphs={}/{} (cap {}) hits={} misses={} evictions={} invalidations={} grows={} atlas_clears={}",
-                stats.glyph_count, stats.glyph_max_cap, stats.glyph_cap,
-                stats.glyph_hits, stats.glyph_misses, stats.glyph_evictions,
-                stats.glyph_invalidations, stats.glyph_grows, stats.atlas_clears
+            tracing::debug!(
+                target: "typio.panel.text",
+                frame = n,
+                glyph_count = stats.glyph_count,
+                glyph_max_cap = stats.glyph_max_cap,
+                glyph_cap = stats.glyph_cap,
+                glyph_hits = stats.glyph_hits,
+                glyph_misses = stats.glyph_misses,
+                glyph_evictions = stats.glyph_evictions,
+                glyph_invalidations = stats.glyph_invalidations,
+                glyph_grows = stats.glyph_grows,
+                atlas_clears = stats.atlas_clears,
+                "flux text stats"
             );
         }
     }
@@ -630,6 +786,9 @@ impl FluxPanel {
     ///   width change rebuilds the swapchain. This is the watchdog-killing
     ///   path when candidate pages churn; viewporter is the fix.
     pub fn ensure_candidate_size(&mut self, candidates: &[String]) {
+        let timing_enabled = tracing::enabled!(target: PANEL_TIMING_TARGET, tracing::Level::INFO)
+            || tracing::enabled!(target: PANEL_TIMING_TARGET, tracing::Level::TRACE);
+        let start = timing_enabled.then(Instant::now);
         let mut total_width: f32 = PANEL_PADDING;
 
         let style = flux_sys::flux_text_style {
@@ -687,7 +846,15 @@ impl FluxPanel {
         let content_w_logical = desired_width as i32;
         let content_h_logical = desired_height as i32;
 
-        self.apply_grow_only_size(phys_width, phys_height, content_w_logical, content_h_logical);
+        self.last_candidate_size_resized = self.apply_grow_only_size(
+            phys_width,
+            phys_height,
+            content_w_logical,
+            content_h_logical,
+        );
+        if let Some(start) = start {
+            self.last_candidate_size_duration = start.elapsed();
+        }
     }
 
     /// Grow-only swapchain sizing shared by the candidate and banner
@@ -708,8 +875,9 @@ impl FluxPanel {
         phys_height: u32,
         content_w_logical: i32,
         content_h_logical: i32,
-    ) {
+    ) -> bool {
         if let Some(viewport) = self.viewport.as_ref() {
+            let mut resized = false;
             let quantised_phys_w =
                 phys_width.div_ceil(SURFACE_WIDTH_QUANTUM) * SURFACE_WIDTH_QUANTUM;
             let quantised_phys_h =
@@ -717,6 +885,7 @@ impl FluxPanel {
             let target_phys_w = self.width.max(quantised_phys_w);
             let target_phys_h = self.height.max(quantised_phys_h);
             if target_phys_w != self.width || target_phys_h != self.height {
+                resized = true;
                 self.width = target_phys_w;
                 self.height = target_phys_h;
                 if !self.surface.is_null() {
@@ -737,9 +906,12 @@ impl FluxPanel {
                 self.content_w_logical = content_w_logical;
                 self.content_h_logical = content_h_logical;
             }
+            resized
         } else {
             // Legacy path: buffer must equal content exactly.
+            let resized = self.width != phys_width || self.height != phys_height;
             self.resize(phys_width, phys_height);
+            resized
         }
     }
 
@@ -859,12 +1031,7 @@ impl FluxPanel {
 
         let bytes = label.as_bytes();
         let metrics = unsafe {
-            flux_sys::flux_text_measure(
-                self.text,
-                bytes.as_ptr() as *const _,
-                bytes.len(),
-                &style,
-            )
+            flux_sys::flux_text_measure(self.text, bytes.as_ptr() as *const _, bytes.len(), &style)
         };
         let desired_width = (BANNER_PADDING * 2.0 + metrics.width).max(10.0).ceil() as u32;
         let desired_height = (BANNER_ROW_HEIGHT).ceil() as u32;
@@ -875,7 +1042,12 @@ impl FluxPanel {
         let content_w_logical = desired_width as i32;
         let content_h_logical = desired_height as i32;
 
-        self.apply_grow_only_size(phys_width, phys_height, content_w_logical, content_h_logical);
+        self.apply_grow_only_size(
+            phys_width,
+            phys_height,
+            content_w_logical,
+            content_h_logical,
+        );
     }
 }
 

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Structured panel diagnostics.** The host now initializes `tracing`
+  for the shipping `typio` binary and emits candidate-panel timing as
+  structured `typio.panel.timing` events controlled by `RUST_LOG`:
+  `info` records slow frames and `trace` records every frame for
+  long-session lag investigations. The diagnostic path also adds
+  privacy-preserving correlation fields (`composition_seq`, `frame_id`)
+  and adjacent targets for queue, engine-key, composition, panel
+  scheduler, Wayland I/O, and flux text-cache state.
+
 - **On-screen status indicator (`typio_host::indicator` + `FluxPanel`
   banner).** The transient `<badge> · <engine> · <mode>` popup anchored
   near the caret now actually renders, completing the Wayland-frontend
