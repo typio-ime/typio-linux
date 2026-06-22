@@ -314,6 +314,24 @@ impl PanelCoordinator {
         }
     }
 
+    /// Claim the visible surface for `owner`, superseding the current owner.
+    ///
+    /// The candidate-panel path manages the surface directly — it does not
+    /// go through the anchor-probe logic of `decide_*_flush` — so it needs
+    /// a way to declare ownership. Claiming `Candidate` while the indicator
+    /// is visible makes the indicator's auto-hide path see
+    /// `visible_owner() != Indicator` and skip `panel.hide()`, so a late
+    /// indicator timer can no longer kill an in-flight candidate list.
+    pub fn claim(&mut self, owner: UiOwner) {
+        if owner == UiOwner::None {
+            return;
+        }
+        if self.positioned_ui_pending_owner != owner {
+            self.cancel_pending();
+        }
+        self.ui_owner = owner;
+    }
+
     /// Hide all popups and cancel any pending positioning.
     pub fn hide_all(&mut self) {
         self.cancel_pending();

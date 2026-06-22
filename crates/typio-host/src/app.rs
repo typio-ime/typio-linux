@@ -928,11 +928,42 @@ impl App {
                     context_focused,
                 ) {
                     let scale = frontend.state().buffer_scale;
+                    let owner = frontend.state().panel_coord().visible_owner();
+                    // Manage surface ownership before the mutable panel
+                    // borrow. Candidates claim the surface when shown
+                    // (superseding a visible indicator, so its auto-hide
+                    // cannot later kill the candidate list); they release
+                    // it when empty unless an overlay is borrowing it.
+                    {
+                        let coord = frontend.state_mut().panel_coord_mut();
+                        if candidates.is_empty() {
+                            if owner != UiOwner::Indicator && owner != UiOwner::Voice {
+                                coord.hide(UiOwner::Candidate);
+                            }
+                        } else {
+                            coord.claim(UiOwner::Candidate);
+                        }
+                    }
                     let result = if let Some(panel) = frontend.panel_mut() {
                         panel.set_scale(scale);
                         heartbeat();
                         if candidates.is_empty() {
-                            panel.hide();
+                            if owner == UiOwner::Indicator || owner == UiOwner::Voice {
+                                // Surface is loaned to the indicator/voice
+                                // overlay; the candidate path does not own it
+                                // right now and must not hide it (would kill
+                                // the overlay mid-display).
+                                eprintln!(
+                                    "panel: skip-hide reason=empty_on_loan owner={:?}",
+                                    owner
+                                );
+                            } else {
+                                eprintln!(
+                                    "panel: hide reason=candidates_empty owner={:?}",
+                                    owner
+                                );
+                                panel.hide();
+                            }
                         } else {
                             panel.ensure_candidate_size(&candidates);
                             heartbeat();
@@ -1330,6 +1361,7 @@ impl App {
             was_visible
         };
         if indicator_owned {
+            eprintln!("panel: hide reason=indicator_autohide");
             if let Some(panel) = self
                 .frontend
                 .as_mut()

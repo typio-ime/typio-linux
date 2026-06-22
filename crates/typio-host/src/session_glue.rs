@@ -49,6 +49,10 @@ impl ApplyTarget
         self.1.focus_out();
         self.1.soft_pause();
         let _ = self.2.stop();
+        eprintln!(
+            "panel: hide reason=focus_out owner={:?}",
+            self.0.state().panel_coord().visible_owner()
+        );
         if let Some(panel) = self.0.panel_mut() {
             panel.hide();
         }
