@@ -1,9 +1,8 @@
 //! Pure decision helpers for text-UI (inline preedit + candidate panel)
-//! synchronization and positioned-popup readiness.
+//! synchronization.
 //!
 //! Port of `src/ui/state.c`. No I/O; the effectful layer consults these to
-//! decide whether to re-send the compositor preedit and when to show or give
-//! up on a cursor-anchored popup.
+//! decide whether to re-send the compositor preedit.
 
 /// What the text-UI sync step must do this tick.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -55,49 +54,6 @@ impl PreeditTracking {
     pub fn reset(&mut self) {
         self.last_text = None;
         self.last_cursor = -1;
-    }
-}
-
-/// What to do with a cursor-anchored (positioned) popup this tick.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum PositionedUiPlan {
-    /// Anchor not ready yet and not timed out: keep waiting.
-    #[default]
-    Wait,
-    /// Anchor is ready: show the popup.
-    Show,
-    /// Anchor never arrived within the timeout: give up.
-    Cancel,
-}
-
-/// Decide whether to show, cancel, or keep waiting for a positioned popup.
-///
-/// A clock regression (`now_ms < since_ms`) is treated as no elapsed time, so
-/// the popup keeps waiting rather than cancelling spuriously.
-pub fn positioned_ui_plan(
-    pending: bool,
-    anchor_ready: bool,
-    since_ms: u64,
-    now_ms: u64,
-    timeout_ms: u64,
-) -> PositionedUiPlan {
-    if !pending {
-        return PositionedUiPlan::Wait;
-    }
-    if anchor_ready {
-        return PositionedUiPlan::Show;
-    }
-
-    let elapsed_ms = if since_ms > 0 && now_ms >= since_ms {
-        now_ms - since_ms
-    } else {
-        0
-    };
-
-    if since_ms > 0 && elapsed_ms >= timeout_ms {
-        PositionedUiPlan::Cancel
-    } else {
-        PositionedUiPlan::Wait
     }
 }
 
@@ -161,41 +117,5 @@ mod tests {
         let tracking = PreeditTracking::new();
         assert_eq!(tracking.last_text, None);
         assert_eq!(tracking.last_cursor, -1);
-    }
-
-    #[test]
-    fn positioned_ui_waits_for_ready_anchor() {
-        assert_eq!(
-            positioned_ui_plan(false, false, 1000, 1200, 100),
-            PositionedUiPlan::Wait
-        );
-        assert_eq!(
-            positioned_ui_plan(true, false, 1000, 1050, 100),
-            PositionedUiPlan::Wait
-        );
-        assert_eq!(
-            positioned_ui_plan(true, true, 1000, 1050, 100),
-            PositionedUiPlan::Show
-        );
-    }
-
-    #[test]
-    fn positioned_ui_cancels_when_anchor_times_out() {
-        assert_eq!(
-            positioned_ui_plan(true, false, 1000, 1100, 100),
-            PositionedUiPlan::Cancel
-        );
-        assert_eq!(
-            positioned_ui_plan(true, false, 1000, 1200, 100),
-            PositionedUiPlan::Cancel
-        );
-    }
-
-    #[test]
-    fn positioned_ui_handles_clock_regression_as_wait() {
-        assert_eq!(
-            positioned_ui_plan(true, false, 1000, 900, 100),
-            PositionedUiPlan::Wait
-        );
     }
 }

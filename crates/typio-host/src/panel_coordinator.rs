@@ -237,10 +237,6 @@ impl PanelCoordinator {
     /// If the anchor is not ready yet, the request is queued and
     /// [`FlushDecision::Pending`] is returned. If the anchor is ready, any
     /// pending state is cleared and [`FlushDecision::Show`] is returned.
-    ///
-    /// For the candidate panel path the caller should call
-    /// [`Self::decide_candidate_flush`] instead, because it also handles the
-    /// panel-scheduler dirty state.
     pub fn decide_positioned_flush(&mut self, owner: UiOwner, label: &str) -> FlushDecision {
         if self.anchor_ready() {
             self.cancel_pending();
@@ -254,54 +250,6 @@ impl PanelCoordinator {
         }
         self.queue_positioned_ui(owner, label);
         FlushDecision::Pending
-    }
-
-    /// Decide whether the candidate panel may flush this tick, taking the
-    /// anchor probe timeout and caret fallback into account.
-    ///
-    /// Returns `(decision, should_mark_anchor_ready_reason)` where the reason
-    /// is `Some` when the caret fallback accepted the cached caret rect.
-    pub fn decide_candidate_flush(
-        &mut self,
-        candidates_nonempty: bool,
-        now: Instant,
-    ) -> (FlushDecision, Option<&'static str>) {
-        if !candidates_nonempty {
-            self.cancel_pending();
-            self.ui_owner = UiOwner::None;
-            return (FlushDecision::Show, None);
-        }
-
-        if self.anchor_ready() {
-            self.cancel_pending();
-            self.ui_owner = UiOwner::Candidate;
-            return (FlushDecision::Show, None);
-        }
-
-        // Anchor not ready yet — apply the positioned-ui timeout policy.
-        self.queue_positioned_ui(UiOwner::Candidate, "");
-        let elapsed_ms = now
-            .saturating_duration_since(self.positioned_ui_pending_since)
-            .as_millis() as u64;
-
-        if elapsed_ms < self.config.anchor_timeout_ms {
-            return (FlushDecision::Pending, None);
-        }
-
-        // Timed out. Caret fallback: if the compositor ever gave us a caret
-        // rect for this popup, trust the cached position even though the probe
-        // commit did not produce a fresh rectangle.
-        let caret_fallback = self.position_anchor_has_caret
-            || self.positioned_ui_pending_owner == UiOwner::Indicator;
-        if caret_fallback {
-            self.mark_anchor_ready();
-            self.cancel_pending();
-            self.ui_owner = UiOwner::Candidate;
-            (FlushDecision::Show, Some("caret_rect_fallback"))
-        } else {
-            self.cancel_pending();
-            (FlushDecision::Cancel, None)
-        }
     }
 
     /// Hide the popup owned by `owner`.
@@ -423,11 +371,7 @@ mod tests {
         coord.note_caret_rect();
         // Not ready until marked.
         assert!(!coord.anchor_ready());
-        // Simulate timeout with no fresh rect: caret fallback marks it ready.
-        let decision = coord.decide_candidate_flush(true, Instant::now());
-        assert_eq!(decision.0, FlushDecision::Pending);
-        // Force the timeout by manipulating the pending timestamp is hard with
-        // Instant; test the fallback predicate directly via note_caret_rect.
+        // Caret rect noted → caret fallback path is armed.
         assert!(coord.position_anchor_has_caret);
     }
 

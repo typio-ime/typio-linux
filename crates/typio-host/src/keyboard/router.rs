@@ -9,6 +9,7 @@ use std::sync::Mutex;
 
 use typio_abi::{TypioComposition, TypioEventType, TypioKeyEvent};
 
+use crate::candidate_guard::{classify_host_selection, HostSelectionAction, HostSelectionFlags};
 use crate::input_method::{DecodedKeyEvent, InputMethodState};
 use crate::keyboard_policy::{
     modifier_bit_for_keysym, sync_physical_modifiers, tracking_mark_released_pending,
@@ -16,6 +17,7 @@ use crate::keyboard_policy::{
     WL_KEYBOARD_KEY_STATE_RELEASED,
 };
 use crate::repeat_timer::Modifiers;
+use crate::text_ui_state::{text_ui_plan_update, PreeditTracking, TextUiPlan};
 
 /// Maximum number of keys tracked for symmetric press/release. Mirrors
 /// `TYPIO_WL_MAX_TRACKED_KEYS` in the C host.
@@ -24,17 +26,25 @@ pub const MAX_TRACKED_KEYS: usize = 256;
 /// Pending text committed by the engine since the last key dispatch.
 static PENDING_COMMIT: Mutex<Option<String>> = Mutex::new(None);
 
-/// Pending composition state since the last key dispatch.
+/// Pending composition state since the last key dispatch. Staged by the
+/// engine's composition callback on the same thread that called
+/// `typio_input_context_process_key`; drained by `drain_composition`.
 ///
-/// `(preedit_text, cursor_pos, candidates, selected_index)`. The preedit
-/// is tracked separately from candidates because an engine often emits a
-/// preedit before it has any candidates (e.g. pinyin after the first
-/// keystroke); treating candidates as the source of preedit would hide
-/// that intermediate state from the user. `cursor_pos` is the engine's
-/// requested byte offset into `preedit_text` (negative means "place at
-/// the end"); see [`crate::preedit::resolve_cursor`].
-static PENDING_COMPOSITION: Mutex<Option<(String, i32, Vec<String>, usize)>> =
-    Mutex::new(None);
+/// `cursor_pos` is the engine's requested byte offset into `preedit_text`
+/// (negative means "place at the end"); see [`crate::preedit::resolve_cursor`].
+/// `host_managed_selection` carries the engine's declared
+/// selection-intercept flags (ADR-0012) so the host can apply
+/// [`crate::candidate_guard`] without a separate engine→host round-trip.
+#[derive(Default)]
+struct PendingComposition {
+    preedit_text: String,
+    cursor_pos: i32,
+    candidates: Vec<String>,
+    selected: usize,
+    host_managed_selection: HostSelectionFlags,
+}
+
+static PENDING_COMPOSITION: Mutex<Option<PendingComposition>> = Mutex::new(None);
 
 extern "C" fn on_commit_abi(
     ctx: *mut typio_abi::TypioInputContext,
@@ -103,9 +113,16 @@ extern "C" fn on_composition(
 
     let selected = comp.selected.max(0) as usize;
     let cursor_pos = comp.cursor_pos;
+    let host_managed_selection = HostSelectionFlags::from_bits_truncate(comp.host_managed_selection);
 
     if let Ok(mut slot) = PENDING_COMPOSITION.lock() {
-        *slot = Some((preedit, cursor_pos, candidates, selected));
+        *slot = Some(PendingComposition {
+            preedit_text: preedit,
+            cursor_pos,
+            candidates,
+            selected,
+            host_managed_selection,
+        });
     }
 }
 
@@ -171,6 +188,14 @@ pub struct KeyboardRouter {
     /// Rime schema switch on a Shift release whose press was consumed
     /// by the Ctrl+Shift switch chord).
     engine_tracked_mods: Modifiers,
+    /// Last preedit the host actually sent to the compositor. Used by
+    /// [`Self::drain_composition`] to suppress redundant
+    /// `set_preedit_string` + `commit` Wayland round-trips when the
+    /// engine reports the same preedit text and cursor as the previous
+    /// composition (the canonical case: Up/Down arrow navigation moves
+    /// only the candidate highlight, leaving the inline preedit text
+    /// untouched). See [`crate::text_ui_state::text_ui_plan_update`].
+    preedit_tracking: PreeditTracking,
 }
 
 /// Default engine-switch chord: Ctrl+Shift, the standard Linux IME
@@ -216,6 +241,7 @@ impl KeyboardRouter {
             shortcut_already_triggered: false,
             shortcut_fired: false,
             engine_tracked_mods: Modifiers::NONE,
+            preedit_tracking: PreeditTracking::new(),
         })
     }
 
@@ -227,6 +253,14 @@ impl KeyboardRouter {
     /// Notify the engine that the input context has lost focus.
     pub fn focus_out(&mut self) {
         typio::input_context::typio_input_context_focus_out(self.ctx);
+    }
+
+    /// Forget the last preedit we claimed to have sent to the compositor.
+    /// Called by the focus controller whenever it clears the visible
+    /// preedit through a path other than `drain_composition`, so the
+    /// next composition is not suppressed against stale tracking.
+    pub fn preedit_tracking_reset(&mut self) {
+        self.preedit_tracking.reset();
     }
 
     /// True iff the libtypio input context currently reports itself focused.
@@ -243,14 +277,30 @@ impl KeyboardRouter {
         if let Ok(mut slot) = PENDING_COMPOSITION.lock() {
             slot.take();
         }
+        // Forget any preedit we claimed to have sent — the engine reset
+        // may be followed by the compositor clearing the field on its
+        // own, and the next composition must not be suppressed as a
+        // "no-op" against stale tracking.
+        self.preedit_tracking.reset();
     }
 
     /// Drain any pending composition update and update preedit/candidates.
-    pub fn drain_composition(&self, frontend: &mut InputMethodState) {
+    pub fn drain_composition(&mut self, frontend: &mut InputMethodState) {
         if let Ok(mut slot) = PENDING_COMPOSITION.lock() {
-            if let Some((preedit, cursor_pos, candidates, selected)) = slot.take() {
+            if let Some(pending) = slot.take() {
+                let PendingComposition {
+                    preedit_text: preedit,
+                    cursor_pos,
+                    candidates,
+                    selected,
+                    host_managed_selection,
+                } = pending;
                 let preedit_len = preedit.len();
                 let candidate_count = candidates.len();
+                // Mirror the engine's declared selection-intercept flags
+                // into the state so the next `dispatch_key` can apply
+                // candidate_guard without consulting the engine again.
+                frontend.composition.host_managed_selection = host_managed_selection;
                 // Preedit is the source of truth for what shows inline in
                 // the focused text field. Candidates drive the popup. Either
                 // can change independently of the other: an empty preedit
@@ -259,7 +309,17 @@ impl KeyboardRouter {
                 // the engine is mid-composition (e.g. pinyin after one
                 // keystroke) and will show candidates later.
                 if preedit.is_empty() && candidates.is_empty() {
-                    frontend.clear_preedit_and_flush();
+                    // Both cleared. Only re-clear if we actually had a
+                    // preedit outstanding; otherwise this would emit a
+                    // `set_preedit_string("") + commit` Wayland round-trip
+                    // on every composition tick where the engine reports
+                    // "nothing to show" (e.g. after every commit).
+                    if self.preedit_tracking.last_text.is_some()
+                        || self.preedit_tracking.last_cursor != -1
+                    {
+                        frontend.clear_preedit_and_flush();
+                        self.preedit_tracking.reset();
+                    }
                 } else {
                     // Resolve the engine's cursor_pos (non-negative wins,
                     // negative falls back to end) so left/right navigation
@@ -267,7 +327,27 @@ impl KeyboardRouter {
                     // instead of always parking at the right edge.
                     let cursor =
                         crate::preedit::resolve_cursor(cursor_pos, preedit_len) as u32;
-                    frontend.set_preedit_and_flush(&preedit, cursor);
+                    // Compare against what we last actually sent to the
+                    // compositor. Up/Down candidate navigation is the
+                    // canonical case where the engine emits a composition
+                    // with identical preedit text + cursor and a different
+                    // `selected` — re-sending the preedit there is pure
+                    // waste (a `set_preedit_string` + `commit` Wayland
+                    // round-trip per arrow press).
+                    let plan = text_ui_plan_update(
+                        self.preedit_tracking.last_text.as_deref(),
+                        self.preedit_tracking.last_cursor,
+                        Some(preedit.as_str()),
+                        cursor_pos,
+                    );
+                    if plan == TextUiPlan::SyncPreeditAndPanel {
+                        frontend.set_preedit_and_flush(&preedit, cursor);
+                        self.preedit_tracking.last_text = Some(preedit.clone());
+                        self.preedit_tracking.last_cursor = cursor_pos;
+                    }
+                    // SyncPanelOnly: skip the Wayland round-trip; the
+                    // candidate-panel repaint below is driven independently
+                    // by `mark_panel_dirty`.
                 }
                 let composition_seq = frontend.set_candidates(candidates, selected);
                 frontend.mark_panel_dirty();
@@ -328,6 +408,85 @@ impl KeyboardRouter {
     /// Raw input context pointer. The caller must not free it.
     pub fn ctx(&self) -> *mut typio::TypioInputContext {
         self.ctx
+    }
+
+    /// Try to handle `key` through host-managed candidate selection
+    /// (ADR-0012), bypassing the engine's `process_key`.
+    ///
+    /// Returns `Some(handled)` when the host took the key (either by
+    /// moving the highlight locally — navigation — or by dispatching
+    /// `typio_input_context_commit_candidate` — commit). Returns
+    /// `None` when the host did not take the key and the caller should
+    /// fall back to the engine via [`Self::dispatch_key`].
+    ///
+    /// **Opt-in.** The engine must have declared a non-empty
+    /// `host_managed_selection` flag set in its last composition; see
+    /// [`crate::candidate_guard::should_consume_key`]. Engines that
+    /// have not opted in are not affected.
+    ///
+    /// For **navigation** keys (Up/Down/Left/Right) the highlight is
+    /// moved locally and the panel is marked dirty. The engine never
+    /// sees the key — this is the canonical perf win of host-managed
+    /// selection: no synchronous FFI round-trip per arrow press.
+    ///
+    /// For **commit** keys (Space / digits / Enter-raw) the host calls
+    /// `typio_input_context_commit_candidate` so the engine can
+    /// dispatch its own `commit_candidate` vtable entry. If the engine
+    /// declines (returns `TypioErrorNotFound` — typically because it
+    /// doesn't implement the vtable entry), the host returns `None` so
+    /// the caller can fall back to `process_key`, preserving the
+    /// user's intent instead of dropping the key.
+    ///
+    /// Release events under host-managed selection are swallowed
+    /// (`Some(true)`) so the engine never observes an unpaired release
+    /// for a press it didn't see.
+    pub fn try_host_selection(
+        &mut self,
+        key: &DecodedKeyEvent,
+        frontend: &mut InputMethodState,
+    ) -> Option<bool> {
+        let action = classify_host_selection(
+            key.state == WL_KEYBOARD_KEY_STATE_PRESSED,
+            key.keysym,
+            frontend.composition.candidates.len(),
+            frontend.composition.selected_candidate,
+            frontend.composition.host_managed_selection,
+        )?;
+        match action {
+            HostSelectionAction::Swallow => Some(true),
+            HostSelectionAction::Navigate(new_idx) => {
+                if new_idx != frontend.composition.selected_candidate {
+                    frontend.composition.selected_candidate = new_idx;
+                    frontend.composition.composition_seq =
+                        frontend.composition.composition_seq.wrapping_add(1);
+                    frontend.mark_panel_dirty();
+                    tracing::trace!(
+                        target: "typio.engine.host_sel",
+                        selected = new_idx,
+                        "host-managed navigation"
+                    );
+                }
+                Some(true)
+            }
+            HostSelectionAction::Commit(idx) => {
+                let r = typio::input_context::typio_input_context_commit_candidate(
+                    self.ctx,
+                    idx as i32,
+                );
+                if r == typio_abi::TypioResult::TypioOk {
+                    return Some(true);
+                }
+                tracing::debug!(
+                    target: "typio.engine.host_sel",
+                    idx,
+                    result = ?r,
+                    "commit_candidate declined; falling back to process_key"
+                );
+                // Engine declined (TypioErrorNotFound). Fall back to
+                // process_key so the user's intent isn't lost.
+                None
+            }
+        }
     }
 
     /// Dispatch one decoded key event to the engine.
@@ -548,6 +707,17 @@ impl KeyboardRouter {
                 RepeatOutcome::Forwarded
             }
             RepeatMode::Engine => {
+                // Host-managed selection repeats (e.g. held Down arrow
+                // cycling candidates) take the host path before
+                // re-entering the engine. Falls through when the host
+                // declines — same opt-in gate as the initial press.
+                if let Some(handled) = self.try_host_selection(&key, frontend) {
+                    return if handled {
+                        RepeatOutcome::Consumed
+                    } else {
+                        RepeatOutcome::Stopped
+                    };
+                }
                 let consumed = self.dispatch_key_repeat(&key, xkb_mods_depressed);
                 if consumed {
                     RepeatOutcome::Consumed
@@ -592,6 +762,7 @@ mod tests {
                 shortcut_already_triggered: false,
                 shortcut_fired: false,
                 engine_tracked_mods: Modifiers::NONE,
+                preedit_tracking: PreeditTracking::new(),
             }
         }
     }
@@ -666,5 +837,33 @@ mod tests {
     fn is_focused_handles_null_ctx_gracefully() {
         let router = KeyboardRouter::new_for_test(std::ptr::null_mut());
         assert!(!router.is_focused());
+    }
+
+    #[test]
+    fn preedit_tracking_starts_empty_and_resets() {
+        let mut router = KeyboardRouter::new_for_test(std::ptr::null_mut());
+        router.preedit_tracking.last_text = Some("ni".to_string());
+        router.preedit_tracking.last_cursor = 2;
+        router.preedit_tracking_reset();
+        assert_eq!(router.preedit_tracking.last_text, None);
+        assert_eq!(router.preedit_tracking.last_cursor, -1);
+    }
+
+    #[test]
+    fn preedit_dedup_classifies_arrow_vs_text_change() {
+        // Simulate the canonical arrow-navigation case: same preedit
+        // text and cursor, only the selected candidate index differs.
+        // The plan must be SyncPanelOnly so `drain_composition` skips
+        // the `set_preedit_string + commit` Wayland round-trip.
+        let plan = text_ui_plan_update(Some("nihao"), 5, Some("nihao"), 5);
+        assert_eq!(plan, TextUiPlan::SyncPanelOnly);
+
+        // A real preedit edit transitions to SyncPreeditAndPanel.
+        let plan = text_ui_plan_update(Some("ni"), 2, Some("nih"), 3);
+        assert_eq!(plan, TextUiPlan::SyncPreeditAndPanel);
+
+        // Cursor-only move inside the same preedit also resends.
+        let plan = text_ui_plan_update(Some("ni"), 1, Some("ni"), 2);
+        assert_eq!(plan, TextUiPlan::SyncPreeditAndPanel);
     }
 }

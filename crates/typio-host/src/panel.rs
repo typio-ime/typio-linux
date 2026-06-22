@@ -25,11 +25,11 @@ use flux_sys::{
     flux_arena, flux_arena_destroy, flux_arena_init, flux_arena_reset, flux_canvas,
     flux_canvas_begin, flux_canvas_desc, flux_canvas_destroy, flux_canvas_end,
     flux_canvas_fill_rrect, flux_color_rgba, flux_device, flux_device_create, flux_device_desc,
-    flux_device_release, flux_device_vk_instance, flux_error_info, flux_frame,
-    flux_frame_begin_desc, flux_frame_present, flux_frame_submit, flux_get_last_error, flux_result,
-    flux_struct_type, flux_surface, flux_surface_begin_frame, flux_surface_create,
-    flux_surface_desc, flux_surface_release, flux_text, flux_text_create, flux_text_desc,
-    flux_text_destroy, flux_text_draw, flux_text_family, flux_text_style,
+    flux_device_release, flux_device_vk_instance, flux_error_info, flux_frame, flux_frame_begin_desc,
+    flux_frame_present, flux_frame_submit, flux_get_last_error, flux_result, flux_struct_type,
+    flux_surface, flux_surface_begin_frame, flux_surface_create, flux_surface_desc, flux_surface_release,
+    flux_text, flux_text_create, flux_text_desc, flux_text_destroy, flux_text_draw, flux_text_family,
+    flux_text_metrics, flux_text_style,
 };
 use wayland_sys::{
     client::{wl_proxy, wl_proxy_marshal_array},
@@ -267,6 +267,16 @@ pub struct FluxPanel {
     /// save callback). Null when cache persistence is unavailable
     /// (no XDG_CACHE_HOME / HOME).
     pipeline_cache_path: *mut c_char,
+    /// Cached per-candidate layout: `(number_metrics, text_metrics)`
+    /// for each entry in `last_layout_key.0`, in logical pixels.
+    /// Recomputed only when the candidate strings or `scale` change.
+    /// Both `ensure_candidate_size` (total-width sizing) and
+    /// `draw_candidates` (per-item placement) consult this cache, so a
+    /// candidate-highlight-only update — the canonical Up/Down arrow
+    /// navigation case — skips the `flux_text_measure` FFI loop
+    /// entirely.
+    last_layout_key: Option<(Vec<String>, f32)>,
+    last_layout: Vec<(flux_text_metrics, flux_text_metrics)>,
 }
 
 impl FluxPanel {
@@ -437,6 +447,8 @@ impl FluxPanel {
             last_candidate_size_resized: false,
             _wl_surface: wl_surface,
             pipeline_cache_path: cache_path_c,
+            last_layout_key: None,
+            last_layout: Vec::new(),
         })
     }
 
@@ -522,6 +534,13 @@ impl FluxPanel {
         }
 
         heartbeat();
+        // Resolve per-candidate metrics up front via the shared layout
+        // cache. The cache hit path (canonical Up/Down arrow case: same
+        // candidate strings, only `selected` moved) skips the
+        // `flux_text_measure` FFI loop entirely. Done outside the
+        // `unsafe` block because `layout_candidates` takes `&mut self`
+        // and so cannot share the borrow with the FFI calls below.
+        let layout = timed!(measure_duration, self.layout_candidates(candidates));
         unsafe {
             flux_arena_reset(&mut self.arena);
             heartbeat();
@@ -574,25 +593,8 @@ impl FluxPanel {
             for (i, candidate) in candidates.iter().enumerate() {
                 let number = candidate_number_label(i);
                 let number_bytes = number.as_bytes();
-                let number_metrics = timed!(
-                    measure_duration,
-                    flux_sys::flux_text_measure(
-                        self.text,
-                        number_bytes.as_ptr() as *const _,
-                        number_bytes.len(),
-                        &number_style,
-                    )
-                );
                 let bytes = candidate.as_bytes();
-                let metrics = timed!(
-                    measure_duration,
-                    flux_sys::flux_text_measure(
-                        self.text,
-                        bytes.as_ptr() as *const _,
-                        bytes.len(),
-                        &style,
-                    )
-                );
+                let (number_metrics, metrics) = layout[i];
 
                 let item_width = CANDIDATE_ITEM_X_PADDING * 2.0
                     + number_metrics.width
@@ -768,6 +770,74 @@ impl FluxPanel {
         }
     }
 
+    /// Return cached `(number_metrics, text_metrics)` per candidate,
+    /// re-running `flux_text_measure` only when the candidate strings or
+    /// the rendering scale have changed since the last call.
+    ///
+    /// Both [`Self::ensure_candidate_size`] (total-width sizing) and
+    /// [`Self::draw_candidates`] (per-item placement) consult this cache,
+    /// so a highlight-only update — the canonical Up/Down arrow case,
+    /// where the candidate set is unchanged and only `selected` differs —
+    /// skips the `flux_text_measure` FFI loop entirely.
+    fn layout_candidates(
+        &mut self,
+        candidates: &[String],
+    ) -> Vec<(flux_text_metrics, flux_text_metrics)> {
+        let cache_valid = self
+            .last_layout_key
+            .as_ref()
+            .map(|(cached, scale)| {
+                *scale == self.scale && cached.len() == candidates.len() && {
+                    cached.iter().zip(candidates.iter()).all(|(a, b)| a == b)
+                }
+            })
+            .unwrap_or(false);
+        if cache_valid {
+            return self.last_layout.clone();
+        }
+
+        let style = flux_sys::flux_text_style {
+            size_px: CANDIDATE_FONT_SIZE,
+            weight: 400.0,
+            color: unsafe { flux_sys::flux_color_rgba(240, 240, 240, 255) },
+            family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+        };
+        let number_style = flux_sys::flux_text_style {
+            size_px: CANDIDATE_NUMBER_FONT_SIZE,
+            weight: 400.0,
+            color: unsafe { flux_sys::flux_color_rgba(145, 145, 152, 255) },
+            family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+        };
+
+        let mut out: Vec<(flux_text_metrics, flux_text_metrics)> =
+            Vec::with_capacity(candidates.len());
+        for (i, candidate) in candidates.iter().enumerate() {
+            let number = candidate_number_label(i);
+            let number_bytes = number.as_bytes();
+            let number_metrics = unsafe {
+                flux_sys::flux_text_measure(
+                    self.text,
+                    number_bytes.as_ptr() as *const _,
+                    number_bytes.len(),
+                    &number_style,
+                )
+            };
+            let bytes = candidate.as_bytes();
+            let metrics = unsafe {
+                flux_sys::flux_text_measure(
+                    self.text,
+                    bytes.as_ptr() as *const _,
+                    bytes.len(),
+                    &style,
+                )
+            };
+            out.push((number_metrics, metrics));
+        }
+        self.last_layout_key = Some((candidates.to_vec(), self.scale));
+        self.last_layout = out.clone();
+        out
+    }
+
     /// Ensure the surface is big enough for `candidate_count` rows.
     ///
     /// Two paths, per ADR-0013:
@@ -789,41 +859,13 @@ impl FluxPanel {
         let timing_enabled = tracing::enabled!(target: PANEL_TIMING_TARGET, tracing::Level::INFO)
             || tracing::enabled!(target: PANEL_TIMING_TARGET, tracing::Level::TRACE);
         let start = timing_enabled.then(Instant::now);
+
+        // Hit the shared layout cache so the canonical arrow-key
+        // navigation case (same candidates, only `selected` moved)
+        // skips the `flux_text_measure` FFI loop entirely.
+        let layout = self.layout_candidates(candidates);
         let mut total_width: f32 = PANEL_PADDING;
-
-        let style = flux_sys::flux_text_style {
-            size_px: CANDIDATE_FONT_SIZE,
-            weight: 400.0,
-            color: unsafe { flux_sys::flux_color_rgba(240, 240, 240, 255) },
-            family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
-        };
-        let number_style = flux_sys::flux_text_style {
-            size_px: CANDIDATE_NUMBER_FONT_SIZE,
-            weight: 400.0,
-            color: unsafe { flux_sys::flux_color_rgba(145, 145, 152, 255) },
-            family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
-        };
-
-        for (i, candidate) in candidates.iter().enumerate() {
-            let number = candidate_number_label(i);
-            let number_bytes = number.as_bytes();
-            let number_metrics = unsafe {
-                flux_sys::flux_text_measure(
-                    self.text,
-                    number_bytes.as_ptr() as *const _,
-                    number_bytes.len(),
-                    &number_style,
-                )
-            };
-            let bytes = candidate.as_bytes();
-            let metrics = unsafe {
-                flux_sys::flux_text_measure(
-                    self.text,
-                    bytes.as_ptr() as *const _,
-                    bytes.len(),
-                    &style,
-                )
-            };
+        for (number_metrics, metrics) in layout.iter() {
             let item_width = CANDIDATE_ITEM_X_PADDING * 2.0
                 + number_metrics.width
                 + CANDIDATE_NUMBER_GAP

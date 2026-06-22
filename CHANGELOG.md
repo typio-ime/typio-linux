@@ -9,6 +9,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Host-managed candidate selection is now wired (ADR-0012, opt-in).**
+  Engines that declare a non-zero `host_managed_selection` flag set in
+  their composition (`TypioHostSelNavigate`, `TypioHostSelCommit`,
+  `TypioHostSelIndexPick`, `TypioHostSelCommitRaw`) now have the
+  corresponding keys intercepted by the host before they reach
+  `process_key`. Navigation keys move the highlight locally with no
+  engine round-trip — the canonical perf win for fast candidate
+  cycling. Commit keys dispatch through the engine's
+  `commit_candidate` vtable entry via
+  `typio_input_context_commit_candidate`. The pure decision lives in
+  `candidate_guard::classify_host_selection` (unit-tested in isolation)
+  and the effectful layer in `KeyboardRouter::try_host_selection`.
+  Engines that have not opted in are untouched — the Rust port
+  deviates from the C ancestor's "intercept arrows by default"
+  behaviour to avoid taking over navigation from engines adapted to
+  running un-intercepted on this daemon.
+
+### Changed
+
+- **`app.rs` split into `app/` directory (2096 → 1004 lines + 3
+  submodules).** The monolithic daemon file is now `app/mod.rs` (App
+  struct + init + lifecycle) + `app/event_loop.rs` (the per-tick
+  pipeline) + `app/indicator.rs` (banner trigger/render/hide) +
+  `app/tray.rs` (registry mutations for tray menu actions). Methods
+  stay on `App` via multiple `impl` blocks.
+
+- **`InputMethodState` composition fields extracted into
+  `CompositionState`.** The 5 cohesive composition-projection fields
+  (`candidates`, `selected_candidate`, `host_managed_selection`,
+  `composition_seq`, `pending_commit`) now live on a sub-struct
+  accessed as `state.composition.<field>`, reducing the god-struct
+  surface and grouping the engine-published state.
+
+- **`PENDING_COMPOSITION` 5-tuple replaced with a named struct.**
+  `PendingComposition` (`router.rs`) documents the staged fields by
+  name instead of by tuple position.
+
+- **Skip redundant preedit Wayland round-trips on candidate navigation.**
+  `drain_composition` now consults the previously-stubbed
+  `text_ui_state::text_ui_plan_update` and suppresses the
+  `set_preedit_string` + `commit` request when the engine reports the
+  same preedit text and cursor as the last composition — the canonical
+  Up/Down arrow case, where only the highlighted candidate moves. Per
+  arrow press this saves one synchronous Wayland round-trip that the
+  compositor had to round through the focused text field.
+
+- **Cache candidate-row measurements across panel flushes.**
+  `FluxPanel` now memoises `flux_text_measure` results keyed on the
+  candidate strings + render scale; both `ensure_candidate_size`
+  (sizing) and `draw_candidates` (per-item placement) consult the
+  cache. The Up/Down arrow navigation case — same candidates, only the
+  selected index moved — now skips the per-candidate measure FFI loop
+  entirely on every redraw.
+
+- **Hot-path `eprintln!` migrated to structured `tracing`.** Grab
+  create/destroy, Activate/Deactivate, keymap load/events, panel
+  hide/skip-hide decisions, focus-out hide, and the watchdog
+  stuck-stage warning now emit through `typio.wayland.*`,
+  `typio.panel.host`, and `typio.watchdog` targets, controlled by
+  `RUST_LOG` like the rest of the daemon. The unconditional
+  stderr-write lock is no longer on the per-keystroke path.
+
+- **Lazy candidate snapshot in the panel-update tick.** The event loop
+  now reads only cheap scalars (schedule state, selected, composition
+  seq, candidate count) every tick and defers the `Vec<String>` clone
+  to the rare flush path, eliminating an allocation per Idle tick.
+
+### Removed
+
+- **`pw_capture` module deleted (292 lines, never wired).** The
+  PipeWire audio-capture port was declared in `lib.rs` but had no
+  production callers; only its own unit tests constructed `PwCapture`.
+  The `voice` cargo feature, `pipewire` and `libspa` dependencies,
+  and `libpipewire-0.3` / `libspa-0.2` system-library requirements are
+  gone with it. Voice-engine loading via libtypio's registry still
+  works unchanged.
+
+- **Phase 0 spike binary + standalone diagnostic binaries deleted.**
+  `src/main.rs` (the package's implicit `typio-host` binary, a "Phase
+  0 spike" that only verified Wayland connectivity) and
+  `bin/spike-input-method`, `bin/spike-engine-input`,
+  `bin/spike-config-watcher`, `bin/check-libtypio`,
+  `bin/typio-daemon-stub` (1285 lines total) are removed. Only the
+  shipping `typio` binary remains. None were referenced by CI, install
+  scripts, integration tests, or docs; their historical context stays
+  in the CHANGELOG.
+
+- **`calloop` dependency removed.** Machete-flagged as unused; the
+  event loop drives `libc::poll` directly with no `calloop` integration.
+
+- **`panel_coordinator::decide_candidate_flush` deleted.** Despite the
+  name it implemented anchor-probe + caret-fallback logic for the
+  *positioned-UI* path (the indicator banner), not the candidate panel
+  — the candidate panel uses compositor-managed popup positioning and
+  the simpler `panel_scheduler::should_flush`. The dead function and
+  its test were the last unreconciled stub from an earlier design
+  iteration.
+
+- **`text_ui_state::positioned_ui_plan` + `PositionedUiPlan` deleted.**
+  Pure decision function superseded by `panel_coordinator`'s
+  `Instant`-based inline timeout logic; only its own tests referenced
+  it.
+
+### Added
+
+- **Skip redundant preedit Wayland round-trips on candidate navigation.**
+  `drain_composition` now consults the previously-stubbed
+  `text_ui_state::text_ui_plan_update` and suppresses the
+  `set_preedit_string` + `commit` request when the engine reports the
+  same preedit text and cursor as the last composition — the canonical
+  Up/Down arrow case, where only the highlighted candidate moves. Per
+  arrow press this saves one synchronous Wayland round-trip that the
+  compositor had to round through the focused text field.
+
+- **Cache candidate-row measurements across panel flushes.**
+  `FluxPanel` now memoises `flux_text_measure` results keyed on the
+  candidate strings + render scale; both `ensure_candidate_size`
+  (sizing) and `draw_candidates` (per-item placement) consult the
+  cache. The Up/Down arrow navigation case — same candidates, only the
+  selected index moved — now skips the per-candidate measure FFI loop
+  entirely on every redraw.
+
+- **Hot-path `eprintln!` migrated to structured `tracing`.** Grab
+  create/destroy, Activate/Deactivate, keymap load/events, panel
+  hide/skip-hide decisions, focus-out hide, and the watchdog
+  stuck-stage warning now emit through `typio.wayland.*`,
+  `typio.panel.host`, and `typio.watchdog` targets, controlled by
+  `RUST_LOG` like the rest of the daemon. The unconditional
+  stderr-write lock is no longer on the per-keystroke path.
+
+- **Lazy candidate snapshot in the panel-update tick.** The event loop
+  now reads only cheap scalars (schedule state, selected, composition
+  seq, candidate count) every tick and defers the `Vec<String>` clone
+  to the rare flush path, eliminating an allocation per Idle tick.
+
+### Added
+
+- **Candidate Panel Behavior explanation doc.** Added
+  `docs/explanation/candidate-panel-behavior.md` as the UI-level
+  counterpart to `panel-architecture.md` and `frontend-graphics.md`.
+  It consolidates the candidate-box lifecycle (hidden → waiting for
+  anchor → visible → hidden), the host-managed-selection key
+  contract, the anchor generation/probe/caret-fallback path, the
+  Retry schedule and watchdog tolerance visible to the user during
+  compositor stalls, and the relevant `display.*` config keys — with
+  a source-map table pointing at the Rust modules that own each
+  responsibility. Wired into `docs/index.md` and cross-linked from
+  `panel-architecture.md`.
+
 - **Structured panel diagnostics.** The host now initializes `tracing`
   for the shipping `typio` binary and emits candidate-panel timing as
   structured `typio.panel.timing` events controlled by `RUST_LOG`:

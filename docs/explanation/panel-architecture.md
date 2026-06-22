@@ -135,6 +135,7 @@ Rendering is downstream and should not contain ownership policy.
 
 ## See also
 
+- [Candidate Panel Behavior](candidate-panel-behavior.md) — UI-level lifecycle of the candidate box (show/hide, anchor, retry, input → visible effect)
 - [Glossary](../reference/glossary.md) — term definitions
 - [Frontend Graphics](frontend-graphics.md) — render pipeline
 - [Wayland Input Method Protocol](wayland-input-method.md)

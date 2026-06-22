@@ -28,7 +28,6 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 bitflags = "2"
 inotify = "0.11"
 nix = { version = "0.31", features = ["time", "event", "socket", "fs", "user"] }
-calloop = "0.14"
 libc = "0.2"
 # zbus's blocking-api wraps an async runtime (async-io by default). The
 # blocking-api feature gives us Connection::system() and receive_signal()

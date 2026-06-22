@@ -49,9 +49,10 @@ impl ApplyTarget
         self.1.focus_out();
         self.1.soft_pause();
         let _ = self.2.stop();
-        eprintln!(
-            "panel: hide reason=focus_out owner={:?}",
-            self.0.state().panel_coord().visible_owner()
+        tracing::debug!(
+            target: "typio.panel.host",
+            owner = ?self.0.state().panel_coord().visible_owner(),
+            "panel: hide reason=focus_out"
         );
         if let Some(panel) = self.0.panel_mut() {
             panel.hide();
@@ -69,6 +70,11 @@ impl ApplyTarget
 
     fn clear_preedit(&mut self) {
         self.0.state_mut().clear_preedit_and_flush();
+        // The compositor has been told the preedit is gone; mirror that
+        // into the router's tracking so the next engine composition is
+        // not suppressed as a "no-op" against a preedit the user can no
+        // longer see.
+        self.1.preedit_tracking_reset();
     }
 
     fn commit(&mut self) {

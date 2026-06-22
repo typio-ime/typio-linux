@@ -41,7 +41,6 @@ pub mod panel_coordinator;
 pub mod panel_scheduler;
 pub mod preedit;
 pub mod protocols;
-pub mod pw_capture;
 pub mod repeat_timer;
 pub mod resume_signal;
 pub mod service;

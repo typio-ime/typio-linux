@@ -117,6 +117,63 @@ pub enum LifecycleEvent {
     RepeatInfo { rate: i32, delay: i32 },
 }
 
+/// Engine composition projection: what the panel should render and
+/// what commit text (if any) is pending. Updated atomically by
+/// `KeyboardRouter::drain_composition` (engine → host) and by
+/// `KeyboardRouter::try_host_selection` (host-local highlight moves
+/// under ADR-0012). The host's preedit text is *not* part of this
+/// struct: it is forwarded to the compositor immediately via
+/// `set_preedit_and_flush` and tracked by `KeyboardRouter::preedit_tracking`.
+#[derive(Debug, Default)]
+pub struct CompositionState {
+    /// Current candidate list for the panel to render.
+    pub candidates: Vec<String>,
+    /// Index of the highlighted candidate.
+    pub selected_candidate: usize,
+    /// Engine-declared host-managed-selection flags (ADR-0012). When
+    /// non-empty, the host intercepts the corresponding
+    /// navigation/selection keys via [`crate::candidate_guard`] instead
+    /// of forwarding them to `process_key`. Empty (opt-out) by default.
+    pub host_managed_selection: crate::candidate_guard::HostSelectionFlags,
+    /// Monotonic sequence bumped on every composition change — including
+    /// host-local highlight moves — so observers can dedupe.
+    pub composition_seq: u64,
+    /// Pending commit text for the next flush. Set by the engine commit
+    /// callback; taken by the event loop after each dispatch round.
+    pub pending_commit: Option<String>,
+}
+
+impl CompositionState {
+    /// Set the current candidate list + selected index. Bumps the
+    /// composition sequence and returns the new value for logging.
+    pub fn set_candidates(&mut self, candidates: Vec<String>, selected: usize) -> u64 {
+        self.composition_seq = self.composition_seq.wrapping_add(1);
+        self.candidates = candidates;
+        self.selected_candidate = selected;
+        self.composition_seq
+    }
+
+    /// Reset all composition state (focus lost / composition discarded).
+    pub fn clear(&mut self) {
+        self.candidates.clear();
+        self.selected_candidate = 0;
+        self.host_managed_selection = crate::candidate_guard::HostSelectionFlags::empty();
+        self.pending_commit = None;
+        // Note: composition_seq is monotonic across resets so observers
+        // don't see a seq regression; do not bump or zero it here.
+    }
+
+    /// Take the pending commit text, if any.
+    pub fn take_pending_commit(&mut self) -> Option<String> {
+        self.pending_commit.take()
+    }
+
+    /// Stage a commit text from the engine.
+    pub fn set_pending_commit(&mut self, text: String) {
+        self.pending_commit = Some(text);
+    }
+}
+
 /// Wayland state — all bound protocol objects + tracking fields.
 ///
 /// This struct implements `Dispatch` for every protocol object the
@@ -151,12 +208,8 @@ pub struct InputMethodState {
     panel_viewport: Option<WpViewport>,
     /// Text input rectangle from the compositor (cursor position).
     pub text_input_rect: Option<(i32, i32, i32, i32)>,
-    /// Current candidate list for the panel to render.
-    pub candidates: Vec<String>,
-    /// Index of the highlighted candidate.
-    pub selected_candidate: usize,
-    /// Monotonic sequence for engine composition/candidate updates.
-    pub composition_seq: u64,
+    /// Engine composition projection (candidates, selection, commit).
+    pub composition: CompositionState,
     serial: u32,
     active: bool,
     initialized: bool,
@@ -188,8 +241,6 @@ pub struct InputMethodState {
     /// always reach the loop, so `router.on_release` +
     /// `timer.stop()` fire on every release.
     pub pending_keys: Vec<DecodedKeyEvent>,
-    /// Pending text to commit to the compositor on the next flush.
-    pub pending_commit: Option<String>,
     /// Raw input facts recorded this tick for the focus controller.
     pub facts: InputFacts,
     /// Set when the compositor declares the input method unavailable.
@@ -298,8 +349,7 @@ impl InputMethodState {
 
     /// Clear candidate panel state (focus lost / composition discarded).
     pub fn clear_panel_state(&mut self) {
-        self.candidates.clear();
-        self.selected_candidate = 0;
+        self.composition.clear();
         self.panel_schedule_state = panel_scheduler::cancel();
     }
 
@@ -311,7 +361,7 @@ impl InputMethodState {
     /// Create a new keyboard grab from the input-method object.
     pub fn create_keyboard_grab(&mut self, qh: &QueueHandle<Self>) {
         if self.keyboard_grab.is_none() {
-            eprintln!("grab: create");
+            tracing::debug!(target: "typio.wayland.grab", "create");
             self.keyboard_grab = Some(self.input_method.grab_keyboard(qh, ()));
             self.keymap_received_this_epoch = false;
         }
@@ -320,7 +370,7 @@ impl InputMethodState {
     /// Destroy the current keyboard grab object.
     pub fn destroy_keyboard_grab(&mut self) {
         if let Some(grab) = self.keyboard_grab.take() {
-            eprintln!("grab: destroy");
+            tracing::debug!(target: "typio.wayland.grab", "destroy");
             drop(grab);
             self.keymap_received_this_epoch = false;
         }
@@ -355,11 +405,9 @@ impl InputMethodState {
     }
 
     /// Set the current candidate list + selected index for the panel.
+    /// Forwards to [`CompositionState::set_candidates`].
     pub fn set_candidates(&mut self, candidates: Vec<String>, selected: usize) -> u64 {
-        self.composition_seq = self.composition_seq.wrapping_add(1);
-        self.candidates = candidates;
-        self.selected_candidate = selected;
-        self.composition_seq
+        self.composition.set_candidates(candidates, selected)
     }
 
     /// Take all pending key events for processing by the event loop.
@@ -380,7 +428,7 @@ impl InputMethodState {
     /// call `commit_string(text)` + `commit(serial)` on the
     /// input-method proxy.
     pub fn take_pending_commit(&mut self) -> Option<String> {
-        self.pending_commit.take()
+        self.composition.take_pending_commit()
     }
 
     /// Flush a commit directly to the compositor.
@@ -418,13 +466,13 @@ impl InputMethodState {
         use std::io::{Read, Seek, SeekFrom};
         let mut file = std::fs::File::from(fd);
         if let Err(e) = file.seek(SeekFrom::Start(0)) {
-            eprintln!("keymap: FAILED to seek to start: {e}");
+            tracing::warn!(target: "typio.wayland.keymap", "seek to start failed: {e}");
             return;
         }
 
         let mut buffer = Vec::new();
         if let Err(e) = file.read_to_end(&mut buffer) {
-            eprintln!("keymap: FAILED to read keymap fd: {e}");
+            tracing::warn!(target: "typio.wayland.keymap", "read keymap fd failed: {e}");
             return;
         }
 
@@ -451,9 +499,9 @@ impl InputMethodState {
                 );
                 self.xkb_keymap = Some(km);
                 self.xkb_state = Some(xkb_state);
-                eprintln!("keymap: XKB state ready");
+                tracing::debug!(target: "typio.wayland.keymap", "XKB state ready");
             }
-            None => eprintln!("keymap: xkb_keymap_new_from_string FAILED"),
+            None => tracing::warn!(target: "typio.wayland.keymap", "xkb_keymap_new_from_string failed"),
         }
     }
 }
@@ -517,7 +565,7 @@ impl InputMethodFrontend {
             )
         } {
             Ok(panel) => frontend.panel = Some(panel),
-            Err(e) => eprintln!("WARN: FluxPanel creation failed: {e}"),
+            Err(e) => tracing::warn!(target: "typio.panel.host", "FluxPanel creation failed: {e}"),
         }
 
         Ok(frontend)
@@ -561,11 +609,13 @@ impl InputMethodFrontend {
         // Compositors without viewporter fall back to exact-size resize.
         let viewporter: Option<WpViewporter> = globals.bind(&qh, 1..=1, ()).ok();
         match &viewporter {
-            Some(_) => eprintln!(
-                "OK:   compositor advertises wp_viewporter (grow-only swapchain active)"
+            Some(_) => tracing::info!(
+                target: "typio.wayland.viewporter",
+                "compositor advertises wp_viewporter (grow-only swapchain active)"
             ),
-            None => eprintln!(
-                "WARN: compositor lacks wp_viewporter — candidate-page width changes rebuild the swapchain (watchdog-killing stall); see ADR-0013"
+            None => tracing::warn!(
+                target: "typio.wayland.viewporter",
+                "compositor lacks wp_viewporter — candidate-page width changes rebuild the swapchain (watchdog-killing stall); see ADR-0013"
             ),
         }
 
@@ -605,9 +655,7 @@ impl InputMethodFrontend {
             viewporter,
             panel_viewport,
             text_input_rect: None,
-            candidates: Vec::new(),
-            selected_candidate: 0,
-            composition_seq: 0,
+            composition: CompositionState::default(),
             serial: 0,
             active: false,
             initialized: false,
@@ -619,7 +667,6 @@ impl InputMethodFrontend {
             mods_latched: 0,
             mods_locked: 0,
             pending_keys: Vec::new(),
-            pending_commit: None,
             facts: InputFacts::default(),
             stopped: false,
             pending: SessionState::default(),
@@ -924,7 +971,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for InputMethodState {
         use zwp_input_method_v2::Event;
         match event {
             Event::Activate => {
-                eprintln!("input_method: Activate");
+                tracing::debug!(target: "typio.wayland.frontend", "Activate");
                 state.active = true;
                 state.facts.im_activate_seen = true;
                 state.pending = SessionState {
@@ -934,7 +981,7 @@ impl Dispatch<ZwpInputMethodV2, ()> for InputMethodState {
                 state.fire(LifecycleEvent::Activated);
             }
             Event::Deactivate => {
-                eprintln!("input_method: Deactivate");
+                tracing::debug!(target: "typio.wayland.frontend", "Deactivate");
                 state.active = false;
                 state.facts.im_deactivate_seen = true;
                 state.pending.active = false;
@@ -1094,7 +1141,10 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
         use zwp_input_method_keyboard_grab_v2::Event;
         match event {
             Event::Keymap { format, fd, size } => {
-                eprintln!("grab: Keymap event received, format={format:?} size={size}");
+                tracing::debug!(
+                    target: "typio.wayland.keymap",
+                    "Keymap event received, format={format:?} size={size}"
+                );
                 state.keymap_received_this_epoch = true;
                 let fmt_raw: u32 = match &format {
                     wayland_client::WEnum::Value(v) => *v as u32,
@@ -1111,7 +1161,10 @@ impl Dispatch<ZwpInputMethodKeyboardGrabV2, ()> for InputMethodState {
                 // request, so it is safe to drop `vk_fd` right after the call.
                 match fd.try_clone() {
                     Ok(vk_fd) => state.virtual_keyboard.keymap(fmt_raw, vk_fd.as_fd(), size),
-                    Err(e) => eprintln!("input_method: dup keymap fd for vk failed: {e}"),
+                    Err(e) => tracing::warn!(
+                        target: "typio.wayland.keymap",
+                        "dup keymap fd for vk failed: {e}"
+                    ),
                 }
                 state.load_keymap_from_fd(fd, size);
             }
@@ -1248,15 +1301,15 @@ mod tests {
         assert!(!state.stopped());
 
         state.set_candidates(vec!["alpha".to_string(), "beta".to_string()], 1);
-        assert_eq!(state.candidates, vec!["alpha", "beta"]);
-        assert_eq!(state.selected_candidate, 1);
+        assert_eq!(state.composition.candidates, vec!["alpha", "beta"]);
+        assert_eq!(state.composition.selected_candidate, 1);
 
         state.mark_panel_dirty();
         assert_eq!(state.panel_schedule_state, PanelScheduleState::Dirty);
 
         state.clear_panel_state();
-        assert!(state.candidates.is_empty());
-        assert_eq!(state.selected_candidate, 0);
+        assert!(state.composition.candidates.is_empty());
+        assert_eq!(state.composition.selected_candidate, 0);
         assert_eq!(state.panel_schedule_state, PanelScheduleState::Idle);
 
         state.facts.im_done_serial = 7;
@@ -1298,7 +1351,7 @@ mod tests {
         );
         assert!(state.take_pending_keys().is_empty());
 
-        state.pending_commit = Some("hello".to_string());
+        state.composition.set_pending_commit("hello".to_string());
         assert_eq!(state.take_pending_commit(), Some("hello".to_string()));
         assert!(state.take_pending_commit().is_none());
     }

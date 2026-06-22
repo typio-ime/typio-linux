@@ -22,10 +22,21 @@
 //!
 //! ## What is NOT ported
 //!
-//! `typio_wl_host_selection_try_commit` in C — it needs the input
+//! `typio_wl_host_selection_try_commit` in C — it needed the input
 //! context (`session->ctx`) to actually call `commit_candidate`. The
-//! pure resolution is in [`host_selection_resolve`]; the actual commit
-//! is one line at the call site once input-context integration lands.
+//! pure resolution is in [`host_selection_resolve`]; the commit call
+//! lives in [`KeyboardRouter::try_host_selection`] in `router.rs`,
+//! which threads the libtypio input-context pointer through and falls
+//! back to `process_key_engine` when the engine declines (returns
+//! `TypioErrorNotFound`).
+//!
+//! ## Opt-in semantics (deviation from the C ancestor)
+//!
+//! The C host intercepted arrow keys by default whenever candidates
+//! existed. The Rust port requires explicit opt-in via a non-empty
+//! `TypioHostManagedSelection` flag set, so engines that have been
+//! running un-intercepted on this daemon continue to receive every
+//! key. See [`should_consume_key`].
 
 // Constants below mirror the upstream XCB/X11 `XKB_KEY_*` names which
 // use mixed case; we keep the same names so grep'ers can cross-reference
@@ -33,7 +44,6 @@
 // the complete digit set even if unused outside this module — silencing
 // both lints at the module boundary rather than per-constant.
 #![allow(non_snake_case)]
-#![allow(dead_code)]
 
 use crate::keyboard_policy::Keysym;
 use bitflags::bitflags;
@@ -62,6 +72,7 @@ const XKB_KEY_2: Keysym = 0x0032;
 const XKB_KEY_3: Keysym = 0x0033;
 #[allow(dead_code)]
 const XKB_KEY_4: Keysym = 0x0034;
+#[allow(dead_code)]
 const XKB_KEY_5: Keysym = 0x0035;
 #[allow(dead_code)]
 const XKB_KEY_6: Keysym = 0x0036;
@@ -258,28 +269,79 @@ pub fn host_selection_resolve(
     target.filter(|&i| i < candidate_count)
 }
 
+/// Concrete action the host should take for a key under host-managed
+/// selection. Returned by [`classify_host_selection`]; applied by
+/// `KeyboardRouter::try_host_selection`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostSelectionAction {
+    /// Move the highlight to this candidate index locally. The engine
+    /// does not see the key.
+    Navigate(usize),
+    /// Call `typio_input_context_commit_candidate(ctx, index)` so the
+    /// engine can dispatch its `commit_candidate` vtable entry.
+    Commit(usize),
+    /// Swallow the key without further action. Used for releases under
+    /// host-managed selection so the engine doesn't observe an unpaired
+    /// release for a press it didn't see.
+    Swallow,
+}
+
+/// Pure decision: given the key state, keysym, candidate count,
+/// currently-selected index, and the engine's declared flags, decide
+/// what the host should do. Returns `None` when the host should fall
+/// back to `process_key` (engine retains control).
+///
+/// Split out from `try_host_selection` so it is unit-testable without
+/// an `InputMethodState` (which requires live Wayland globals). The
+/// router's `try_host_selection` is the effectful layer that reads
+/// state, calls this, and applies the result.
+pub fn classify_host_selection(
+    key_state_pressed: bool,
+    keysym: Keysym,
+    candidate_count: usize,
+    selected: usize,
+    flags: HostSelectionFlags,
+) -> Option<HostSelectionAction> {
+    if !should_consume_key(candidate_count, flags, keysym) {
+        return None;
+    }
+    // After this point the host owns the key.
+    if !key_state_pressed {
+        return Some(HostSelectionAction::Swallow);
+    }
+    let sel_key = host_selection_keysym(keysym);
+    if host_selection_is_commit(sel_key) {
+        // CommitRaw (Enter) does not resolve to an index — let the
+        // engine handle the raw preedit commit.
+        let idx = host_selection_resolve(sel_key, selected, candidate_count)?;
+        return Some(HostSelectionAction::Commit(idx));
+    }
+    let new_idx = host_selection_resolve(sel_key, selected, candidate_count)?;
+    Some(HostSelectionAction::Navigate(new_idx))
+}
+
 /// Decide whether the host should swallow `keysym` instead of forwarding
 /// it to the engine's `process_key`. Returns `true` when:
 ///
 /// 1. there are candidates to navigate (`candidate_count > 0`), AND
-/// 2. either:
-///    - `flags` is empty AND keysym is Up/Down/Left/Right (default
-///      behaviour: always intercept arrow keys when candidates exist), OR
-///    - `flags` declares the category this keysym falls into.
+/// 2. `flags` is non-empty AND declares the category this keysym falls
+///    into.
 ///
-/// Port of `typio_wl_candidate_guard_should_consume` in C, but taking
-/// the two session fields it consulted as explicit parameters so it
-/// works without the session struct.
+/// **Opt-in only.** The C ancestor (`typio_wl_candidate_guard_should_consume`)
+/// fell back to "always intercept arrows when candidates exist" when
+/// `flags` was empty. The Rust port ships opt-in to avoid taking over
+/// candidate navigation from engines that have adapted to running
+/// un-intercepted on this host: an engine that wants host-managed
+/// selection must explicitly declare a non-zero `TypioHostManagedSelection`
+/// flag (ADR-0012). Engines that don't are left fully in charge, exactly
+/// as before.
 pub fn should_consume_key(
     candidate_count: usize,
     flags: HostSelectionFlags,
     keysym: Keysym,
 ) -> bool {
-    if candidate_count == 0 {
+    if candidate_count == 0 || flags.is_empty() {
         return false;
-    }
-    if flags.is_empty() {
-        return is_navigation_keysym(keysym);
     }
     let sel = host_selection_keysym(keysym);
     if matches!(sel, HostSelKey::None) {
@@ -418,20 +480,21 @@ mod tests {
     }
 
     #[test]
-    fn should_consume_key_default_intercepts_arrows() {
-        // With candidates and no declared flags, the default is to
-        // intercept arrow keys only.
-        assert!(should_consume_key(
+    fn should_consume_key_requires_explicit_opt_in() {
+        // With candidates but NO declared flags, the host stays out of
+        // the way — engines that have not opted into host-managed
+        // selection continue to receive every key (no behaviour change
+        // from before this module was wired).
+        assert!(!should_consume_key(
             3,
             HostSelectionFlags::empty(),
             XKB_KEY_UP
         ));
-        assert!(should_consume_key(
+        assert!(!should_consume_key(
             3,
             HostSelectionFlags::empty(),
             XKB_KEY_DOWN
         ));
-        // But not space, enter, or numbers.
         assert!(!should_consume_key(
             3,
             HostSelectionFlags::empty(),
@@ -459,6 +522,11 @@ mod tests {
         assert!(!should_consume_key(5, flags, XKB_KEY_SPACE));
         // Enter not declared either.
         assert!(!should_consume_key(5, flags, XKB_KEY_RETURN));
+        // Arrows also fall through when NAVIGATE is not declared, even
+        // with other flags set.
+        let non_nav = HostSelectionFlags::COMMIT | HostSelectionFlags::INDEX_PICK;
+        assert!(!should_consume_key(5, non_nav, XKB_KEY_UP));
+        assert!(!should_consume_key(5, non_nav, XKB_KEY_DOWN));
     }
 
     #[test]
@@ -477,5 +545,118 @@ mod tests {
         assert!(is_navigation_keysym(XKB_KEY_RIGHT));
         assert!(!is_navigation_keysym(XKB_KEY_SPACE));
         assert!(!is_navigation_keysym(XKB_KEY_RETURN));
+    }
+
+    #[test]
+    fn classify_returns_none_when_engine_did_not_opt_in() {
+        // Empty flags → host stays out of the way.
+        assert_eq!(
+            classify_host_selection(true, XKB_KEY_UP, 5, 0, HostSelectionFlags::empty()),
+            None
+        );
+        assert_eq!(
+            classify_host_selection(true, XKB_KEY_DOWN, 5, 0, HostSelectionFlags::empty()),
+            None
+        );
+    }
+
+    #[test]
+    fn classify_returns_none_when_no_candidates() {
+        // No candidates to navigate → fall through to engine.
+        assert_eq!(
+            classify_host_selection(
+                true,
+                XKB_KEY_UP,
+                0,
+                0,
+                HostSelectionFlags::NAVIGATE
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn classify_navigate_press_moves_highlight() {
+        // Down at index 0 with NAVIGATE flag → Navigate(1).
+        assert_eq!(
+            classify_host_selection(
+                true,
+                XKB_KEY_DOWN,
+                5,
+                0,
+                HostSelectionFlags::NAVIGATE
+            ),
+            Some(HostSelectionAction::Navigate(1))
+        );
+        // Up at index 3 → Navigate(2).
+        assert_eq!(
+            classify_host_selection(true, XKB_KEY_UP, 5, 3, HostSelectionFlags::NAVIGATE),
+            Some(HostSelectionAction::Navigate(2))
+        );
+        // Up at index 0 clamps to 0.
+        assert_eq!(
+            classify_host_selection(true, XKB_KEY_UP, 5, 0, HostSelectionFlags::NAVIGATE),
+            Some(HostSelectionAction::Navigate(0))
+        );
+    }
+
+    #[test]
+    fn classify_release_under_host_managed_is_swallowed() {
+        // Press Down → Navigate. Release Down (state=0) under the same
+        // flag → Swallow, so the engine doesn't see an unpaired release.
+        assert_eq!(
+            classify_host_selection(false, XKB_KEY_DOWN, 5, 0, HostSelectionFlags::NAVIGATE),
+            Some(HostSelectionAction::Swallow)
+        );
+    }
+
+    #[test]
+    fn classify_commit_index_press_resolves_target() {
+        // '3' key with INDEX_PICK + 5 candidates → Commit(2).
+        assert_eq!(
+            classify_host_selection(true, XKB_KEY_3, 5, 0, HostSelectionFlags::INDEX_PICK),
+            Some(HostSelectionAction::Commit(2))
+        );
+        // Space with COMMIT flag → Commit(currently selected).
+        assert_eq!(
+            classify_host_selection(true, XKB_KEY_SPACE, 5, 2, HostSelectionFlags::COMMIT),
+            Some(HostSelectionAction::Commit(2))
+        );
+    }
+
+    #[test]
+    fn classify_commit_raw_falls_through_to_engine() {
+        // Enter with COMMIT_RAW → engine must handle the raw preedit
+        // commit (the host doesn't know how). classify returns None so
+        // try_host_selection falls back to process_key.
+        assert_eq!(
+            classify_host_selection(true, XKB_KEY_RETURN, 5, 0, HostSelectionFlags::COMMIT_RAW),
+            None
+        );
+    }
+
+    #[test]
+    fn classify_index_pick_out_of_range_falls_through() {
+        // '5' key with INDEX_PICK + only 3 candidates → no resolution,
+        // fall through to engine.
+        assert_eq!(
+            classify_host_selection(true, XKB_KEY_5, 3, 0, HostSelectionFlags::INDEX_PICK),
+            None
+        );
+    }
+
+    #[test]
+    fn classify_flag_not_declined_for_category() {
+        // Down arrow with COMMIT flag (not NAVIGATE) → host did not
+        // declare navigation, fall through.
+        assert_eq!(
+            classify_host_selection(true, XKB_KEY_DOWN, 5, 0, HostSelectionFlags::COMMIT),
+            None
+        );
+        // Space with NAVIGATE flag (not COMMIT) → fall through.
+        assert_eq!(
+            classify_host_selection(true, XKB_KEY_SPACE, 5, 0, HostSelectionFlags::NAVIGATE),
+            None
+        );
     }
 }

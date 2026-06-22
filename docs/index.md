@@ -19,6 +19,7 @@ The Linux/Wayland host for the [Typio](../typio) input method framework. This re
   - [Input-Method Session](explanation/input-method-session.md) — Disambiguates the three layers of "session"
   - [Focus Controller](explanation/focus-controller.md) — Derived-state, idempotent-diff lifecycle model
   - [Panel Architecture](explanation/panel-architecture.md)
+  - [Candidate Panel Behavior](explanation/candidate-panel-behavior.md) — UI-level lifecycle: show/hide, anchor, retry, input → visible effect
   - [Frontend Graphics](explanation/frontend-graphics.md)
   - [Vulkan and Flux Rendering](explanation/vulkan-flux-rendering.md)
   - [Input-Method Session](explanation/input-method-session.md) — three layers of session, build-up chain, and lifecycle rules

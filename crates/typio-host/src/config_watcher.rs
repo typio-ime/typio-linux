@@ -22,10 +22,10 @@
 //! - one timerfd used as a one-shot debounce timer
 //!
 //! Both file descriptors are exposed via [`ConfigWatcher::inotify_fd`]
-//! and [`ConfigWatcher::timer_fd`] for integration with any external
-//! event loop (calloop, epoll, poll(2), etc.). The watcher itself does
-//! no I/O threads or background work — it is driven entirely by the
-//! caller invoking `drain_*` methods when the corresponding fd fires.
+//! and [`ConfigWatcher::timer_fd`] for integration with the host's
+//! `poll(2)`-based event loop. The watcher itself does no I/O threads
+//! or background work — it is driven entirely by the caller invoking
+//! `drain_*` methods when the corresponding fd fires.
 //!
 //! ## State machine
 //!

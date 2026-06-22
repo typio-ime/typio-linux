@@ -240,7 +240,12 @@ fn watchdog_thread(inner: Arc<WatchdogInner>) {
             let now = inner.now_ms();
             let stuck_ms = now.saturating_sub(heartbeat_ms);
             if stuck_ms >= stage_enum.stuck_threshold_ms() {
-                eprintln!("Watchdog: loop stuck for {stuck_ms} ms in stage={stage_enum:?}");
+                tracing::warn!(
+                    target: "typio.watchdog",
+                    stuck_ms,
+                    stage = ?stage_enum,
+                    "loop stuck"
+                );
                 if inner.lethal.load(Ordering::SeqCst) {
                     unsafe {
                         libc::kill(libc::getpid(), libc::SIGKILL);
