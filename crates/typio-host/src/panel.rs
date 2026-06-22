@@ -569,6 +569,31 @@ impl FluxPanel {
             before_present();
             flux_frame_present(frame);
             heartbeat();
+            self.log_text_stats();
+        }
+    }
+
+    /// Emit glyph-cache + atlas stats to stderr. Throttled to once every
+    /// 120 candidate frames, or immediately when `atlas_clears` rises
+    /// (the signal that the atlas saturated and the next frame must
+    /// re-rasterise every visible glyph).
+    fn log_text_stats(&self) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static FRAME: AtomicU64 = AtomicU64::new(0);
+        static LAST_CLEARS: AtomicU64 = AtomicU64::new(0);
+        let n = FRAME.fetch_add(1, Ordering::Relaxed);
+        let mut stats: flux_sys::flux_text_stats = unsafe { std::mem::zeroed() };
+        unsafe { flux_sys::flux_text_get_stats(self.text, &mut stats); }
+        let clears = stats.atlas_clears;
+        let last = LAST_CLEARS.load(Ordering::Relaxed);
+        if clears != last || n % 120 == 0 {
+            LAST_CLEARS.store(clears, Ordering::Relaxed);
+            eprintln!(
+                "flux-text: glyphs={}/{} (cap {}) hits={} misses={} evictions={} invalidations={} grows={} atlas_clears={}",
+                stats.glyph_count, stats.glyph_max_cap, stats.glyph_cap,
+                stats.glyph_hits, stats.glyph_misses, stats.glyph_evictions,
+                stats.glyph_invalidations, stats.glyph_grows, stats.atlas_clears
+            );
         }
     }
 
@@ -833,7 +858,6 @@ impl FluxPanel {
         };
 
         let bytes = label.as_bytes();
-        let t = std::time::Instant::now();
         let metrics = unsafe {
             flux_sys::flux_text_measure(
                 self.text,
@@ -842,26 +866,16 @@ impl FluxPanel {
                 &style,
             )
         };
-        eprintln!("ensure_banner_size: text_measure took {:.3} ms (width={:.1}, height={:.1})",
-                  t.elapsed().as_secs_f64() * 1000.0, metrics.width, metrics.height);
-
         let desired_width = (BANNER_PADDING * 2.0 + metrics.width).max(10.0).ceil() as u32;
         let desired_height = (BANNER_ROW_HEIGHT).ceil() as u32;
 
         let phys_width = (desired_width as f32 * self.scale).ceil() as u32;
         let phys_height = (desired_height as f32 * self.scale).ceil() as u32;
 
-        eprintln!("ensure_banner_size: scale={} desired={}x{} phys={}x{} current_alloc={}x{}",
-                  self.scale, desired_width, desired_height, phys_width, phys_height,
-                  self.width, self.height);
-
         let content_w_logical = desired_width as i32;
         let content_h_logical = desired_height as i32;
 
-        let t = std::time::Instant::now();
         self.apply_grow_only_size(phys_width, phys_height, content_w_logical, content_h_logical);
-        eprintln!("ensure_banner_size: apply_grow_only_size took {:.3} ms (final_alloc={}x{})",
-                  t.elapsed().as_secs_f64() * 1000.0, self.width, self.height);
     }
 }
 

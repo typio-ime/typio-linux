@@ -100,13 +100,6 @@ extern "C" fn on_composition(
 
     let selected = comp.selected.max(0) as usize;
 
-    eprintln!(
-        "engine: composition callback (preedit={:?}, {} candidate(s), selected={})",
-        preedit,
-        candidates.len(),
-        selected
-    );
-
     if let Ok(mut slot) = PENDING_COMPOSITION.lock() {
         *slot = Some((preedit, candidates, selected));
     }
@@ -392,10 +385,6 @@ impl KeyboardRouter {
                 return false;
             }
             let consumed = self.process_key_engine(key, xkb_mods_depressed, false);
-            eprintln!(
-                "router: keysym=0x{:x} unicode={:?} release consumed={}",
-                key.keysym, key.unicode, consumed
-            );
             return consumed;
         }
 
@@ -405,10 +394,6 @@ impl KeyboardRouter {
             self.engine_tracked_mods = Modifiers(self.engine_tracked_mods.0 | bit.0);
         }
         let consumed = self.process_key_engine(key, xkb_mods_depressed, false);
-        eprintln!(
-            "router: keysym=0x{:x} unicode={:?} consumed={}",
-            key.keysym, key.unicode, consumed
-        );
         consumed
     }
 
@@ -452,7 +437,17 @@ impl KeyboardRouter {
             base_keysym: key.keysym,
         };
 
-        typio::input_context::typio_input_context_process_key(self.ctx, &event)
+        let started = std::time::Instant::now();
+        let consumed =
+            typio::input_context::typio_input_context_process_key(self.ctx, &event);
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        if elapsed_ms > 5.0 {
+            eprintln!(
+                "engine: process_key took {elapsed_ms:.1} ms (keysym=0x{:x}, repeat={is_repeat})",
+                key.keysym
+            );
+        }
+        consumed
     }
 
     /// Drain any pending commit text and forward it to the compositor.

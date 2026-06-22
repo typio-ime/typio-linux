@@ -556,6 +556,14 @@ impl InputMethodFrontend {
         // candidate-page width change — the watchdog-killing stall.
         // Compositors without viewporter fall back to exact-size resize.
         let viewporter: Option<WpViewporter> = globals.bind(&qh, 1..=1, ()).ok();
+        match &viewporter {
+            Some(_) => eprintln!(
+                "OK:   compositor advertises wp_viewporter (grow-only swapchain active)"
+            ),
+            None => eprintln!(
+                "WARN: compositor lacks wp_viewporter — candidate-page width changes rebuild the swapchain (watchdog-killing stall); see ADR-0013"
+            ),
+        }
 
         // Create a wl_surface for the panel popup.
         let popup_surface_obj = compositor.create_surface(&qh, ());
