@@ -548,6 +548,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Preedit caret always rendered at the right edge.** libtypio already
+  publishes the caret byte offset in `TypioComposition.cursor_pos`, but
+  the host's `on_composition` callback dropped it on the floor and
+  `drain_composition` hardcoded `cursor = preedit.len()` when calling
+  `set_preedit_string`. As a result left/right navigation inside a
+  composition (e.g. rime's edit mode) never moved the visible caret.
+  `PENDING_COMPOSITION` now carries the raw `cursor_pos` from the ABI,
+  and `drain_composition` resolves it through the same
+  `preedit::resolve_cursor` rule used by `build_plain_preedit`
+  (non-negative preserves the value, negative falls back to end-of-text)
+  so the compositor finally sees the engine's intended caret position.
+  The `typio.engine.composition` trace now also records `cursor_pos`
+  for future investigations.
+
 - **Candidate panel froze and the daemon was SIGKILLed by the
   watchdog after prolonged rime paging — four root causes, all
   fixed.** The diagnostic trace evolved across four iterations:

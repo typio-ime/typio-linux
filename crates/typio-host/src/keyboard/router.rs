@@ -26,12 +26,15 @@ static PENDING_COMMIT: Mutex<Option<String>> = Mutex::new(None);
 
 /// Pending composition state since the last key dispatch.
 ///
-/// `(preedit_text, candidates, selected_index)`. The preedit is tracked
-/// separately from candidates because an engine often emits a preedit
-/// before it has any candidates (e.g. pinyin after the first keystroke);
-/// treating candidates as the source of preedit would hide that
-/// intermediate state from the user.
-static PENDING_COMPOSITION: Mutex<Option<(String, Vec<String>, usize)>> = Mutex::new(None);
+/// `(preedit_text, cursor_pos, candidates, selected_index)`. The preedit
+/// is tracked separately from candidates because an engine often emits a
+/// preedit before it has any candidates (e.g. pinyin after the first
+/// keystroke); treating candidates as the source of preedit would hide
+/// that intermediate state from the user. `cursor_pos` is the engine's
+/// requested byte offset into `preedit_text` (negative means "place at
+/// the end"); see [`crate::preedit::resolve_cursor`].
+static PENDING_COMPOSITION: Mutex<Option<(String, i32, Vec<String>, usize)>> =
+    Mutex::new(None);
 
 extern "C" fn on_commit_abi(
     ctx: *mut typio_abi::TypioInputContext,
@@ -99,9 +102,10 @@ extern "C" fn on_composition(
     }
 
     let selected = comp.selected.max(0) as usize;
+    let cursor_pos = comp.cursor_pos;
 
     if let Ok(mut slot) = PENDING_COMPOSITION.lock() {
-        *slot = Some((preedit, candidates, selected));
+        *slot = Some((preedit, cursor_pos, candidates, selected));
     }
 }
 
@@ -244,7 +248,7 @@ impl KeyboardRouter {
     /// Drain any pending composition update and update preedit/candidates.
     pub fn drain_composition(&self, frontend: &mut InputMethodState) {
         if let Ok(mut slot) = PENDING_COMPOSITION.lock() {
-            if let Some((preedit, candidates, selected)) = slot.take() {
+            if let Some((preedit, cursor_pos, candidates, selected)) = slot.take() {
                 let preedit_len = preedit.len();
                 let candidate_count = candidates.len();
                 // Preedit is the source of truth for what shows inline in
@@ -257,7 +261,12 @@ impl KeyboardRouter {
                 if preedit.is_empty() && candidates.is_empty() {
                     frontend.clear_preedit_and_flush();
                 } else {
-                    let cursor = preedit.len() as u32;
+                    // Resolve the engine's cursor_pos (non-negative wins,
+                    // negative falls back to end) so left/right navigation
+                    // inside the preedit actually moves the visible caret
+                    // instead of always parking at the right edge.
+                    let cursor =
+                        crate::preedit::resolve_cursor(cursor_pos, preedit_len) as u32;
                     frontend.set_preedit_and_flush(&preedit, cursor);
                 }
                 let composition_seq = frontend.set_candidates(candidates, selected);
@@ -266,6 +275,7 @@ impl KeyboardRouter {
                     target: "typio.engine.composition",
                     composition_seq,
                     preedit_len,
+                    cursor_pos,
                     candidate_count,
                     selected,
                     "composition update"
