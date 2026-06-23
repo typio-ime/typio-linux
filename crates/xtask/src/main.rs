@@ -89,8 +89,14 @@ fn plan_install(prefix: &Path) -> Result<InstallPlan> {
     // Systemd service file is rendered separately in install().
     dirs.push(systemd_user_dir.clone());
 
-    // Icons.
-    let icons_src = project_root.join("data/icons/hicolor");
+    // Icons. Source is the icon-theme *root* (`data/icons/`), so the walk
+    // yields `hicolor/scalable/apps/foo.svg` as the relative path. That lands
+    // the files at `<prefix>/share/icons/hicolor/scalable/apps/foo.svg` — the
+    // layout the freedesktop icon-theme spec requires for Gtk/Qt to resolve
+    // the "hicolor" default theme. The earlier code stripped `hicolor` by
+    // starting the walk inside it, which left the icons at
+    // `<prefix>/share/icons/scalable/apps/` and broke runtime lookup.
+    let icons_src = project_root.join("data/icons");
     if icons_src.is_dir() {
         for entry in WalkDir::new(&icons_src).min_depth(1) {
             let entry = entry?;

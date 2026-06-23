@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`xtask install` now places icons under the `hicolor` theme level.**
+  The walk previously started inside `data/icons/hicolor/`, so the
+  relative path lost the `hicolor` segment and icons landed at
+  `<prefix>/share/icons/scalable/apps/typio-*.svg`. That path is not on
+  the freedesktop icon-theme search path, so Gtk/Qt tray lookups
+  silently failed at runtime. The walk now starts at `data/icons/` so
+  `hicolor/scalable/apps/…svg` is preserved end-to-end and the install
+  lands at `<prefix>/share/icons/hicolor/scalable/apps/…svg`.
+
 - **`flux-sys`, `flux-text-sys`, `libtypio`, and `typio-abi` are now git
   dependencies instead of sibling-checkout path dependencies.** The previous
   `path = "../../flux/crates/flux-sys"` and `path = "../libtypio"` assumed a
