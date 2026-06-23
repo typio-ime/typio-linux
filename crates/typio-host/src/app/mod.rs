@@ -305,8 +305,8 @@ impl App {
         // The trampoline's sender lives in `signals::MODE_CALLBACK_TX` so
         // the callback (which fires on the engine-comm thread for
         // out-of-process engines like rime) can safely reach the main
-        // loop. Without this, only Ctrl+Shift engine switches trigger
-        // the indicator — rime's own mode/schema switches are silent.
+        // loop. Without this, only Ctrl+Shift language/engine switches
+        // trigger the indicator — rime's own mode/schema switches are silent.
         signals::set_mode_callback_tx(self.event_tx.clone());
         {
             let raw = self.instance.as_ref().unwrap().as_ref() as *const TypioInstance as *mut TypioInstance;
@@ -601,7 +601,7 @@ impl App {
             eprintln!("indicator: StateRefresh received, refreshing state surfaces");
             self.refresh_state_surfaces();
             // StateRefresh covers every deliberate registry mutation:
-            // Ctrl+Shift engine-switch chord, tray menu picks, and
+            // the Ctrl+Shift language-switch chord, tray menu picks, and
             // IPC-driven switches (`typioctl language use …`). All are
             // user-initiated, so they go through the indicator's
             // no-gate deliberate-change path.

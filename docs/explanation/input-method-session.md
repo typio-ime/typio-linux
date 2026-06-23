@@ -286,10 +286,11 @@ Spot.
 
 ### Engine switch mid-session
 
-`Ctrl+Shift` switches engines internally. This is **not** a protocol event,
-so it does not start a new protocol session. The old engine's preedit is
-cleared, the Panel is hidden, and the new engine receives `focus_in` on the
-same `TypioInputContext`. The grab resource stays `READY` throughout.
+`Ctrl+Shift` switches the active language (ADR-0031), retargeting the
+keyboard engine. This is **not** a protocol event, so it does not start a
+new protocol session. The old engine's preedit is cleared, the Panel is
+hidden, and the new engine receives `focus_in` on the same
+`TypioInputContext`. The grab resource stays `READY` throughout.
 
 ## Shortcut Policy
 
@@ -307,7 +308,7 @@ decision:
   recent logs, release the grab, stop the frontend — it forwards no key
 - engines do not each implement shortcut bypass; `Ctrl+Shift`-style
   modifier-only shortcuts stay transparent to the app/compositor
-- on `Ctrl+Shift` engine switch completion, the arbiter clears the old engine's
+- on `Ctrl+Shift` language-switch completion, the arbiter clears the old engine's
   composition, the compositor-facing preedit, and the candidate panel before
   activating the new engine
 

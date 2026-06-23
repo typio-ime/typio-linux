@@ -205,6 +205,27 @@ pub(super) fn cycle_active_keyboard(instance: *mut TypioInstance) {
     let _ = set_active_keyboard(instance, next);
 }
 
+/// Cycle to the next enabled language, called when the user presses the
+/// Ctrl+Shift switch chord. The language cycle reuses the engine last used
+/// for the target language (libtypio's per-language memory). When fewer than
+/// two languages are enabled/declared there is nothing to cycle, so this
+/// falls back to [`cycle_active_keyboard`] — keeping the chord useful in
+/// single-language, multi-engine setups.
+pub(super) fn cycle_active_language(instance: *mut TypioInstance) {
+    let Some(reg) = registry_ptr(instance) else {
+        return;
+    };
+    match c_registry::typio_registry_next_language(reg) {
+        TypioResult::TypioOk => {
+            eprintln!("tray: active language cycled");
+        }
+        _ => {
+            // No cycleable language (none or single): cycle engines instead.
+            cycle_active_keyboard(instance);
+        }
+    }
+}
+
 pub(super) fn set_active_voice(instance: *mut TypioInstance, name: &str) -> Result<(), SvcError> {
     let reg = registry_ptr(instance).ok_or(SvcError)?;
     let name_c = CString::new(name).map_err(|_| SvcError)?;

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The Ctrl+Shift switch chord now cycles languages, not engines.**
+  Pressing the chord advances to the next enabled language and reuses the
+  keyboard engine you last used for it (tracked by libtypio's new
+  per-language memory). When fewer than two languages are enabled/declared
+  the chord falls back to cycling keyboard engines, so single-language
+  multi-engine setups keep working. The indicator and tray-icon badge now
+  reflect the active keyboard's language after any engine switch.
+
 ## [0.4.1] - 2026-06-23
 
 ### Fixed
