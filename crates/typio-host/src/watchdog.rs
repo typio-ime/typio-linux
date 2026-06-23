@@ -19,11 +19,13 @@ const SAMPLE_MS: u64 = 1000;
 const STUCK_MS: u64 = 3000;
 /// Stuck threshold for `LoopStage::Present` (ms). `vkQueuePresentKHR` on
 /// Wayland can transiently block well past the default 3 s threshold when
-/// the compositor falls behind releasing swapchain images during rapid
-/// candidate paging, even under MAILBOX. A single blocking FFI call
-/// cannot heartbeat, so the default threshold kills a recovering panel
-/// rather than a deadlocked one. 15 s tolerates observed transient
-/// stalls while still catching a genuine present deadlock eventually.
+/// the compositor falls behind releasing swapchain images, even under
+/// MAILBOX. A single blocking FFI call cannot heartbeat, so the default
+/// threshold kills a recovering panel rather than a deadlocked one. The
+/// panel's `wl_surface.frame` throttle (see `panel_present_blocked`)
+/// keeps the present rate at the compositor refresh rate so this block
+/// should not occur in steady state; 15 s tolerates a residual transient
+/// stall while still catching a genuine present deadlock eventually.
 const PRESENT_STUCK_MS: u64 = 15_000;
 
 /// Loop stage identifiers. The discriminants mirror `TypioWlLoopStage` in
@@ -46,11 +48,14 @@ pub enum LoopStage {
 }
 
 impl LoopStage {
-    /// Stages where blocking indefinitely is legitimate. With the
-    /// async present thread in flux, `vkQueuePresentKHR` never blocks
-    /// the main loop, so `Present` is not restful — if the main loop
-    /// stalls in Present it means the enqueue itself hung, which is a
-    /// genuine bug worth killing the process for.
+    /// Stages where blocking indefinitely is legitimate. flux presents
+    /// synchronously on the main thread (`flux_frame_present` →
+    /// `vkQueuePresentKHR`); the panel's `wl_surface.frame` throttle
+    /// keeps that call non-blocking by never out-pacing the compositor,
+    /// but a stall in `Present` is still a genuine bug — the main loop
+    /// cannot heartbeat through a single blocking FFI call — so
+    /// `Present` is not restful and is killed once the per-stage
+    /// threshold elapses.
     fn is_restful(&self) -> bool {
         matches!(self, LoopStage::Poll | LoopStage::Idle)
     }
@@ -322,9 +327,10 @@ mod tests {
 
     #[test]
     fn present_stage_is_not_restful() {
-        // Present runs on the async present thread; on the main loop
-        // it is just a fast enqueue. If the main loop stalls in
-        // Present, something is genuinely wrong.
+        // flux_frame_present runs synchronously on the main loop and calls
+        // vkQueuePresentKHR directly. A stall here is a genuine hang (the
+        // panel's wl_surface.frame throttle should prevent it in steady
+        // state), so Present must stay non-restful.
         assert!(!LoopStage::Present.is_restful());
         assert!(LoopStage::Poll.is_restful());
     }

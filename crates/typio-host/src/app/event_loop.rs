@@ -20,7 +20,7 @@ use crate::panel_scheduler::{self, PanelUpdateResult};
 use crate::session_glue::FocusTransition;
 use crate::watchdog::LoopStage;
 
-use super::{arm_repeat, tray::cycle_active_keyboard, App, DaemonEvent};
+use super::{arm_repeat, tray::cycle_active_language, App, DaemonEvent};
 
 impl App {
     /// The Wayland main loop. Returns the daemon exit code.
@@ -256,8 +256,9 @@ impl App {
                         }
                         if router.take_switch_chord_fired() {
                             // Ctrl+Shift (default) just completed. Cycle
-                            // to the next registered keyboard and let the
-                            // next drain refresh surfaces. Suppresses
+                            // to the next language (reusing the engine last
+                            // used for it); with <2 languages the cycle
+                            // falls back to engine cycling. Suppresses
                             // forwarding of the modifier press itself.
                             eprintln!("indicator: Ctrl+Shift chord fired");
                             let instance_ptr = self
@@ -265,7 +266,7 @@ impl App {
                                 .as_mut()
                                 .map(|i| i.as_mut() as *mut TypioInstance)
                                 .unwrap_or(std::ptr::null_mut());
-                            cycle_active_keyboard(instance_ptr);
+                            cycle_active_language(instance_ptr);
                             let _ = self.event_tx.send(DaemonEvent::StateRefresh);
                         } else if consumed {
                             // Engine consumed the key. Drain any output it
@@ -384,6 +385,24 @@ impl App {
                     let candidates = frontend.state().composition.candidates.clone();
                     let scale = frontend.state().buffer_scale;
                     let owner = frontend.state().panel_coord().visible_owner();
+
+                    // Frame throttle. flux presents synchronously on this
+                    // thread (the async present thread was dropped from flux
+                    // because Mesa's Wayland WSI dispatches wl_display
+                    // events inside vkQueuePresentKHR and races the loop).
+                    // Under compositor back-pressure — the norm during rapid
+                    // candidate paging — a synchronous present blocks until
+                    // the compositor releases a swapchain image, which can
+                    // exceed the watchdog's Present threshold and SIGKILL
+                    // the daemon. Arming wl_surface.frame after each present
+                    // and skipping the next present until the compositor
+                    // acks keeps the present rate at the compositor refresh
+                    // rate, so the swapchain never exhausts free images and
+                    // present never blocks. Hides are never throttled — they
+                    // detach the buffer and cannot block.
+                    let throttled = !candidates.is_empty()
+                        && frontend.state_mut().panel_present_blocked();
+
                     // Manage surface ownership before the mutable panel
                     // borrow. Candidates claim the surface when shown
                     // (superseding a visible indicator, so its auto-hide
@@ -399,10 +418,16 @@ impl App {
                             coord.claim(UiOwner::Candidate);
                         }
                     }
-                    let result = if let Some(panel) = frontend.panel_mut() {
+                    let (result, presented) = if throttled {
+                        tracing::trace!(
+                            target: "typio.panel.host",
+                            "panel: skip present reason=frame_throttled"
+                        );
+                        (PanelUpdateResult::Done, false)
+                    } else if let Some(panel) = frontend.panel_mut() {
                         panel.set_scale(scale);
                         heartbeat();
-                        if candidates.is_empty() {
+                        let presented = if candidates.is_empty() {
                             if owner == UiOwner::Indicator || owner == UiOwner::Voice {
                                 // Surface is loaned to the indicator/voice
                                 // overlay; the candidate path does not own it
@@ -421,6 +446,7 @@ impl App {
                                 );
                                 panel.hide();
                             }
+                            false
                         } else {
                             panel.ensure_candidate_size(&candidates);
                             heartbeat();
@@ -431,13 +457,25 @@ impl App {
                                 &heartbeat,
                                 &enter_present,
                             );
-                        }
-                        PanelUpdateResult::Done
+                            true
+                        };
+                        (PanelUpdateResult::Done, presented)
                     } else {
-                        PanelUpdateResult::Done
+                        (PanelUpdateResult::Done, false)
                     };
-                    frontend.state_mut().panel_schedule_state =
-                        panel_scheduler::complete(result);
+                    if throttled {
+                        // Leave the schedule dirty so the tick that wakes
+                        // on the frame callback (or the fallback timeout)
+                        // re-attempts the present with the latest coalesced
+                        // candidates. Do not call complete(): that would
+                        // move to Idle and drop the pending frame.
+                    } else {
+                        frontend.state_mut().panel_schedule_state =
+                            panel_scheduler::complete(result);
+                        if presented {
+                            frontend.arm_panel_frame_callback();
+                        }
+                    }
                 }
             }
 

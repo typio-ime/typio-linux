@@ -17,6 +17,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   multi-engine setups keep working. The indicator and tray-icon badge now
   reflect the active keyboard's language after any engine switch.
 
+### Fixed
+
+- **Candidate panel froze and was SIGKILLed by the watchdog during rapid
+  candidate paging.** flux reverted its async present thread (Mesa's
+  Wayland WSI dispatches `wl_display` events inside `vkQueuePresentKHR`
+  and raced the loop), restoring synchronous present on the main thread.
+  That left the daemon presenting once per composition callback during
+  paging; once the compositor fell behind releasing swapchain images a
+  single `vkQueuePresentKHR` blocked the main loop past the watchdog's
+  15 s `Present` threshold and the process was killed. The panel now
+  arms a `wl_surface.frame` callback after each present and skips the
+  next present until the compositor acks, keeping the present rate at
+  the compositor refresh rate so the swapchain never exhausts free
+  images and present never blocks. Candidate updates during the wait
+  coalesce into the next frame. A 120 ms fallback clears the throttle
+  if a compositor drops the callback (off-screen popup).
+
+- **CJK Extension-B (and other rare-coverage) ideographs rendered as
+  tofu.** flux-text's per-slot font chain capped at the top-8
+  `FcFontSort` family results, which excluded the fonts covering rare
+  scripts — on a typical system the only CJK Extension-B fonts rank
+  beyond the top-8 sans-serif sort. Fixed in flux 0.2.1: uncovered
+  codepoints now trigger a charset-targeted `FcFontSort` that lazily
+  loads a covering font as a patch face. Delivered by upgrading the
+  flux runtime library; no host code change.
+
 ## [0.4.1] - 2026-06-23
 
 ### Fixed
