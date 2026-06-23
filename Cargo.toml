@@ -35,14 +35,17 @@ libc = "0.2"
 zbus = { version = "5", default-features = true, features = ["blocking-api"] }
 xkbcommon = "0.9"
 ab_glyph = "0.2"
-flux-sys = { path = "../../flux/crates/flux-sys" }
+flux-sys = { git = "https://github.com/ming2k/flux-rs.git", tag = "v0.1.0" }
+flux-text-sys = { git = "https://github.com/ming2k/flux-rs.git", tag = "v0.1.0" }
 wayland-sys = "0.31"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
-# The framework library — sibling checkout at ../libtypio.
-libtypio = { path = "../libtypio" }
-typio-abi = { path = "../libtypio/crates/abi" }
+# The framework library and its ABI headers — published as a sibling repo on
+# GitHub so a fresh `cargo build` from this repo alone resolves everything
+# without checkout-layout assumptions.
+libtypio = { git = "https://github.com/typio-ime/libtypio.git", tag = "v0.5.0" }
+typio-abi = { git = "https://github.com/typio-ime/libtypio.git", tag = "v0.5.0" }
 clap = { version = "4", features = ["derive"] }
 
 [profile.release]

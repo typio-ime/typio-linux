@@ -7,17 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`flux-sys`, `flux-text-sys`, `libtypio`, and `typio-abi` are now git
+  dependencies instead of sibling-checkout path dependencies.** The previous
+  `path = "../../flux/crates/flux-sys"` and `path = "../libtypio"` assumed a
+  specific local directory layout (`/home/.../projects/{flux,typio/libtypio}`)
+  that did not exist outside one developer's checkout — `cargo build` from a
+  fresh clone failed before reaching the first compile. The deps now point at
+  published tags on GitHub:
+  - `flux-sys`, `flux-text-sys` → `ming2k/flux-rs` tag `v0.1.0`
+  - `libtypio`, `typio-abi` → `typio-ime/libtypio` tag `v0.5.0`
+  Cargo.lock pins the exact sha; `cargo publish`/packaging flows now work.
+- **`panel.rs` now imports `flux_text_*` symbols from `flux-text-sys`
+  (the correct crate) instead of `flux-sys`.** The previous
+  `flux_sys::flux_text_measure` / `flux_text_draw` / `flux_text_style` /
+  … references never compiled — they referenced symbols that are not in
+  libflux (they live in the sibling libflux-text, which has its own bindgen
+  crate). Pointer-cast seams added at the three `flux_text_draw` call sites
+  and at `text_desc.device` assignment, matching the ABI-identical-pointer
+  pattern documented in `flux-text-sys/wrapper.h`. `flux_result_is_ok`
+  generalised to `fn <T>(r: T) -> bool` so it accepts either crate's
+  `flux_result` enum.
+
 ### Added
 
 - **Host-managed candidate selection is now wired (ADR-0012, opt-in).**
-  Engines that declare a non-zero `host_managed_selection` flag set in
-  their composition (`TypioHostSelNavigate`, `TypioHostSelCommit`,
-  `TypioHostSelIndexPick`, `TypioHostSelCommitRaw`) now have the
-  corresponding keys intercepted by the host before they reach
-  `process_key`. Navigation keys move the highlight locally with no
-  engine round-trip — the canonical perf win for fast candidate
-  cycling. Commit keys dispatch through the engine's
-  `commit_candidate` vtable entry via
   `typio_input_context_commit_candidate`. The pure decision lives in
   `candidate_guard::classify_host_selection` (unit-tested in isolation)
   and the effectful layer in `KeyboardRouter::try_host_selection`.

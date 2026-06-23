@@ -26,10 +26,12 @@ use flux_sys::{
     flux_canvas_begin, flux_canvas_desc, flux_canvas_destroy, flux_canvas_end,
     flux_canvas_fill_rrect, flux_color_rgba, flux_device, flux_device_create, flux_device_desc,
     flux_device_release, flux_device_vk_instance, flux_error_info, flux_frame, flux_frame_begin_desc,
-    flux_frame_present, flux_frame_submit, flux_get_last_error, flux_result, flux_struct_type,
+    flux_frame_present, flux_frame_submit, flux_get_last_error, flux_struct_type,
     flux_surface, flux_surface_begin_frame, flux_surface_create, flux_surface_desc, flux_surface_release,
-    flux_text, flux_text_create, flux_text_desc, flux_text_destroy, flux_text_draw, flux_text_family,
-    flux_text_metrics, flux_text_style,
+};
+use flux_text_sys::{
+    flux_text, flux_text_create, flux_text_desc, flux_text_destroy, flux_text_draw,
+    flux_text_family, flux_text_metrics, flux_text_style,
 };
 use wayland_sys::{
     client::{wl_proxy, wl_proxy_marshal_array},
@@ -133,9 +135,9 @@ struct TextStatsSnapshot {
 }
 
 unsafe fn text_stats_snapshot(text: *mut flux_text) -> TextStatsSnapshot {
-    let mut stats: flux_sys::flux_text_stats = unsafe { std::mem::zeroed() };
+    let mut stats: flux_text_sys::flux_text_stats = unsafe { std::mem::zeroed() };
     unsafe {
-        flux_sys::flux_text_get_stats(text, &mut stats);
+        flux_text_sys::flux_text_get_stats(text, &mut stats);
     }
     TextStatsSnapshot {
         glyph_count: stats.glyph_count as u64,
@@ -406,7 +408,7 @@ impl FluxPanel {
 
         // 6. Create flux text context.
         let mut text_desc: flux_text_desc = std::mem::zeroed();
-        text_desc.device = device;
+        text_desc.device = device as *mut flux_text_sys::flux_device;
         text_desc.scale = 1.0;
 
         let mut text: *mut flux_text = ptr::null_mut();
@@ -460,7 +462,7 @@ impl FluxPanel {
         self.scale = scale;
         unsafe {
             flux_sys::flux_canvas_set_scale(self.canvas, scale);
-            flux_sys::flux_text_set_scale(self.text, scale);
+            flux_text_sys::flux_text_set_scale(self.text, scale);
         }
     }
 
@@ -624,8 +626,8 @@ impl FluxPanel {
                     draw_duration,
                     flux_text_draw(
                         self.text,
-                        self.canvas,
-                        &mut self.arena,
+                        self.canvas as *mut flux_text_sys::flux_canvas,
+                        &mut self.arena as *mut flux_arena as *mut flux_text_sys::flux_arena,
                         current_x + CANDIDATE_ITEM_X_PADDING,
                         number_top,
                         number_bytes.as_ptr() as *const _,
@@ -637,8 +639,8 @@ impl FluxPanel {
                     draw_duration,
                     flux_text_draw(
                         self.text,
-                        self.canvas,
-                        &mut self.arena,
+                        self.canvas as *mut flux_text_sys::flux_canvas,
+                        &mut self.arena as *mut flux_arena as *mut flux_text_sys::flux_arena,
                         current_x
                             + CANDIDATE_ITEM_X_PADDING
                             + number_metrics.width
@@ -730,9 +732,9 @@ impl FluxPanel {
         static FRAME: AtomicU64 = AtomicU64::new(0);
         static LAST_CLEARS: AtomicU64 = AtomicU64::new(0);
         let n = FRAME.fetch_add(1, Ordering::Relaxed);
-        let mut stats: flux_sys::flux_text_stats = unsafe { std::mem::zeroed() };
+        let mut stats: flux_text_sys::flux_text_stats = unsafe { std::mem::zeroed() };
         unsafe {
-            flux_sys::flux_text_get_stats(self.text, &mut stats);
+            flux_text_sys::flux_text_get_stats(self.text, &mut stats);
         }
         let clears = stats.atlas_clears;
         let last = LAST_CLEARS.load(Ordering::Relaxed);
@@ -796,13 +798,13 @@ impl FluxPanel {
             return self.last_layout.clone();
         }
 
-        let style = flux_sys::flux_text_style {
+        let style = flux_text_sys::flux_text_style {
             size_px: CANDIDATE_FONT_SIZE,
             weight: 400.0,
             color: unsafe { flux_sys::flux_color_rgba(240, 240, 240, 255) },
             family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
         };
-        let number_style = flux_sys::flux_text_style {
+        let number_style = flux_text_sys::flux_text_style {
             size_px: CANDIDATE_NUMBER_FONT_SIZE,
             weight: 400.0,
             color: unsafe { flux_sys::flux_color_rgba(145, 145, 152, 255) },
@@ -815,7 +817,7 @@ impl FluxPanel {
             let number = candidate_number_label(i);
             let number_bytes = number.as_bytes();
             let number_metrics = unsafe {
-                flux_sys::flux_text_measure(
+                flux_text_sys::flux_text_measure(
                     self.text,
                     number_bytes.as_ptr() as *const _,
                     number_bytes.len(),
@@ -824,7 +826,7 @@ impl FluxPanel {
             };
             let bytes = candidate.as_bytes();
             let metrics = unsafe {
-                flux_sys::flux_text_measure(
+                flux_text_sys::flux_text_measure(
                     self.text,
                     bytes.as_ptr() as *const _,
                     bytes.len(),
@@ -1019,7 +1021,7 @@ impl FluxPanel {
             };
 
             let bytes = label.as_bytes();
-            let metrics = flux_sys::flux_text_measure(
+            let metrics = flux_text_sys::flux_text_measure(
                 self.text,
                 bytes.as_ptr() as *const _,
                 bytes.len(),
@@ -1032,8 +1034,8 @@ impl FluxPanel {
 
             flux_text_draw(
                 self.text,
-                self.canvas,
-                &mut self.arena,
+                self.canvas as *mut flux_text_sys::flux_canvas,
+                &mut self.arena as *mut flux_arena as *mut flux_text_sys::flux_arena,
                 text_x,
                 text_y,
                 bytes.as_ptr() as *const _,
@@ -1073,7 +1075,7 @@ impl FluxPanel {
 
         let bytes = label.as_bytes();
         let metrics = unsafe {
-            flux_sys::flux_text_measure(self.text, bytes.as_ptr() as *const _, bytes.len(), &style)
+            flux_text_sys::flux_text_measure(self.text, bytes.as_ptr() as *const _, bytes.len(), &style)
         };
         let desired_width = (BANNER_PADDING * 2.0 + metrics.width).max(10.0).ceil() as u32;
         let desired_height = (BANNER_ROW_HEIGHT).ceil() as u32;
@@ -1202,8 +1204,8 @@ unsafe fn create_wayland_vk_surface(
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-fn flux_result_is_ok(_r: flux_result) -> bool {
-    let v: i32 = unsafe { std::mem::transmute(_r) };
+fn flux_result_is_ok<T>(_r: T) -> bool {
+    let v: i32 = unsafe { std::mem::transmute_copy(&std::mem::ManuallyDrop::new(_r)) };
     v == 0
 }
 
