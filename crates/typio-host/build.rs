@@ -55,12 +55,18 @@ fn main() {
     let enable_voice = env::var("CARGO_FEATURE_VOICE").is_ok();
     let have_flux = enable_wayland;
 
-    // flux-sys publishes the Meson build-tree rpaths it used via `links`
-    // metadata. Re-emit them here so typio-host's bins and test harnesses load
-    // the same libflux that bindgen saw, not a stale system install.
-    if let Ok(rpaths) = env::var("DEP_FLUX_RPATHS") {
-        for dir in rpaths.split(';').filter(|s| !s.is_empty()) {
-            println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
+    // flux-sys / flux-text-sys publish the Meson build-tree rpaths they used
+    // via `links` metadata (DEP_FLUX_RPATHS for libflux.so,
+    // DEP_FLUX_TEXT_RPATHS for libflux_text.so). Re-emit them here so
+    // typio-host's bins and test harnesses load the same libraries bindgen
+    // saw, not a stale system install — libflux_text.so lives in a meson
+    // subdir (libs/flux-text) distinct from libflux.so's build root, so both
+    // sets must be relayed.
+    for var in ["DEP_FLUX_RPATHS", "DEP_FLUX_TEXT_RPATHS"] {
+        if let Ok(rpaths) = env::var(var) {
+            for dir in rpaths.split(';').filter(|s| !s.is_empty()) {
+                println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
+            }
         }
     }
 
@@ -144,6 +150,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=TYPIO_INSTALL_DATADIR");
     println!("cargo:rerun-if-env-changed=TYPIO_ENGINE_DIR");
     println!("cargo:rerun-if-env-changed=DEP_FLUX_RPATHS");
+    println!("cargo:rerun-if-env-changed=DEP_FLUX_TEXT_RPATHS");
 }
 
 fn escape_str(s: &str) -> String {

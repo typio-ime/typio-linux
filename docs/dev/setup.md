@@ -8,38 +8,40 @@ All commands in this document run from the `typio-linux` repository root
 unless a block says otherwise.
 
 ```bash
-cargo build --release --manifest-path ../libtypio/Cargo.toml
-meson setup ../../flux/build ../../flux    # one-time per flux checkout
-meson compile -C ../../flux/build
+# one-time per flux checkout:
+meson setup ../../optics/flux/build ../../optics/flux
+meson compile -C ../../optics/flux/build
 
-export LD_LIBRARY_PATH="$PWD/../libtypio/target/release:$PWD/../../flux/build:${LD_LIBRARY_PATH}"
+# point flux-sys at the freshly built libflux (every shell that runs
+# cargo build/test/run, or drop the two exports into ~/.bashrc / a local
+# .envrc — the repo ships no committed copy):
+export FLUX_BUILD_DIR="$PWD/../../optics/flux/build"
+export FLUX_SOURCE_DIR="$PWD/../../optics/flux"
+
 cargo build -p typio-host
 cargo test -p typio-host
-```
-
-Run the daemon:
-
-```bash
 ./target/debug/typio --verbose
 ```
 
+`typio-linux` links `libflux` straight out of the `optics/flux` Meson build
+tree — there is no need to install flux system-wide, and no `LD_LIBRARY_PATH`
+is required (flux-sys bakes an `-Wl,-rpath` to the build tree). `libtypio`
+and the `flux-sys` / `flux-text-sys` bindings resolve as git crates, so a
+build needs no sibling Rust checkouts either.
+
 The shipping daemon is the Rust `typio` binary from `crates/typio-host`.
-The old Meson host build is no longer the contributor path. `flux` is still
-a native C library, so the setup keeps one Meson build tree for the sibling
-`flux` checkout until that library has a Cargo-native build.
 
 ## Prerequisites
 
 Install these from your system package manager:
 
 - Rust 1.85+ and Cargo
-- Meson 1.0+ and Ninja 1.10+ for the sibling `flux` library
+- Meson 1.0+, Ninja 1.10+, and `glslangValidator` to build `flux` from source
 - C23 compiler and `pkg-config`
 - Wayland client libraries and `xkbcommon`
 - Vulkan headers and loader
 - FreeType, HarfBuzz, fontconfig
 - PipeWire development headers for the `voice` feature
-- `glslangValidator` for the `flux` build
 
 Versions are not capped; the project is tested against current Arch Linux
 and Fedora releases.
@@ -47,62 +49,72 @@ and Fedora releases.
 ## Repository Layout
 
 `typio-linux` lives under a `typio/` umbrella alongside the framework
-library, engine packages, and tools. `flux` is a sibling of `typio/`
-because the canvas library is shared with non-Typio projects:
+library, engine packages, and tools. The GPU/media libraries live under a
+separate `optics/` umbrella because the canvas stack is shared with
+non-Typio projects:
 
 ```text
 projects/
 ├── typio/
-│   ├── libtypio/          # cargo --manifest-path ../libtypio/Cargo.toml
-│   ├── typio-engine-compose/    # Cargo: Latin + compose-key keyboard
-│   ├── typio-engine-rime/       # Meson: RIME-based Chinese keyboard
-│   ├── typio-engine-mozc/       # Meson: Mozc-based Japanese keyboard
-│   └── typio-linux/       # run typio-linux commands here
-└── flux/                  # meson setup ../../flux/build ../../flux
+│   ├── libtypio/                 # published as git crate v0.5.0; local checkout optional
+│   ├── typio-engine-compose/     # Cargo: Latin + compose-key keyboard
+│   ├── typio-engine-rime/        # Meson: RIME-based Chinese keyboard
+│   ├── typio-engine-mozc/        # Meson: Mozc-based Japanese keyboard
+│   └── typio-linux/              # run typio-linux commands here
+└── optics/
+    ├── flux/                     # C canvas library; build in-tree and point FLUX_BUILD_DIR at it
+    ├── flux-rs/                  # Rust bindings; published as git crate v0.1.0
+    ├── iris/, lens/, …           # other optics components, not consumed by typio-linux
 ```
 
-`typio-linux` has path dependencies on `../libtypio` and
-`../../flux/crates/flux-sys`, so those checkouts must exist for Cargo
-builds.
+`typio-linux` resolves `libtypio` and `flux-sys` / `flux-text-sys` as git
+crates (see the `[workspace.dependencies]` table in the root `Cargo.toml`),
+so no sibling checkout is required for a build. The only external native
+dependency is `libflux`, which `flux-sys`'s build script locates through
+pkg-config at build time.
 
-## Build Dependencies
+## flux (C library)
 
-Build `libtypio` first:
+`flux-sys` does not vendor the C source; its build script locates `libflux`
+through pkg-config. The contributor workflow builds flux in its own tree and
+points the build script at it, so no system install is needed.
+
+**In-tree build (default).** Build flux once, then point `flux-sys` at the
+build tree. `meson setup` is one-time per checkout; `meson compile` rebuilds
+on demand:
 
 ```bash
-cargo build --release --manifest-path ../libtypio/Cargo.toml
+meson setup ../../optics/flux/build ../../optics/flux
+meson compile -C ../../optics/flux/build
+
+export FLUX_BUILD_DIR="$PWD/../../optics/flux/build"
+export FLUX_SOURCE_DIR="$PWD/../../optics/flux"   # optional: bindgen from this checkout
 ```
 
-This produces `libtypio.so` in `../libtypio/target/release`. Keep that
-directory on `LD_LIBRARY_PATH` when running Cargo-built typio binaries and
-tests.
+`flux-sys` prepends the build tree's `meson-uninstalled/` to
+`PKG_CONFIG_PATH` and bakes an `-Wl,-rpath` for it, so binaries find
+`libflux.so` at runtime with no `LD_LIBRARY_PATH` and no `meson install`.
+Keep the two exports set in any shell that runs `cargo build` / `test` /
+the daemon; `FLUX_BUILD_DIR` is what selects the in-tree library. If Cargo
+reports an undefined `flux_*` symbol, rebuild flux (`meson compile -C
+../../optics/flux/build`) and re-run.
 
-Build `flux` next. `meson setup` is one-time per checkout; `meson compile`
-rebuilds on demand:
-
-```bash
-meson setup ../../flux/build ../../flux
-meson compile -C ../../flux/build
-```
-
-`flux-sys` reads `../../flux/build/meson-uninstalled/flux-uninstalled.pc`,
-generates bindings from the in-tree flux headers, and links the host against
-`../../flux/build/libflux.so`. If Cargo reports an undefined `flux_*` symbol,
-rebuild `flux` and make sure `LD_LIBRARY_PATH` includes `../../flux/build`.
+**Installed (optional).** If you prefer a system-wide flux, `meson install`
+into a prefix on `PKG_CONFIG_PATH` and unset `FLUX_BUILD_DIR` (or set
+`FLUX_USE_INSTALLED=1`) so pkg-config resolves the installed `flux.pc`
+instead of the build tree.
 
 ## Build typio-linux
 
 Build the debug daemon:
 
 ```bash
-export LD_LIBRARY_PATH="$PWD/../libtypio/target/release:$PWD/../../flux/build:${LD_LIBRARY_PATH}"
 cargo build -p typio-host --bin typio
 ```
 
 Build the release daemon:
 
 ```bash
-export LD_LIBRARY_PATH="$PWD/../libtypio/target/release:$PWD/../../flux/build:${LD_LIBRARY_PATH}"
 cargo build --release -p typio-host --bin typio
 ```
 
@@ -125,7 +137,6 @@ cargo test -p typio-host --no-default-features
 Run the debug binary:
 
 ```bash
-export LD_LIBRARY_PATH="$PWD/../libtypio/target/release:$PWD/../../flux/build:${LD_LIBRARY_PATH}"
 ./target/debug/typio --verbose
 ```
 
@@ -189,7 +200,6 @@ Then point the daemon at the directory that contains the manifest (note the
 Run the Cargo suite:
 
 ```bash
-export LD_LIBRARY_PATH="$PWD/../libtypio/target/release:$PWD/../../flux/build:${LD_LIBRARY_PATH}"
 cargo test -p typio-host
 ```
 
