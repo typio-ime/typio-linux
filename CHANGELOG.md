@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-06-24
+
+### Added
+
+- **Rounded corners for UI panel.** The candidate panel and status banner now have an 8px border radius and a transparent canvas clear, making the host UI look much more modern.
+
+### Fixed
+
+- **Watchdog SIGKILL from Vulkan swapchain exhaustion.** Typio's 100ms `FRAME_CALLBACK_FALLBACK` repeatedly submitted frames when Wayland compositors legitimately dropped `wl_surface.frame` callbacks (e.g. while occluded or unmapped). This exhausted the `vkQueuePresentKHR` swapchain and deadlocked the main thread. We removed the unsafe fallback entirely to strictly respect Wayland back-pressure.
+- **Lost frame callbacks after panel hide.** Calling `hide()` on a panel detached its Wayland buffer but left the internal `panel_frame_pending` flag armed. We now invoke `clear_panel_frame_callback()` across all hide paths, ensuring subsequent panel shows do not hang waiting for a dropped frame callback.
+
+## [0.5.2] - 2026-06-24
+
 ### Fixed
 
 - **First Ctrl+Shift sometimes didn't switch language after typing.**
