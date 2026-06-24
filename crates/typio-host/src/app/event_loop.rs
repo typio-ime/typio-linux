@@ -423,15 +423,16 @@ impl App {
                             coord.claim(UiOwner::Candidate);
                         }
                     }
-                    let (result, presented) = if throttled {
+                    let (result, presented, hid) = if throttled {
                         tracing::trace!(
                             target: "typio.panel.host",
                             "panel: skip present reason=frame_throttled"
                         );
-                        (PanelUpdateResult::Done, false)
+                        (PanelUpdateResult::Done, false, false)
                     } else if let Some(panel) = frontend.panel_mut() {
                         panel.set_scale(scale);
                         heartbeat();
+                        let mut hid = false;
                         let presented = if candidates.is_empty() {
                             if owner == UiOwner::Indicator || owner == UiOwner::Voice {
                                 // Surface is loaned to the indicator/voice
@@ -450,6 +451,7 @@ impl App {
                                     "panel: hide reason=candidates_empty"
                                 );
                                 panel.hide();
+                                hid = true;
                             }
                             false
                         } else {
@@ -464,9 +466,9 @@ impl App {
                             );
                             true
                         };
-                        (PanelUpdateResult::Done, presented)
+                        (PanelUpdateResult::Done, presented, hid)
                     } else {
-                        (PanelUpdateResult::Done, false)
+                        (PanelUpdateResult::Done, false, false)
                     };
                     if throttled {
                         // Leave the schedule dirty so the tick that wakes
@@ -475,6 +477,9 @@ impl App {
                         // candidates. Do not call complete(): that would
                         // move to Idle and drop the pending frame.
                     } else {
+                        if hid {
+                            frontend.state_mut().clear_panel_frame_callback();
+                        }
                         frontend.state_mut().panel_schedule_state =
                             panel_scheduler::complete(result);
                         if presented {

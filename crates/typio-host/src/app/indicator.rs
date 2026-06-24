@@ -300,8 +300,11 @@ impl App {
         };
         if indicator_owned {
             eprintln!("panel: hide reason=indicator_autohide");
-            if let Some(panel) = self.frontend.as_mut().and_then(|f| f.panel_mut()) {
-                panel.hide();
+            if let Some(frontend) = self.frontend.as_mut() {
+                frontend.state_mut().clear_panel_frame_callback();
+                if let Some(panel) = frontend.panel_mut() {
+                    panel.hide();
+                }
             }
         }
         self.disarm_indicator_timer();

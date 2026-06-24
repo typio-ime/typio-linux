@@ -562,10 +562,30 @@ impl FluxPanel {
                 return;
             }
 
-            let bg = flux_color_rgba(28, 28, 32, 255);
+            let clear_color = flux_color_rgba(0, 0, 0, 0);
             let r = timed!(
                 canvas_begin_duration,
-                flux_canvas_begin(self.canvas, frame, &bg)
+                flux_canvas_begin(self.canvas, frame, &clear_color)
+            );
+            heartbeat();
+            if !flux_result_is_ok(r) {
+                return;
+            }
+
+            let bg = flux_color_rgba(28, 28, 32, 255);
+            timed!(
+                draw_duration,
+                flux_canvas_fill_rrect(
+                    self.canvas,
+                    flux_sys::flux_rect {
+                        x: 0.0,
+                        y: 0.0,
+                        w: self.content_w_logical as f32,
+                        h: self.content_h_logical as f32,
+                    },
+                    8.0,
+                    bg,
+                )
             );
             heartbeat();
             if !flux_result_is_ok(r) {
@@ -1003,8 +1023,25 @@ impl FluxPanel {
                 return;
             }
 
+            let clear_color = flux_color_rgba(0, 0, 0, 0);
+            let r = flux_canvas_begin(self.canvas, frame, &clear_color);
+            heartbeat();
+            if !flux_result_is_ok(r) {
+                return;
+            }
+
             let bg = flux_color_rgba(28, 28, 32, 255);
-            let r = flux_canvas_begin(self.canvas, frame, &bg);
+            flux_canvas_fill_rrect(
+                self.canvas,
+                flux_sys::flux_rect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: self.content_w_logical as f32,
+                    h: self.content_h_logical as f32,
+                },
+                8.0,
+                bg,
+            );
             heartbeat();
             if !flux_result_is_ok(r) {
                 return;

@@ -349,36 +349,14 @@ impl InputMethodState {
     /// Returns `false` (clearing any stale pending state) when no
     /// callback is outstanding or the fallback elapsed.
     pub fn panel_present_blocked(&mut self) -> bool {
-        if !self.panel_frame_pending {
-            return false;
-        }
-        let elapsed = self
-            .panel_frame_requested_at
-            .map(|t| t.elapsed())
-            .unwrap_or(Duration::ZERO);
-        if elapsed >= FRAME_CALLBACK_FALLBACK {
-            self.clear_panel_frame_callback();
-            return false;
-        }
-        true
+        self.panel_frame_pending
     }
 
-    /// Remaining milliseconds until the panel present fallback expires.
-    pub fn panel_present_fallback_remaining_ms(&self, now: Instant) -> Option<i32> {
-        if !self.panel_frame_pending {
-            return None;
-        }
-        let requested_at = self.panel_frame_requested_at?;
-        let deadline = requested_at + FRAME_CALLBACK_FALLBACK;
-        if now >= deadline {
-            Some(0)
-        } else {
-            Some(deadline.saturating_duration_since(now).as_millis() as i32)
-        }
+    pub fn panel_present_fallback_remaining_ms(&self, _now: Instant) -> Option<i32> {
+        None
     }
 
-    /// Drop the outstanding frame callback and pending flag.
-    fn clear_panel_frame_callback(&mut self) {
+    pub fn clear_panel_frame_callback(&mut self) {
         self.panel_frame_pending = false;
         self.panel_frame_requested_at = None;
         // `wl_callback` has no destroy request; dropping the proxy is
@@ -426,10 +404,10 @@ impl InputMethodState {
         self.panel_schedule_state = state;
     }
 
-    /// Clear candidate panel state (focus lost / composition discarded).
     pub fn clear_panel_state(&mut self) {
         self.composition.clear();
         self.panel_schedule_state = panel_scheduler::cancel();
+        self.clear_panel_frame_callback();
     }
 
     /// Whether a keyboard grab object currently exists.
