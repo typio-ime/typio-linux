@@ -140,9 +140,6 @@ impl App {
                 if let Some(indicator_remaining) = self.indicator_hide_remaining_ms(now) {
                     reduce_timeout(indicator_remaining);
                 }
-                if let Some(fallback_remaining) = state.panel_present_fallback_remaining_ms(now) {
-                    reduce_timeout(fallback_remaining);
-                }
                 timeout_ms
             };
             let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, timeout_ms) };

@@ -30,7 +30,6 @@
 
 use std::io;
 use std::os::fd::{AsFd, AsRawFd};
-use std::time::{Duration, Instant};
 
 use wayland_backend::client::ReadEventsGuard;
 use wayland_client::globals::{registry_queue_init, GlobalListContents};
@@ -175,15 +174,6 @@ impl CompositionState {
     }
 }
 
-/// Maximum wait for a `wl_surface.frame` callback before the panel
-/// stops throttling and presents anyway. Real compositors ack a visible
-/// surface every refresh (~16 ms); the fallback only kicks in when the
-/// compositor drops the callback (off-screen popup, broken IME surface
-/// handling). Sized well above the poll cadence so a healthy compositor
-/// always wins, short enough that a dropped callback never stalls the
-/// panel long enough to approach the watchdog.
-const FRAME_CALLBACK_FALLBACK: Duration = Duration::from_millis(120);
-
 /// Wayland state — all bound protocol objects + tracking fields.
 ///
 /// This struct implements `Dispatch` for every protocol object the
@@ -216,11 +206,6 @@ pub struct InputMethodState {
     /// for >15 s during rapid candidate paging, tripping the
     /// watchdog. See [`Self::panel_present_blocked`].
     pub panel_frame_pending: bool,
-    /// When the current outstanding frame callback was armed. Bounds
-    /// the wait so a compositor that drops the callback (off-screen
-    /// popup, broken IME surface handling) cannot stall the panel
-    /// forever; see [`FRAME_CALLBACK_FALLBACK`].
-    panel_frame_requested_at: Option<Instant>,
     /// The input-method popup surface (positioning protocol).
     #[allow(dead_code)]
     popup_surface: ZwpInputPopupSurfaceV2,
@@ -337,28 +322,22 @@ impl InputMethodState {
 
     /// Whether the panel must wait before presenting again.
     ///
-    /// Returns `true` while a `wl_surface.frame` callback armed after
-    /// the previous present is still outstanding and the fallback
-    /// window has not elapsed. Callers skip the present and leave the
-    /// schedule dirty so the next tick (after the callback fires, or
-    /// after the fallback) re-flushes with the latest coalesced
-    /// candidate state. This caps the present rate at the compositor's
-    /// refresh rate, so the swapchain never exhausts free images and
-    /// the synchronous `vkQueuePresentKHR` never blocks the main loop.
-    ///
-    /// Returns `false` (clearing any stale pending state) when no
-    /// callback is outstanding or the fallback elapsed.
+    /// Returns `true` while a `wl_surface.frame` callback armed after the
+    /// previous present is still outstanding. Callers skip the present and
+    /// leave the schedule dirty so the next tick (after the callback fires)
+    /// re-flushes with the latest coalesced candidate state. This caps the
+    /// present rate at the compositor's refresh rate, so the swapchain never
+    /// exhausts free images and the synchronous `vkQueuePresentKHR` never
+    /// blocks the main loop. The `done` callback is guaranteed to arrive
+    /// because `arm_panel_frame_callback` commits the surface after arming
+    /// the request (a bare `wl_surface.frame` only takes effect on the next
+    /// commit), so the pending flag cannot get permanently stuck.
     pub fn panel_present_blocked(&mut self) -> bool {
         self.panel_frame_pending
     }
 
-    pub fn panel_present_fallback_remaining_ms(&self, _now: Instant) -> Option<i32> {
-        None
-    }
-
     pub fn clear_panel_frame_callback(&mut self) {
         self.panel_frame_pending = false;
-        self.panel_frame_requested_at = None;
         // `wl_callback` has no destroy request; dropping the proxy is
         // correct disposal (the server frees it after `done`).
         self.panel_frame_callback = None;
@@ -710,7 +689,6 @@ impl InputMethodFrontend {
             popup_surface_obj,
             panel_frame_callback: None,
             panel_frame_pending: false,
-            panel_frame_requested_at: None,
             popup_surface,
             viewporter,
             panel_viewport,
@@ -850,13 +828,25 @@ impl InputMethodFrontend {
     pub fn arm_panel_frame_callback(&mut self) {
         let qh = self.queue.handle();
         let cb = self.state.popup_surface_obj.frame(&qh, ());
+        // A `wl_surface.frame` request only takes effect on the *next*
+        // `wl_surface.commit` (Wayland spec). flux's `flux_frame_present`
+        // has already attached + committed the buffer for this frame via
+        // Mesa's WSI, so the request just queued would otherwise sit
+        // un-committed until the next present — which the throttle below
+        // suppresses precisely because `panel_frame_pending` is set. That
+        // is a deadlock: the callback that clears the throttle is gated
+        // behind a present the throttle prevents, so the compositor never
+        // sends `done`, `panel_frame_pending` stays true, and every later
+        // candidate/preedit update is skipped until the panel is hidden.
+        // Issue a bare commit (no new buffer) so the frame request reaches
+        // the compositor now and `done` fires at the next refresh.
+        self.state.popup_surface_obj.commit();
         // The throttle prevents re-arming while a callback is outstanding,
         // so the slot is normally empty; overwriting drops any stragger
         // (wl_callback has no destroy request, so dropping the proxy is
         // the correct disposal — the server frees it after `done`).
         self.state.panel_frame_callback = Some(cb);
         self.state.panel_frame_pending = true;
-        self.state.panel_frame_requested_at = Some(Instant::now());
     }
 
     /// Prepare a read from the Wayland socket, dispatching any already-queued
