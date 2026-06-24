@@ -127,16 +127,21 @@ impl App {
                     router.is_focused(),
                 );
                 let mut timeout_ms =
-                    panel_scheduler::poll_timeout_ms(state.panel_schedule_state, flushable, 100);
-                if let Some(remaining) = state
-                    .panel_coord
-                    .anchor_deadline_remaining_ms(Instant::now())
-                {
-                    timeout_ms = timeout_ms.min(remaining as i32);
+                    panel_scheduler::poll_timeout_ms(state.panel_schedule_state, flushable, -1);
+                let now = Instant::now();
+                let mut reduce_timeout = |remaining: i32| {
+                    if timeout_ms < 0 || remaining < timeout_ms {
+                        timeout_ms = remaining;
+                    }
+                };
+                if let Some(remaining) = state.panel_coord.anchor_deadline_remaining_ms(now) {
+                    reduce_timeout(remaining as i32);
                 }
-                if let Some(indicator_remaining) = self.indicator_hide_remaining_ms(Instant::now())
-                {
-                    timeout_ms = timeout_ms.min(indicator_remaining);
+                if let Some(indicator_remaining) = self.indicator_hide_remaining_ms(now) {
+                    reduce_timeout(indicator_remaining);
+                }
+                if let Some(fallback_remaining) = state.panel_present_fallback_remaining_ms(now) {
+                    reduce_timeout(fallback_remaining);
                 }
                 timeout_ms
             };

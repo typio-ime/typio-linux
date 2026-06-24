@@ -172,9 +172,20 @@ pub struct KeyboardRouter {
     key_tracking_states: Vec<KeyTrackState>,
     /// Per-key epoch stamp.
     key_tracking_generations: Vec<u32>,
-    /// True if any non-modifier key has been pressed since the last
-    /// shortcut chord fired or was reset. Drives `chord_should_switch_engine`.
+    /// True if any non-modifier key is currently held down. Drives
+    /// `chord_should_switch_engine`: the switch chord is suppressed only
+    /// while a non-modifier key is actually held, so typing a key and
+    /// releasing it no longer blocks the next Ctrl+Shift.
     shortcut_saw_non_modifier: bool,
+    /// Per-keycode "currently held" flag for non-modifier keys (indexed
+    /// by evdev scancode). Backs [`Self::held_non_modifier_count`] so
+    /// compositor-driven auto-repeats of an already-held key don't
+    /// double-count.
+    non_modifier_held: [bool; 256],
+    /// Number of entries in [`Self::non_modifier_held`] currently true.
+    /// When this drops to zero, [`Self::shortcut_saw_non_modifier`] is
+    /// cleared.
+    held_non_modifier_count: u32,
     /// True if the switch chord already fired in this gesture; prevents
     /// repeat triggers while the modifiers stay held.
     shortcut_already_triggered: bool,
@@ -238,6 +249,8 @@ impl KeyboardRouter {
             key_tracking_states: vec![KeyTrackState::default(); MAX_TRACKED_KEYS],
             key_tracking_generations: vec![0u32; MAX_TRACKED_KEYS],
             shortcut_saw_non_modifier: false,
+            non_modifier_held: [false; 256],
+            held_non_modifier_count: 0,
             shortcut_already_triggered: false,
             shortcut_fired: false,
             engine_tracked_mods: Modifiers::NONE,
@@ -372,6 +385,9 @@ impl KeyboardRouter {
         self.repeat_mode = RepeatMode::Forward;
         self.physical_modifiers = Modifiers::NONE;
         self.engine_tracked_mods = Modifiers::NONE;
+        self.non_modifier_held = [false; 256];
+        self.held_non_modifier_count = 0;
+        self.shortcut_saw_non_modifier = false;
     }
 
     /// Scrub the current key generation and reset all per-key tracking.
@@ -386,6 +402,8 @@ impl KeyboardRouter {
         self.repeat_mode = RepeatMode::Forward;
         // Reset the shortcut chord so a grab handoff doesn't carry
         // stale gesture state into the next focus.
+        self.non_modifier_held = [false; 256];
+        self.held_non_modifier_count = 0;
         self.shortcut_saw_non_modifier = false;
         self.shortcut_already_triggered = false;
         self.shortcut_fired = false;
@@ -551,8 +569,8 @@ impl KeyboardRouter {
             return true;
         }
 
-        if state == WL_KEYBOARD_KEY_STATE_PRESSED && !is_modifier_key {
-            self.shortcut_saw_non_modifier = true;
+        if !is_modifier_key {
+            self.track_non_modifier_held(key.keycode, state == WL_KEYBOARD_KEY_STATE_PRESSED);
         }
 
         if key.state != 1 {
@@ -574,6 +592,41 @@ impl KeyboardRouter {
         }
         let consumed = self.process_key_engine(key, xkb_mods_depressed, false);
         consumed
+    }
+
+    /// Update the "non-modifier key held" tracker that backs
+    /// [`Self::shortcut_saw_non_modifier`]. Called from
+    /// [`Self::dispatch_key`] for every non-modifier event.
+    ///
+    /// The per-keycode dedup means compositor-driven auto-repeats of an
+    /// already-held key don't inflate the count. When the count drops to
+    /// zero the chord gate clears, so a typed-and-released key no longer
+    /// suppresses the next Ctrl+Shift (the old sticky-bool behaviour
+    /// swallowed the first chord after any regular typing).
+    fn track_non_modifier_held(&mut self, keycode: u32, pressed: bool) {
+        let idx = keycode as usize;
+        if idx < self.non_modifier_held.len() {
+            let slot = &mut self.non_modifier_held[idx];
+            if pressed {
+                if !*slot {
+                    *slot = true;
+                    self.held_non_modifier_count += 1;
+                }
+            } else if *slot {
+                *slot = false;
+                self.held_non_modifier_count = self.held_non_modifier_count.saturating_sub(1);
+            }
+        } else {
+            // Rare high keycode beyond the table; fall back to a
+            // conservative counter-only path so the chord gate still
+            // tracks roughly correctly.
+            if pressed {
+                self.held_non_modifier_count += 1;
+            } else {
+                self.held_non_modifier_count = self.held_non_modifier_count.saturating_sub(1);
+            }
+        }
+        self.shortcut_saw_non_modifier = self.held_non_modifier_count > 0;
     }
 
     /// Dispatch a key-repeat event to the engine with `is_repeat: true`.
@@ -759,6 +812,8 @@ mod tests {
                 key_tracking_states: vec![KeyTrackState::default(); MAX_TRACKED_KEYS],
                 key_tracking_generations: vec![0u32; MAX_TRACKED_KEYS],
                 shortcut_saw_non_modifier: false,
+                non_modifier_held: [false; 256],
+                held_non_modifier_count: 0,
                 shortcut_already_triggered: false,
                 shortcut_fired: false,
                 engine_tracked_mods: Modifiers::NONE,
@@ -865,5 +920,58 @@ mod tests {
         // Cursor-only move inside the same preedit also resends.
         let plan = text_ui_plan_update(Some("ni"), 1, Some("ni"), 2);
         assert_eq!(plan, TextUiPlan::SyncPreeditAndPanel);
+    }
+
+    #[test]
+    fn non_modifier_release_clears_chord_gate() {
+        // Regression: after typing and releasing a regular key, the
+        // Ctrl+Shift chord must be reachable on the first try. The old
+        // sticky `shortcut_saw_non_modifier` flag stayed true until a
+        // modifier was released, swallowing the first chord.
+        let mut router = KeyboardRouter::new_for_test(std::ptr::null_mut());
+
+        // Pressing a non-modifier key (evdev scancode for 'a' is 30)
+        // taints the gesture.
+        router.track_non_modifier_held(30, true);
+        assert!(router.shortcut_saw_non_modifier);
+
+        // Releasing it must clear the gate immediately.
+        router.track_non_modifier_held(30, false);
+        assert!(!router.shortcut_saw_non_modifier);
+    }
+
+    #[test]
+    fn non_modifier_chord_gate_handles_repeat_and_overlap() {
+        let mut router = KeyboardRouter::new_for_test(std::ptr::null_mut());
+
+        // Compositor-driven auto-repeat of an already-held key must not
+        // inflate the count (otherwise a release wouldn't zero it).
+        router.track_non_modifier_held(30, true);
+        router.track_non_modifier_held(30, true);
+        router.track_non_modifier_held(30, true);
+        assert!(router.shortcut_saw_non_modifier);
+        router.track_non_modifier_held(30, false);
+        assert!(!router.shortcut_saw_non_modifier);
+
+        // Two distinct keys held: gate stays true until both release.
+        router.track_non_modifier_held(30, true);
+        router.track_non_modifier_held(48, true); // 'b'
+        assert!(router.shortcut_saw_non_modifier);
+        router.track_non_modifier_held(30, false);
+        assert!(router.shortcut_saw_non_modifier);
+        router.track_non_modifier_held(48, false);
+        assert!(!router.shortcut_saw_non_modifier);
+    }
+
+    #[test]
+    fn scrub_generation_clears_non_modifier_tracker() {
+        let mut router = KeyboardRouter::new_for_test(std::ptr::null_mut());
+        router.track_non_modifier_held(30, true);
+        assert!(router.shortcut_saw_non_modifier);
+
+        router.scrub_generation();
+
+        assert!(!router.shortcut_saw_non_modifier);
+        assert_eq!(router.held_non_modifier_count, 0);
     }
 }

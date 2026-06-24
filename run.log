@@ -1,0 +1,18 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running `target/debug/typio`
+[2m2026-06-24T15:25:05.108593Z[0m [32m INFO[0m [2mtypio::instance[0m[2m:[0m Initializing Typio instance
+[2m2026-06-24T15:25:05.109276Z[0m [33m WARN[0m [2mtypio::instance[0m[2m:[0m engine_dirs configured but no engine discovery callback provided — engines will not be available
+[2m2026-06-24T15:25:05.109298Z[0m [33m WARN[0m [2mtypio::instance[0m[2m:[0m Failed to activate keyboard engine: NotFound
+[2m2026-06-24T15:25:05.109309Z[0m [33m WARN[0m [2mtypio::instance[0m[2m:[0m Configured voice engine 'sherpa-onnx' not found, falling back to last-used
+[2m2026-06-24T15:25:05.109317Z[0m [34mDEBUG[0m [2mtypio::instance[0m[2m:[0m No voice engine to activate: NotFound
+[2m2026-06-24T15:25:05.109324Z[0m [32m INFO[0m [2mtypio::instance[0m[2m:[0m Typio instance initialized
+OK:   registered 0 keyboard(s)
+[2m2026-06-24T15:25:05.109741Z[0m [32m INFO[0m [2mtypio.wayland.viewporter[0m[2m:[0m compositor advertises wp_viewporter (grow-only swapchain active)
+OK: Wayland input-method frontend connected
+OK:   StatusNotifierItem registered as org.kde.StatusNotifierItem-147277-1
+OK: UDS listening on /run/user/1000/typio/daemon.sock
+Starting typio 0.5.0
+typio: running. Ctrl+C to exit.
+[2m2026-06-24T15:25:05.154602Z[0m [34mDEBUG[0m [2mtypio.wayland.io[0m[2m:[0m read_and_dispatch [3melapsed_ms[0m[2m=[0m0.012943
+typio: configuration reloaded
+typio: shutting down...

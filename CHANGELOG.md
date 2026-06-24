@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **First Ctrl+Shift sometimes didn't switch language after typing.**
+  The chord gate that suppresses the switch while a non-modifier key is
+## [0.5.1] - 2026-06-24
+
+### Fixed
+
+- **Event loop polling timeout caused 100ms UI stutters.**
+  Removed the hardcoded 100ms `poll` fallback timeout which caused unnecessary CPU wakeups and delayed UI updates. It now calculates the exact deadline using a new `panel_present_fallback_remaining_ms` method, enabling precise `-1` indefinite blocking.
+- **Excessive heap allocations during candidate rendering.**
+  `candidate_number_label` now returns statically allocated strings (`Cow<'static, [u8]>`) for candidate indices 1-10, entirely eliminating heap allocations and GC pressure in the critical Wayland presentation loop.
+
 ## [0.5.0] - 2026-06-23
 
 ### Changed

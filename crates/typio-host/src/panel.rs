@@ -593,8 +593,7 @@ impl FluxPanel {
             let y = PANEL_PADDING;
 
             for (i, candidate) in candidates.iter().enumerate() {
-                let number = candidate_number_label(i);
-                let number_bytes = number.as_bytes();
+                let number_bytes = candidate_number_label(i);
                 let bytes = candidate.as_bytes();
                 let (number_metrics, metrics) = layout[i];
 
@@ -814,8 +813,7 @@ impl FluxPanel {
         let mut out: Vec<(flux_text_metrics, flux_text_metrics)> =
             Vec::with_capacity(candidates.len());
         for (i, candidate) in candidates.iter().enumerate() {
-            let number = candidate_number_label(i);
-            let number_bytes = number.as_bytes();
+            let number_bytes = candidate_number_label(i);
             let number_metrics = unsafe {
                 flux_text_sys::flux_text_measure(
                     self.text,
@@ -1118,11 +1116,19 @@ impl Drop for FluxPanel {
     }
 }
 
-fn candidate_number_label(index: usize) -> String {
+fn candidate_number_label(index: usize) -> std::borrow::Cow<'static, [u8]> {
     match index {
-        0..=8 => (index + 1).to_string(),
-        9 => "0".to_string(),
-        _ => (index + 1).to_string(),
+        0 => std::borrow::Cow::Borrowed(b"1"),
+        1 => std::borrow::Cow::Borrowed(b"2"),
+        2 => std::borrow::Cow::Borrowed(b"3"),
+        3 => std::borrow::Cow::Borrowed(b"4"),
+        4 => std::borrow::Cow::Borrowed(b"5"),
+        5 => std::borrow::Cow::Borrowed(b"6"),
+        6 => std::borrow::Cow::Borrowed(b"7"),
+        7 => std::borrow::Cow::Borrowed(b"8"),
+        8 => std::borrow::Cow::Borrowed(b"9"),
+        9 => std::borrow::Cow::Borrowed(b"0"),
+        _ => std::borrow::Cow::Owned((index + 1).to_string().into_bytes()),
     }
 }
 

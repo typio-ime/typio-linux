@@ -363,6 +363,20 @@ impl InputMethodState {
         true
     }
 
+    /// Remaining milliseconds until the panel present fallback expires.
+    pub fn panel_present_fallback_remaining_ms(&self, now: Instant) -> Option<i32> {
+        if !self.panel_frame_pending {
+            return None;
+        }
+        let requested_at = self.panel_frame_requested_at?;
+        let deadline = requested_at + FRAME_CALLBACK_FALLBACK;
+        if now >= deadline {
+            Some(0)
+        } else {
+            Some(deadline.saturating_duration_since(now).as_millis() as i32)
+        }
+    }
+
     /// Drop the outstanding frame callback and pending flag.
     fn clear_panel_frame_callback(&mut self) {
         self.panel_frame_pending = false;
