@@ -562,6 +562,11 @@ impl FluxPanel {
                 return;
             }
 
+            // Transparent clear: the rounded-rect fill below covers the body,
+            // leaving the four corners outside the arc at alpha 0 so the
+            // compositor blends them away and the panel reads as a floating
+            // rounded rectangle. Requires the swapchain to be presented with a
+            // non-opaque composite-alpha mode (see flux surface.c).
             let clear_color = flux_color_rgba(0, 0, 0, 0);
             let r = timed!(
                 canvas_begin_duration,
@@ -601,12 +606,14 @@ impl FluxPanel {
                 weight: 400.0,
                 color: text_color,
                 family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+                italic: false,
             };
             let number_style = flux_text_style {
                 size_px: CANDIDATE_NUMBER_FONT_SIZE,
                 weight: 400.0,
                 color: number_color,
                 family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+                italic: false,
             };
 
             let mut current_x = PANEL_PADDING;
@@ -822,12 +829,14 @@ impl FluxPanel {
             weight: 400.0,
             color: unsafe { flux_sys::flux_color_rgba(240, 240, 240, 255) },
             family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+            italic: false,
         };
         let number_style = flux_text_sys::flux_text_style {
             size_px: CANDIDATE_NUMBER_FONT_SIZE,
             weight: 400.0,
             color: unsafe { flux_sys::flux_color_rgba(145, 145, 152, 255) },
             family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+            italic: false,
         };
 
         let mut out: Vec<(flux_text_metrics, flux_text_metrics)> =
@@ -1023,6 +1032,8 @@ impl FluxPanel {
                 return;
             }
 
+            // Transparent clear so the rounded-banner corners blend away
+            // (matches draw_candidates).
             let clear_color = flux_color_rgba(0, 0, 0, 0);
             let r = flux_canvas_begin(self.canvas, frame, &clear_color);
             heartbeat();
@@ -1053,6 +1064,7 @@ impl FluxPanel {
                 weight: 400.0,
                 color: text_color,
                 family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+                italic: false,
             };
 
             let bytes = label.as_bytes();
@@ -1106,6 +1118,7 @@ impl FluxPanel {
             // keep the struct fully initialised.
             color: unsafe { flux_color_rgba(0, 0, 0, 0) },
             family: FontFamily::FLUX_TEXT_FAMILY_DEFAULT,
+            italic: false,
         };
 
         let bytes = label.as_bytes();
