@@ -1234,9 +1234,11 @@ mod tests {
 
     #[test]
     fn candidate_number_label_matches_selection_keys() {
-        let labels: Vec<_> = (0..10).map(candidate_number_label).collect();
+        let labels: Vec<_> = (0..10)
+            .map(|i| String::from_utf8_lossy(&candidate_number_label(i)).into_owned())
+            .collect::<Vec<_>>();
         assert_eq!(labels, ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]);
-        assert_eq!(candidate_number_label(10), "11");
+        assert_eq!(String::from_utf8_lossy(&candidate_number_label(10)), "11");
     }
 
     #[test]

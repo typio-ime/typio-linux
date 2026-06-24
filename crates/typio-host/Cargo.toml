@@ -1,6 +1,6 @@
 [package]
 name = "typio-host"
-version = "0.5.1"
+version = "0.5.2"
 description = "Typio Wayland input-method host"
 edition.workspace = true
 license.workspace = true
