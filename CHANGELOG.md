@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-06-25
+
+### Fixed
+
+- **Ctrl+Shift+V (and other Ctrl+Shift+key shortcuts) wrongly triggered the engine switch.** The Ctrl+Shift engine-switch chord fired on the keypress that *completed* the modifier set — i.e. the moment Shift went down while Ctrl was held, before any further key. So Ctrl+Shift+V switched input methods instead of pasting. The chord is now **release-triggered**: it fires only when the modifiers are released with no non-modifier key having joined the gesture, so Ctrl+Shift+V and friends pass through to the application.
+- **Candidate panel intermittently froze (preedit and ↑/↓ stopped updating).** A `wl_surface.frame` callback was armed *after* `flux_frame_present` had already committed the surface, but a frame request only takes effect on the next commit — which the present throttle suppressed. The throttle's clearing callback was therefore gated behind a present the throttle itself blocked, so `panel_frame_pending` could stick forever and every later update was skipped (while the engine kept handling keys, so select+space still worked). `arm_panel_frame_callback` now commits the surface after arming the request, guaranteeing the `done` callback arrives.
+- **Panel corners rendered black instead of transparent.** Restored the transparent canvas clear so the rounded corners show the window behind the panel; this pairs with flux ≥ 0.2.3 negotiating a non-opaque composite-alpha mode.
+
+### Changed
+
+- Bumped `flux-sys`/`flux-text-sys` to `v0.1.1` (adds the `flux_text_style.italic` field) and removed the now-dead `FRAME_CALLBACK_FALLBACK` constant and `panel_present_fallback_remaining_ms` plumbing.
+
 ## [0.5.3] - 2026-06-24
 
 ### Added

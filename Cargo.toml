@@ -35,8 +35,8 @@ libc = "0.2"
 zbus = { version = "5", default-features = true, features = ["blocking-api"] }
 xkbcommon = "0.9"
 ab_glyph = "0.2"
-flux-sys = { git = "https://github.com/ming2k/flux-rs.git", tag = "v0.1.0" }
-flux-text-sys = { git = "https://github.com/ming2k/flux-rs.git", tag = "v0.1.0" }
+flux-sys = { git = "https://github.com/ming2k/flux-rs.git", tag = "v0.1.1" }
+flux-text-sys = { git = "https://github.com/ming2k/flux-rs.git", tag = "v0.1.1" }
 wayland-sys = "0.31"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

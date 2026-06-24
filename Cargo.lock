@@ -488,8 +488,8 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flux-sys"
-version = "0.1.0"
-source = "git+https://github.com/ming2k/flux-rs.git?tag=v0.1.0#bf15c24659893459ea53046f8cec91946b29a629"
+version = "0.1.1"
+source = "git+https://github.com/ming2k/flux-rs.git?tag=v0.1.1#9164450ee9099a44a50a4c88511370beabfe3c55"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -497,8 +497,8 @@ dependencies = [
 
 [[package]]
 name = "flux-text-sys"
-version = "0.1.0"
-source = "git+https://github.com/ming2k/flux-rs.git?tag=v0.1.0#bf15c24659893459ea53046f8cec91946b29a629"
+version = "0.1.1"
+source = "git+https://github.com/ming2k/flux-rs.git?tag=v0.1.1#9164450ee9099a44a50a4c88511370beabfe3c55"
 dependencies = [
  "bindgen",
  "pkg-config",
@@ -1385,7 +1385,7 @@ dependencies = [
 
 [[package]]
 name = "typio-host"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "ab_glyph",
  "bitflags",
