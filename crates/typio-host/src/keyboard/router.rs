@@ -172,20 +172,20 @@ pub struct KeyboardRouter {
     key_tracking_states: Vec<KeyTrackState>,
     /// Per-key epoch stamp.
     key_tracking_generations: Vec<u32>,
-    /// True if any non-modifier key is currently held down. Drives
-    /// `chord_should_switch_engine`: the switch chord is suppressed only
-    /// while a non-modifier key is actually held, so typing a key and
-    /// releasing it no longer blocks the next Ctrl+Shift.
+    /// Gesture latch: set when any non-modifier key is pressed during the
+    /// current switch gesture, cleared only at gesture boundaries (the
+    /// first chord modifier going down from a clean state, and the last
+    /// one coming up). Unlike a "currently held" flag this stays latched
+    /// after the key lifts — so Ctrl+Shift+V suppresses the switch even
+    /// when V is released before the modifiers. Drives the release-time
+    /// chord decision in [`Self::track_switch_modifier`].
     shortcut_saw_non_modifier: bool,
-    /// Per-keycode "currently held" flag for non-modifier keys (indexed
-    /// by evdev scancode). Backs [`Self::held_non_modifier_count`] so
-    /// compositor-driven auto-repeats of an already-held key don't
-    /// double-count.
-    non_modifier_held: [bool; 256],
-    /// Number of entries in [`Self::non_modifier_held`] currently true.
-    /// When this drops to zero, [`Self::shortcut_saw_non_modifier`] is
-    /// cleared.
-    held_non_modifier_count: u32,
+    /// True once the full required modifier set (Ctrl+Shift) was held
+    /// simultaneously during the current gesture. The switch fires on the
+    /// *release* that breaks this set, not on the press that completes it,
+    /// so a chord that turns out to be the prefix of an app shortcut
+    /// (Ctrl+Shift+V) never fires prematurely.
+    chord_full_set_held: bool,
     /// True if the switch chord already fired in this gesture; prevents
     /// repeat triggers while the modifiers stay held.
     shortcut_already_triggered: bool,
@@ -210,8 +210,10 @@ pub struct KeyboardRouter {
 }
 
 /// Default engine-switch chord: Ctrl+Shift, the standard Linux IME
-/// switch. Both modifiers must be pressed (any side, any order); the
-/// chord fires when the second one goes down.
+/// switch. Both modifiers must be held simultaneously (any side, any
+/// order); the chord fires when they are *released* without any other
+/// key having been pressed — so Ctrl+Shift+V and similar app shortcuts
+/// pass through untouched.
 pub fn default_switch_binding() -> crate::keyboard_policy::ShortcutBinding {
     use crate::keyboard_policy::ShortcutBinding;
     ShortcutBinding {
@@ -249,8 +251,7 @@ impl KeyboardRouter {
             key_tracking_states: vec![KeyTrackState::default(); MAX_TRACKED_KEYS],
             key_tracking_generations: vec![0u32; MAX_TRACKED_KEYS],
             shortcut_saw_non_modifier: false,
-            non_modifier_held: [false; 256],
-            held_non_modifier_count: 0,
+            chord_full_set_held: false,
             shortcut_already_triggered: false,
             shortcut_fired: false,
             engine_tracked_mods: Modifiers::NONE,
@@ -385,9 +386,8 @@ impl KeyboardRouter {
         self.repeat_mode = RepeatMode::Forward;
         self.physical_modifiers = Modifiers::NONE;
         self.engine_tracked_mods = Modifiers::NONE;
-        self.non_modifier_held = [false; 256];
-        self.held_non_modifier_count = 0;
         self.shortcut_saw_non_modifier = false;
+        self.chord_full_set_held = false;
     }
 
     /// Scrub the current key generation and reset all per-key tracking.
@@ -402,9 +402,8 @@ impl KeyboardRouter {
         self.repeat_mode = RepeatMode::Forward;
         // Reset the shortcut chord so a grab handoff doesn't carry
         // stale gesture state into the next focus.
-        self.non_modifier_held = [false; 256];
-        self.held_non_modifier_count = 0;
         self.shortcut_saw_non_modifier = false;
+        self.chord_full_set_held = false;
         self.shortcut_already_triggered = false;
         self.shortcut_fired = false;
         self.engine_tracked_mods = Modifiers::NONE;
@@ -529,48 +528,27 @@ impl KeyboardRouter {
         // could spuriously toggle state (e.g. Rime schema switch).
         let mut suppress_engine_release = false;
         if is_modifier_key {
-            if state == WL_KEYBOARD_KEY_STATE_PRESSED {
-                self.physical_modifiers = Modifiers(self.physical_modifiers.0 | bit.0);
-            } else {
+            // Drive the release-triggered switch-chord state machine. It
+            // updates `physical_modifiers` and reports whether *this*
+            // release completes the Ctrl+Shift switch.
+            let chord_fired = self.track_switch_modifier(bit, state == WL_KEYBOARD_KEY_STATE_PRESSED);
+            if chord_fired {
+                self.shortcut_fired = true;
+            }
+            if state == WL_KEYBOARD_KEY_STATE_RELEASED {
                 if (self.engine_tracked_mods.0 & bit.0) == 0 {
                     suppress_engine_release = true;
                 }
-                self.physical_modifiers = Modifiers(self.physical_modifiers.0 & !bit.0);
                 self.engine_tracked_mods = Modifiers(self.engine_tracked_mods.0 & !bit.0);
-                // Releasing any chord modifier ends the current gesture.
-                self.shortcut_saw_non_modifier = false;
-                self.shortcut_already_triggered = false;
             }
-        }
-
-        // Detect the Ctrl+Shift engine-switch chord. The chord fires
-        // exactly once per gesture on the keypress that completes the
-        // binding's modifier set, as long as no non-modifier key was
-        // pressed in between (matches `chord_should_switch_engine`).
-        if state == WL_KEYBOARD_KEY_STATE_PRESSED
-            && is_modifier_key
-            && !self.shortcut_already_triggered
-            && crate::keyboard_policy::chord_should_switch_engine(
-                &default_switch_binding(),
-                key.keysym,
-                self.physical_modifiers,
-                self.shortcut_saw_non_modifier,
-                self.shortcut_already_triggered,
-            )
-        {
-            self.shortcut_already_triggered = true;
-            self.shortcut_fired = true;
-            // The chord supersedes the engine: don't forward the
-            // modifier presses to it either, or rime/compose may react
-            // (e.g. compose-key chords). This modifier's press never
-            // reached the engine, so drop it from the tracked set;
-            // its release will be suppressed to match.
-            self.engine_tracked_mods = Modifiers(self.engine_tracked_mods.0 & !bit.0);
-            return true;
-        }
-
-        if !is_modifier_key {
-            self.track_non_modifier_held(key.keycode, state == WL_KEYBOARD_KEY_STATE_PRESSED);
+        } else {
+            // Any non-modifier key pressed during a gesture taints it, so
+            // the trailing Ctrl+Shift release won't switch (Ctrl+Shift+V
+            // pastes). The modifier key still forwards to the engine /
+            // app below.
+            if state == WL_KEYBOARD_KEY_STATE_PRESSED {
+                self.shortcut_saw_non_modifier = true;
+            }
         }
 
         if key.state != 1 {
@@ -594,39 +572,56 @@ impl KeyboardRouter {
         consumed
     }
 
-    /// Update the "non-modifier key held" tracker that backs
-    /// [`Self::shortcut_saw_non_modifier`]. Called from
-    /// [`Self::dispatch_key`] for every non-modifier event.
+    /// Advance the Ctrl+Shift engine-switch chord state machine for one
+    /// modifier-key transition, updating [`Self::physical_modifiers`].
+    /// Returns `true` iff this is the *release* that completes the switch.
     ///
-    /// The per-keycode dedup means compositor-driven auto-repeats of an
-    /// already-held key don't inflate the count. When the count drops to
-    /// zero the chord gate clears, so a typed-and-released key no longer
-    /// suppresses the next Ctrl+Shift (the old sticky-bool behaviour
-    /// swallowed the first chord after any regular typing).
-    fn track_non_modifier_held(&mut self, keycode: u32, pressed: bool) {
-        let idx = keycode as usize;
-        if idx < self.non_modifier_held.len() {
-            let slot = &mut self.non_modifier_held[idx];
-            if pressed {
-                if !*slot {
-                    *slot = true;
-                    self.held_non_modifier_count += 1;
-                }
-            } else if *slot {
-                *slot = false;
-                self.held_non_modifier_count = self.held_non_modifier_count.saturating_sub(1);
+    /// The switch is release-triggered, not press-triggered: it fires when
+    /// a chord modifier comes up after the full set was held, provided no
+    /// non-modifier key joined the gesture. Firing on the completing press
+    /// instead would trip on the prefix of app shortcuts — pressing Shift
+    /// while Ctrl is down would switch engines before the user ever pressed
+    /// `V` in Ctrl+Shift+V.
+    ///
+    /// A gesture spans from the first required modifier going down (from a
+    /// state with none held) to the last one coming up; the latch and
+    /// armed flags reset at both boundaries.
+    fn track_switch_modifier(&mut self, bit: Modifiers, pressed: bool) -> bool {
+        let chord_mods = default_switch_binding().modifiers;
+        let is_chord_mod = (chord_mods.0 & bit.0) != 0;
+
+        if pressed {
+            // A chord modifier going down while none of the required
+            // modifiers were held starts a fresh gesture.
+            if is_chord_mod && (self.physical_modifiers.0 & chord_mods.0) == 0 {
+                self.shortcut_saw_non_modifier = false;
+                self.chord_full_set_held = false;
+                self.shortcut_already_triggered = false;
             }
+            self.physical_modifiers = Modifiers(self.physical_modifiers.0 | bit.0);
+            if (self.physical_modifiers.0 & chord_mods.0) == chord_mods.0 {
+                self.chord_full_set_held = true;
+            }
+            false
         } else {
-            // Rare high keycode beyond the table; fall back to a
-            // conservative counter-only path so the chord gate still
-            // tracks roughly correctly.
-            if pressed {
-                self.held_non_modifier_count += 1;
-            } else {
-                self.held_non_modifier_count = self.held_non_modifier_count.saturating_sub(1);
+            // Fire on the first chord-modifier release that breaks a fully
+            // held set, when the gesture is untainted and hasn't fired yet.
+            let fired = is_chord_mod
+                && self.chord_full_set_held
+                && !self.shortcut_saw_non_modifier
+                && !self.shortcut_already_triggered;
+            if fired {
+                self.shortcut_already_triggered = true;
             }
+            self.physical_modifiers = Modifiers(self.physical_modifiers.0 & !bit.0);
+            // Gesture ends once no required modifier remains held.
+            if (self.physical_modifiers.0 & chord_mods.0) == 0 {
+                self.shortcut_saw_non_modifier = false;
+                self.chord_full_set_held = false;
+                self.shortcut_already_triggered = false;
+            }
+            fired
         }
-        self.shortcut_saw_non_modifier = self.held_non_modifier_count > 0;
     }
 
     /// Dispatch a key-repeat event to the engine with `is_repeat: true`.
@@ -812,8 +807,7 @@ mod tests {
                 key_tracking_states: vec![KeyTrackState::default(); MAX_TRACKED_KEYS],
                 key_tracking_generations: vec![0u32; MAX_TRACKED_KEYS],
                 shortcut_saw_non_modifier: false,
-                non_modifier_held: [false; 256],
-                held_non_modifier_count: 0,
+                chord_full_set_held: false,
                 shortcut_already_triggered: false,
                 shortcut_fired: false,
                 engine_tracked_mods: Modifiers::NONE,
@@ -923,55 +917,68 @@ mod tests {
     }
 
     #[test]
-    fn non_modifier_release_clears_chord_gate() {
-        // Regression: after typing and releasing a regular key, the
-        // Ctrl+Shift chord must be reachable on the first try. The old
-        // sticky `shortcut_saw_non_modifier` flag stayed true until a
-        // modifier was released, swallowing the first chord.
+    fn switch_chord_fires_on_clean_ctrl_shift_release() {
         let mut router = KeyboardRouter::new_for_test(std::ptr::null_mut());
-
-        // Pressing a non-modifier key (evdev scancode for 'a' is 30)
-        // taints the gesture.
-        router.track_non_modifier_held(30, true);
-        assert!(router.shortcut_saw_non_modifier);
-
-        // Releasing it must clear the gate immediately.
-        router.track_non_modifier_held(30, false);
-        assert!(!router.shortcut_saw_non_modifier);
+        // Press Ctrl, then Shift: the completing press must NOT fire.
+        assert!(!router.track_switch_modifier(Modifiers::CTRL, true));
+        assert!(!router.track_switch_modifier(Modifiers::SHIFT, true));
+        assert!(router.chord_full_set_held);
+        // Releasing the first chord modifier completes the switch.
+        assert!(router.track_switch_modifier(Modifiers::SHIFT, false));
+        // The second release must not fire again in the same gesture.
+        assert!(!router.track_switch_modifier(Modifiers::CTRL, false));
+        // Gesture fully ended: state reset.
+        assert!(!router.chord_full_set_held);
+        assert!(!router.shortcut_already_triggered);
     }
 
     #[test]
-    fn non_modifier_chord_gate_handles_repeat_and_overlap() {
+    fn switch_chord_suppressed_when_non_modifier_joins() {
+        // The Ctrl+Shift+V regression: a non-modifier key during the
+        // gesture must cancel the switch even if it lifts before the
+        // modifiers do (the latch stays set until the gesture ends).
         let mut router = KeyboardRouter::new_for_test(std::ptr::null_mut());
-
-        // Compositor-driven auto-repeat of an already-held key must not
-        // inflate the count (otherwise a release wouldn't zero it).
-        router.track_non_modifier_held(30, true);
-        router.track_non_modifier_held(30, true);
-        router.track_non_modifier_held(30, true);
-        assert!(router.shortcut_saw_non_modifier);
-        router.track_non_modifier_held(30, false);
-        assert!(!router.shortcut_saw_non_modifier);
-
-        // Two distinct keys held: gate stays true until both release.
-        router.track_non_modifier_held(30, true);
-        router.track_non_modifier_held(48, true); // 'b'
-        assert!(router.shortcut_saw_non_modifier);
-        router.track_non_modifier_held(30, false);
-        assert!(router.shortcut_saw_non_modifier);
-        router.track_non_modifier_held(48, false);
-        assert!(!router.shortcut_saw_non_modifier);
+        router.track_switch_modifier(Modifiers::CTRL, true);
+        router.track_switch_modifier(Modifiers::SHIFT, true);
+        // V down then up (dispatch_key sets the latch on a non-mod press).
+        router.shortcut_saw_non_modifier = true;
+        // Releasing the modifiers must NOT switch.
+        assert!(!router.track_switch_modifier(Modifiers::SHIFT, false));
+        assert!(!router.track_switch_modifier(Modifiers::CTRL, false));
     }
 
     #[test]
-    fn scrub_generation_clears_non_modifier_tracker() {
+    fn single_modifier_release_does_not_switch() {
         let mut router = KeyboardRouter::new_for_test(std::ptr::null_mut());
-        router.track_non_modifier_held(30, true);
-        assert!(router.shortcut_saw_non_modifier);
+        // Only Ctrl is ever held: the full set is never reached.
+        assert!(!router.track_switch_modifier(Modifiers::CTRL, true));
+        assert!(!router.track_switch_modifier(Modifiers::CTRL, false));
+    }
+
+    #[test]
+    fn switch_chord_rearms_after_prior_typing() {
+        // A taint left over from earlier typing must not block the next
+        // chord: starting a fresh gesture (first chord modifier down from
+        // clean) clears the latch.
+        let mut router = KeyboardRouter::new_for_test(std::ptr::null_mut());
+        router.shortcut_saw_non_modifier = true; // stale taint
+        router.track_switch_modifier(Modifiers::CTRL, true);
+        router.track_switch_modifier(Modifiers::SHIFT, true);
+        assert!(router.track_switch_modifier(Modifiers::SHIFT, false));
+    }
+
+    #[test]
+    fn scrub_generation_clears_switch_chord_state() {
+        let mut router = KeyboardRouter::new_for_test(std::ptr::null_mut());
+        router.track_switch_modifier(Modifiers::CTRL, true);
+        router.track_switch_modifier(Modifiers::SHIFT, true);
+        router.shortcut_saw_non_modifier = true;
+        assert!(router.chord_full_set_held);
 
         router.scrub_generation();
 
         assert!(!router.shortcut_saw_non_modifier);
-        assert_eq!(router.held_non_modifier_count, 0);
+        assert!(!router.chord_full_set_held);
+        assert!(!router.shortcut_already_triggered);
     }
 }
